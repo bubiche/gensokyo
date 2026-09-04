@@ -140,8 +140,81 @@ rec_set() {
 }
 rec_del() { [ -f "$1" ] && { grep -v "^$2=" "$1" > "$1.tmp.$$"; mv "$1.tmp.$$" "$1"; }; return 0; }
 
+# rec_load <file>: read every key into R_<key> without spawning a process (the bar and
+# border call this for each resident on every redraw). Values are expanded from $line after
+# eval parses, so a prompt containing quotes or $ is safe.
+rec_load() {
+  local line key
+  # shellcheck disable=SC2034  # every key is loaded; not every caller reads all of them
+  R_slot='' R_name='' R_cwd='' R_pane='' R_window='' R_launched='' R_args='' R_prompt='' R_departed='' R_exit='' R_resume=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    key=${line%%=*}
+    case $key in
+      slot|name|cwd|pane|window|launched|args|prompt|departed|exit|resume) eval "R_$key=\${line#*=}" ;;
+    esac
+  done < "$1"
+}
+
 ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$CONFIG_DIR"; }
 count_records() { find "$RES_DIR" -type f 2>/dev/null | wc -l | tr -d ' '; }
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# tilde <path> [max]: ~ for $HOME; longer than max characters -> "…" plus the tail.
+tilde() {
+  local p=$1 max=${2:-0}
+  case $p in "$HOME") p='~' ;; "$HOME"/*) p="~${p#"$HOME"}" ;; esac
+  if [ "$max" -gt 0 ] && [ "${#p}" -gt "$max" ]; then p="…${p:$((${#p} - max + 1))}"; fi
+  printf '%s' "$p"
+}
+mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+
+new_uuid() {
+  local u
+  u=$(uuidgen 2>/dev/null) || u=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n' \
+    | sed 's/^\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)$/\1-\2-\3-\4-\5/')
+  lower "$u"
+}
+
+# find_resident <name|slot|session-id prefix>: prints the record path, fails when unknown.
+find_resident() {
+  local f want
+  want=$(lower "$1")
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    rec_load "$f"
+    if [ "$R_slot" = "$1" ] || [ "$(lower "$R_name")" = "$want" ]; then printf '%s\n' "$f"; return 0; fi
+    case ${f##*/} in "$want"*) printf '%s\n' "$f"; return 0 ;; esac
+  done
+  return 1
+}
+record_by_pane() { grep -l "^pane=$1\$" "$RES_DIR"/* 2>/dev/null | head -n 1; }
+
+# A fresh tmux server starts with an empty stage; records of the previous run point at panes
+# that no longer exist, so they move to state/departed/ (the recall menu reads them later).
+archive_records() {
+  local f
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    mkdir -p "$STATE_DIR/departed" && mv "$f" "$STATE_DIR/departed/"
+  done
+}
+
+# prune_records: drop records whose pane was killed behind our back (tmux kill-pane, a
+# closed window). A record without a pane yet is a summon in progress; keep it for 30 s.
+prune_records() {
+  local live f now
+  live=$'\n'$(tmux_ list-panes -s -t "=$SESSION" -F '#{pane_id}' 2>/dev/null)$'\n'
+  [ "$live" != $'\n\n' ] || return 0
+  now=$(date +%s)
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    rec_load "$f"
+    if [ -n "$R_pane" ]; then
+      case $live in *$'\n'"$R_pane"$'\n'*) ;; *) rm -f "$f" ;; esac
+    elif [ $((now - ${R_launched:-0})) -gt 30 ]; then
+      rm -f "$f"
+    fi
+  done
+}
 
 # ---------------------------------------------------------------- tmux server
 server_running() { tmux_ has-session -t "=$SESSION" 2>/dev/null; }
@@ -228,6 +301,7 @@ apply_style() {
 start_server() {
   server_running && return 0
   ensure_dirs
+  archive_records
   scrub_env
   tmux_ -f "$SHARE/tmux.conf" new-session -d -s "$SESSION" -n stage1 -x 200 -y 50 \
     "$(sq "$SELF") _shrine" || die "could not start the tmux server"
@@ -319,28 +393,427 @@ EOF
   tmux_ display-menu -c "$client" -T " gensokyo " -x C -y C ${args[@]+"${args[@]}"}
 }
 
-# ---------------------------------------------------------------- status bar (Phase 1: skeleton)
-cmd__bar() {
-  case $1 in
-    1)
-      if [ -z "$(ls "$RES_DIR" 2>/dev/null)" ]; then
-        printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
-      else
-        printf ' ⛩ gensokyo  %s resident(s) ' "$(count_records)"
-      fi ;;
-    2)
-      printf ' ⛩ %s   %s ' "$(date +%H:%M)" "$(legend_text)" ;;
+# ---------------------------------------------------------------- registry
+# `claude agents --json` (Claude Code 2.1.260) prints an array of
+#   {pid, cwd, kind, startedAt, sessionId, name, status}
+# with status idle|busy|waiting|null; `waiting` means a permission or plan dialog is open,
+# null shows briefly for headless -p runs. registry_filter is the ONLY place that parses it,
+# emitting one "sessionId|status|name|cwd|pid" line per session.
+REGISTRY=$STATE_DIR/registry.json
+REGISTRY_TTL=3
+REG=$'\n'   # newline-prefixed registry_filter output, loaded by load_registry
+
+registry_filter() {
+  # shellcheck disable=SC2016
+  jq_ -r '.[] | [.sessionId, (.status // "null"), (.name // ""), (.cwd // ""), (.pid | tostring)] | join("|")' \
+    "$REGISTRY" 2>/dev/null
+}
+
+# Rewrite the cache when it is older than REGISTRY_TTL seconds (the CLI takes ~0.13 s).
+# A failing `claude` keeps the previous cache; an invalid file is replaced by an empty array.
+load_registry() {
+  local now
+  now=$(date +%s)
+  if [ ! -f "$REGISTRY" ] || [ $((now - $(mtime_of "$REGISTRY"))) -ge "$REGISTRY_TTL" ]; then
+    if claude_ agents --json > "$REGISTRY.tmp.$$" 2>/dev/null \
+       && jq_ -e 'type == "array"' "$REGISTRY.tmp.$$" >/dev/null 2>&1; then
+      mv "$REGISTRY.tmp.$$" "$REGISTRY"
+    else
+      rm -f "$REGISTRY.tmp.$$"
+      [ -f "$REGISTRY" ] || printf '[]\n' > "$REGISTRY"
+    fi
+  fi
+  REG=$'\n'$(registry_filter)
+}
+
+# registry_row <session-id>: "status|name|cwd|pid" for that session, or nothing.
+registry_row() {
+  local row
+  case $REG in
+    *$'\n'"$1|"*) row=${REG#*$'\n'"$1|"}; printf '%s\n' "${row%%$'\n'*}" ;;
   esac
 }
 
-cmd__border() {
-  # Claude Code sets the pane title to "✳ <name>" (from --name, follows /rename); tmux's
-  # default title is the hostname, so only titles with the glyph are shown.
-  local pane=$1 title=$2
-  case $title in
-    "✳ "*) printf ' %s ' "${title#✳ }" ;;
-    *) if [ "$(tmux_ show -p -v -t "$pane" @shrine 2>/dev/null)" = 1 ]; then printf ' ⛩ '; fi ;;
+# resident_rows: "slot|id|name|state|cwd|pane|window" per record, sorted by slot.
+# state: busy|waiting|idle|departed|starting ("starting": launched, not in the registry yet).
+# Precedence: departed record > registry status. The registry name wins over the recorded one
+# (/rename inside the resident) and is written back so `close <name>` follows the rename.
+resident_rows() {
+  local f id row state rname
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    id=${f##*/}
+    rec_load "$f"
+    row=$(registry_row "$id")
+    rname=$R_name
+    if [ -n "$R_departed" ]; then
+      state=departed
+    elif [ -n "$row" ]; then
+      state=${row%%|*}; case $state in busy|waiting|idle) ;; *) state=idle ;; esac
+      rname=${row#*|}; rname=${rname%%|*}
+      if [ -z "$rname" ]; then rname=$R_name; elif [ "$rname" != "$R_name" ]; then rec_set "$f" name "$rname"; fi
+    else
+      state=starting
+    fi
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$R_slot" "$id" "$rname" "$state" "$R_cwd" "${R_pane:--}" "$R_window"
+  done | sort -n
+}
+
+# outsider_count: registry sessions gensokyo did not launch. They have no hooks, so their state
+# would often be wrong; they get a count, not a chip.
+outsider_count() {
+  local line id n=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    id=${line%%|*}
+    [ -f "$RES_DIR/$id" ] || n=$((n + 1))
+  done <<EOF
+$REG
+EOF
+  printf '%s\n' "$n"
+}
+
+glyph_for() {
+  case $1 in
+    busy) printf '●' ;; waiting) printf '✦' ;; departed) printf '·' ;; *) printf '○' ;;
   esac
+}
+
+# ---------------------------------------------------------------- status bar
+# Row 1: one chip per resident (slot, glyph, name); gold when the resident awaits you, dim
+# when departed, bold for the focused pane. Right: waiting count and outsiders.
+# Row 2: clock and the always-visible key legend (usage bars arrive with the statusLine).
+# `#()` output may carry #[...] styles; it must never fail or print more than one line.
+cmd__bar() {
+  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win attrs
+  case $1 in
+    1)
+      prune_records
+      load_registry
+      rows=$(resident_rows)
+      if [ -z "$rows" ]; then
+        printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
+        return 0
+      fi
+      while IFS='|' read -r slot id name state cwd pane win; do
+        [ -n "$slot" ] || continue
+        attrs=
+        case $state in
+          waiting) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
+          departed) attrs=dim ;;
+        esac
+        [ "$pane" = "$active" ] && attrs="${attrs:+$attrs,}bold"
+        out="$out#[${attrs:-default}] $slot $(glyph_for "$state") ${name:0:14} #[default]│"
+      done <<EOF
+$rows
+EOF
+      [ "$waiting" -gt 0 ] && right="#[bg=$CFG_COLOR_AWAIT,fg=black] ✦ $waiting #[default] "
+      n=$(outsider_count)
+      [ "$n" -gt 0 ] && right="$right+$n outside "
+      printf '%s%s' "${out%│}" "${right:+#[align=right]$right}" ;;
+    2)
+      printf ' ⛩ %s   %s ' "$(date +%H:%M)" "$(legend_text)" ;;
+  esac
+  return 0
+}
+
+# Pane border: "slot name · dir" for a resident, "⛩" for the shrine. Claude Code sets the
+# pane title to "✳ <name>" (from --name, following /rename); the title wins over the record
+# because it changes within a second, tmux's default hostname title is ignored.
+cmd__border() {
+  local pane=$1 title=$2 f name
+  f=$(record_by_pane "$pane")
+  if [ -n "$f" ]; then
+    rec_load "$f"
+    name=$R_name
+    case $title in "✳ "*) name=${title#✳ } ;; esac
+    if [ -n "$R_departed" ]; then
+      printf ' %s %s · departed  [r] recall  [x] close ' "$R_slot" "$name"
+    else
+      printf ' %s %s · %s ' "$R_slot" "$name" "$(basename "$R_cwd")"
+    fi
+  elif [ "$(tmux_ show -p -v -t "$pane" @shrine 2>/dev/null)" = 1 ]; then
+    printf ' ⛩ '
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------- summon / close / list / stage
+pick_name() {
+  local file=$SHARE/names.txt used='' f n free
+  [ -f "$CONFIG_DIR/names.txt" ] && file=$CONFIG_DIR/names.txt
+  for f in "$RES_DIR"/*; do [ -f "$f" ] && used="$used"$'\n'"$(lower "$(rec_get "$f" name)")"; done
+  used="$used"$'\n'
+  free=()
+  while IFS= read -r n || [ -n "$n" ]; do
+    case $n in ''|'#'*) continue ;; esac
+    case $used in *$'\n'"$(lower "$n")"$'\n'*) continue ;; esac
+    free[${#free[@]}]=$n
+  done < "$file"
+  if [ "${#free[@]}" -gt 0 ]; then
+    printf '%s\n' "${free[$((RANDOM % ${#free[@]}))]}"
+  else
+    printf 'Resident%s\n' "$((RANDOM % 900 + 100))"
+  fi
+}
+
+# Slots are the smallest free number from 1; they are what `prefix N` and chips show.
+next_slot() {
+  local used='' f n=1
+  for f in "$RES_DIR"/*; do [ -f "$f" ] && used="$used $(rec_get "$f" slot) "; done
+  while :; do
+    case $used in *" $n "*) n=$((n + 1)) ;; *) printf '%s\n' "$n"; return ;; esac
+  done
+}
+stage_of_slot() { printf 'stage%s\n' "$(( ($1 - 1) / ${CFG_STAGE_SIZE:-4} + 1 ))"; }
+find_window() { tmux_ list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null | awk -v n="$1" '$2 == n {print $1; exit}'; }
+
+remember_dir() {
+  local f=$STATE_DIR/recent-dirs
+  { printf '%s\n' "$1"; grep -v -x -F -e "$1" "$f" 2>/dev/null; } | head -n 20 > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+}
+
+# focus_pane <pane> [client]: switch to the pane's window and pane; a zoom in the client's
+# current window carries over so `prefix N` while zoomed shows resident N zoomed.
+focus_pane() {
+  local pane=$1 client=${2:-} zoomed=0
+  [ -n "$client" ] && zoomed=$(tmux_ display -p -c "$client" '#{window_zoomed_flag}' 2>/dev/null)
+  tmux_ select-window -t "$pane" \; select-pane -Z -t "$pane" 2>/dev/null || return 0
+  if [ "$zoomed" = 1 ] && [ "$(tmux_ display -p -t "$pane" '#{window_zoomed_flag}')" != 1 ]; then
+    tmux_ resize-pane -Z -t "$pane"
+  fi
+  return 0
+}
+
+cmd_new() {
+  local dir='' name='' model='' effort='' mode='' focus='' prompt='' flags=() argstr='' f
+  local id slot stage win pane cmd rec out n shrine
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -n|--name) name=${2:-}; shift ;;
+      -m|--model) model=${2:-}; shift ;;
+      -e|--effort) effort=${2:-}; shift ;;
+      -p|--permission-mode) mode=${2:-}; shift ;;
+      --prompt) prompt=${2:-}; shift ;;
+      --focus) focus=1 ;;
+      -*) die "new: unknown option $1 (usage: gensokyo new [dir] [-n name] [-m model] [-e effort] [-p permission-mode] [--focus])" ;;
+      *) [ -z "$dir" ] || die "new: one directory only"; dir=$1 ;;
+    esac
+    shift
+  done
+  need_bins; ensure_dirs
+  dir=${dir:-$PWD}
+  dir=$(cd "${dir/#\~/$HOME}" 2>/dev/null && pwd) || die "new: no such directory: $dir"
+  [ -n "$mode" ] || mode=$CFG_PERMISSION_MODE
+  case $prompt in *$'\n'*) die "new: --prompt must be a single line" ;; esac
+  if [ -n "$name" ]; then
+    case $name in ''|*[!A-Za-z0-9_.-]*) die "new: a name uses letters, digits, _ . - only" ;; esac
+    find_resident "$name" >/dev/null && die "new: $name is already here (gensokyo list)"
+  else
+    name=$(pick_name)
+  fi
+  [ -n "$model" ]  && flags[${#flags[@]}]=--model && flags[${#flags[@]}]=$model
+  [ -n "$effort" ] && flags[${#flags[@]}]=--effort && flags[${#flags[@]}]=$effort
+  [ -n "$mode" ]   && flags[${#flags[@]}]=--permission-mode && flags[${#flags[@]}]=$mode
+  for f in ${flags[@]+"${flags[@]}"}; do argstr="$argstr $(sq "$f")"; done
+
+  start_server
+  id=$(new_uuid); slot=$(next_slot); stage=$(stage_of_slot "$slot"); rec=$RES_DIR/$id
+  {
+    printf 'slot=%s\nname=%s\ncwd=%s\nwindow=%s\nlaunched=%s\nargs=%s\n' "$slot" "$name" "$dir" "$stage" "$(date +%s)" "${argstr# }"
+    [ -n "$prompt" ] && printf 'prompt=%s\n' "$prompt"
+  } > "$rec"
+
+  # Stage windows hold CFG_STAGE_SIZE residents each. The first resident of a stage replaces
+  # the shrine pane in place; later ones split the window and re-tile it.
+  cmd="$(sq "$SELF") _run $id"
+  win=$(find_window "$stage")
+  if [ -z "$win" ]; then
+    out=$(tmux_ new-window -d -P -F '#{window_id} #{pane_id}' -n "$stage" "$cmd") || { rm -f "$rec"; die "new: tmux could not open a window"; }
+    pane=${out#* }
+  else
+    n=$(tmux_ list-panes -t "$win" | wc -l | tr -d ' ')
+    shrine=$(tmux_ list-panes -t "$win" -F '#{pane_id} #{@shrine}' | awk '$2 == "1" {print $1; exit}')
+    if [ "$n" -eq 1 ] && [ -n "$shrine" ]; then
+      tmux_ set -p -t "$shrine" -u @shrine \; respawn-pane -k -t "$shrine" "$cmd" || { rm -f "$rec"; die "new: tmux could not start the pane"; }
+      pane=$shrine
+    else
+      pane=$(tmux_ split-window -d -P -F '#{pane_id}' -t "$win" "$cmd") || { rm -f "$rec"; die "new: tmux could not split the window"; }
+      tmux_ select-layout -t "$win" tiled
+    fi
+  fi
+  rec_set "$rec" pane "$pane"
+  remember_dir "$dir"
+  [ -n "$focus" ] && focus_pane "$pane"
+  say "summoned $name (slot $slot) in $dir"
+}
+
+cmd_close() {
+  local f id
+  [ -n "${1:-}" ] || die "usage: gensokyo close <name|slot>"
+  f=$(find_resident "$1") || die "close: no resident '$1' (gensokyo list)"
+  rec_load "$f"; id=${f##*/}
+  if [ -n "$R_departed" ]; then
+    tmux_ send-keys -t "$R_pane" x     # the departed screen removes the record and closes the pane
+    say "closed $R_name's pane"
+  elif [ "$(tmux_ display -p -t "$R_pane" '#{pane_dead}' 2>/dev/null)" = 1 ]; then
+    rm -f "$f"; tmux_ kill-pane -t "$R_pane"
+    say "closed $R_name's dead pane"
+  else
+    # Ctrl-C first: it clears a half-typed prompt (or interrupts the running turn) so that
+    # /exit lands on an empty line. `send-keys -l` then `send-keys Enter` submits reliably.
+    tmux_ send-keys -t "$R_pane" C-c
+    perl -e 'select(undef, undef, undef, 0.3)' 2>/dev/null || sleep 1
+    tmux_ send-keys -t "$R_pane" -l '/exit' \; send-keys -t "$R_pane" Enter
+    say "asked $R_name to leave (/exit); the pane shows the departed screen once claude exits"
+  fi
+}
+
+cmd_list() {
+  local json='' all='' wait='' rows='' id status name cwd slot state pane win
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --json) json=1 ;; --all) all=1 ;; --wait) wait=1 ;;
+      *) die "list: unknown option $1 (usage: gensokyo list [--json] [--all])" ;;
+    esac
+    shift
+  done
+  need_bins; ensure_dirs
+  load_registry
+  rows=$(resident_rows)
+  if [ -n "$all" ]; then
+    while IFS='|' read -r id status name cwd _; do
+      [ -n "$id" ] || continue
+      [ -f "$RES_DIR/$id" ] && continue
+      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside"
+    done <<EOF
+$REG
+EOF
+  fi
+  rows=$(printf '%s\n' "$rows" | sed '/^$/d')
+  if [ -n "$json" ]; then
+    # shellcheck disable=SC2016
+    printf '%s\n' "$rows" | jq_ -R -s '
+      split("\n") | map(select(length > 0) | split("|"))
+      | map({slot: (if .[0] == "-" then null else (.[0] | tonumber) end), session_id: .[1], name: .[2],
+             status: .[3], cwd: .[4], pane: (if .[5] == "-" then null else .[5] end),
+             window: .[6], outside: (.[6] == "outside")})'
+    return 0
+  fi
+  if [ -z "$rows" ]; then
+    say "nobody is here yet: gensokyo new [dir] [-n name]"
+  else
+    printf '  %-3s %-2s %-16s %-36s %s\n' '#' '' name directory session
+    while IFS='|' read -r slot id name state cwd pane win; do
+      [ -n "$slot" ] || continue
+      [ "$slot" = - ] && slot=' '
+      printf '  %-3s %s  %-16s %-36s %s  %s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" "$state"
+    done <<EOF
+$rows
+EOF
+    say
+    say "  ● busy  ✦ awaits you  ○ resting  · departed"
+  fi
+  if [ -n "$wait" ]; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
+  return 0
+}
+
+# stage [layout]: re-arrange every stage window (tiled, main-vertical, even-horizontal, ...).
+cmd_stage() {
+  local layout=${1:-} w
+  if [ -z "$layout" ]; then
+    tmux_ list-windows -t "=$SESSION" -F '#{window_name}: #{window_panes} pane(s)#{?window_zoomed_flag, (zoomed),}' 2>/dev/null \
+      || die "stage: the cockpit is not running"
+    return 0
+  fi
+  for w in $(tmux_ list-windows -t "=$SESSION" -F '#{window_id}' 2>/dev/null); do
+    tmux_ select-layout -t "$w" "$layout" 2>/dev/null || die "stage: unknown layout '$layout' (tiled, main-vertical, main-horizontal, even-horizontal, even-vertical)"
+    tmux_ set -w -t "$w" @layout "$layout"
+  done
+  say "stage: $layout"
+}
+
+# ---------------------------------------------------------------- key actions (run-shell)
+# Called by tmux; print nothing (run-shell shows any output over the pane) and exit 0.
+cmd__focus() {
+  local n=$1 client=$2 f
+  f=$(grep -l "^slot=$n\$" "$RES_DIR"/* 2>/dev/null | head -n 1)
+  [ -n "$f" ] || { tmux_ display-message -c "$client" "no resident $n"; return 0; }
+  rec_load "$f"
+  focus_pane "$R_pane" "$client"
+}
+
+cmd__cycle() {
+  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p win
+  while IFS='|' read -r slot id name state cwd p win; do
+    [ -n "$slot" ] && [ "$p" != - ] || continue
+    [ -z "$first" ] && first=$p
+    [ -n "$found" ] && [ -z "$target" ] && [ "$dir" = next ] && target=$p
+    if [ "$p" = "$pane" ]; then found=1; [ "$dir" = prev ] && target=$prev; fi
+    prev=$p; last=$p
+  done <<EOF
+$(resident_rows)
+EOF
+  [ -n "$target" ] || { if [ "$dir" = prev ] && [ -n "$found" ]; then target=$last; else target=$first; fi; }
+  [ -n "$target" ] && focus_pane "$target"
+  return 0
+}
+
+cmd__layout() {
+  local client=$1 win cur next
+  win=$(tmux_ display -p -c "$client" '#{window_id}')
+  cur=$(tmux_ show -w -v -t "$win" @layout 2>/dev/null)
+  case $cur in tiled) next=main-vertical ;; main-vertical) next=even-horizontal ;; *) next=tiled ;; esac
+  tmux_ select-layout -t "$win" "$next" \; set -w -t "$win" @layout "$next" \; display-message -c "$client" "layout: $next"
+}
+
+cmd__menu-summon() {
+  local client=$1 s d i=0 args=() label
+  s=$(sq "$SELF")
+  if [ -f "$STATE_DIR/recent-dirs" ]; then
+    while IFS= read -r d; do
+      [ -d "$d" ] || continue
+      i=$((i + 1)); [ "$i" -le 8 ] || break
+      label=$(tilde "$d" 60)
+      args=(${args[@]+"${args[@]}"} "$label" "$i" "display-popup -E -c $client -w 72 -h 10 '$s _popup-summon $(sq "$d")'")
+    done < "$STATE_DIR/recent-dirs"
+  fi
+  args=(${args[@]+"${args[@]}"} "other directory..." o "display-popup -E -c $client -w 72 -h 10 '$s _popup-summon'" "" "cancel" q "")
+  tmux_ display-menu -c "$client" -T " summon a resident into " -x C -y C "${args[@]}"
+}
+
+# Runs inside a display-popup: asks for the directory (tab completion) unless given, then a name.
+cmd__popup-summon() {
+  local dir=${1:-} name
+  printf '\033[2J\033[H'
+  if [ -z "$dir" ]; then
+    printf '  directory (Tab completes, Enter for %s):\n  ' "$(tilde "$PWD")"
+    read -e -r dir || exit 0
+    dir=${dir:-$PWD}
+  else
+    printf '  directory: %s\n' "$(tilde "$dir")"
+  fi
+  printf '  name (Enter for a random one): '
+  read -e -r name || exit 0
+  set -- "$dir" --focus
+  [ -n "$name" ] && set -- "$@" -n "$name"
+  if ! "$SELF" new "$@"; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
+}
+
+cmd__menu-banish() {
+  local client=$1 pane=$2 f
+  f=$(record_by_pane "$pane")
+  [ -n "$f" ] || { tmux_ display-message -c "$client" "no resident in this pane"; return 0; }
+  rec_load "$f"
+  # A menu rather than confirm-before (which fails with "invalid confirm key" from run-shell).
+  # display-menu blocks this process until the menu closes; run-shell tolerates that.
+  if [ -n "$R_departed" ]; then
+    tmux_ display-menu -c "$client" -T " $R_name has departed " -x C -y C \
+      "close this pane" y "run-shell -b '$(sq "$SELF") close ${f##*/} >/dev/null 2>&1'" "keep it" n ""
+  else
+    tmux_ display-menu -c "$client" -T " banish $R_name (slot $R_slot)? " -x C -y C \
+      "yes, ask $R_name to /exit" y "run-shell -b '$(sq "$SELF") close ${f##*/} >/dev/null 2>&1'" "no" n ""
+  fi
 }
 
 # ---------------------------------------------------------------- resident pane
@@ -354,6 +827,9 @@ cmd__run() {
   rec_del "$rec" departed
   cd "$cwd" || die "cannot cd to $cwd"
   scrub_env
+  # Ctrl-C in the pane must reach claude (it clears the input) without killing this wrapper.
+  # A trap with a command is reset to the default in the child, so claude sees nothing special.
+  trap : INT
   eval "set -- $args"
   if [ -n "$resume" ]; then
     # Recall: same session id and transcript; Claude Code keeps the name it had.
@@ -367,6 +843,7 @@ cmd__run() {
   rc=$?
   rec_set "$rec" departed "$(date +%s)"
   rec_set "$rec" exit "$rc"
+  name=$(rec_get "$rec" name)   # follows a /rename made while it ran
   departed_screen "$id" "$name" "$rc"
 }
 
@@ -444,6 +921,10 @@ cmd_doctor() {
 command_table() {
   cat <<'EOF'
 |||start or attach the cockpit  (--detach: server only, --nested: inside another tmux)
+new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a pane
+close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
+list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
+stage||[tiled/main-vertical/even-horizontal]|arrange the panes of every stage window
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 version|||print the version
@@ -487,16 +968,18 @@ main() {
     ''|--*) cmd_home "$@" ;;
     -h|help) shift; cmd_help "$@" ;;
     doctor) cmd_doctor ;;
-    # aliases: themed -> plain
-    summon) shift; cmd__not_yet new ;;
-    banish) shift; cmd__not_yet close ;;
-    recall) shift; cmd__not_yet resume ;;
-    spell) shift; cmd__not_yet broadcast ;;
-    ritual) shift; cmd__not_yet schedule ;;
-    who|list) shift; cmd__not_yet list ;;
-    new|close|resume|broadcast|send|stage|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_bar|_border|_menu-shrine) shift; need_bins; "cmd_$cmd" "$@" ;;
-    _focus|_cycle|_layout|_menu-summon|_menu-banish|_menu-recall|_menu-spell|_menu-message|_menu-timetable)
+    # plain names first; themed verbs are aliases
+    new|summon) shift; cmd_new "$@" ;;
+    close|banish) shift; cmd_close "$@" ;;
+    list|who) shift; cmd_list "$@" ;;
+    stage) shift; cmd_stage "$@" ;;
+    recall) cmd__not_yet resume ;;
+    spell) cmd__not_yet broadcast ;;
+    ritual) cmd__not_yet schedule ;;
+    resume|broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    _shrine|_keys|_run|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
+      shift; need_bins; "cmd_$cmd" "$@" ;;
+    _menu-recall|_menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;
     *) die "unknown command: $cmd (see: gensokyo help)" ;;
   esac

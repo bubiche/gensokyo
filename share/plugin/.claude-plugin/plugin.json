@@ -1,0 +1,6 @@
+{
+  "name": "gensokyo",
+  "version": "0.1.0",
+  "description": "Teaches a Claude Code session running inside the gensokyo cockpit how to start, list, close, resume and focus the other sessions (residents) through the gensokyo CLI.",
+  "author": { "name": "gensokyo" }
+}

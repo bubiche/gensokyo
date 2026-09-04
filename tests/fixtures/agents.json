@@ -1,0 +1,8 @@
+[
+  {"pid": 74525, "cwd": "/Users/me/dev/alpha", "kind": "interactive", "startedAt": 1788529967524,
+   "sessionId": "ed82e343-81ce-4b9e-8fdb-9b32d8136a5c", "name": "Marisa", "status": "idle"},
+  {"pid": 85270, "cwd": "/Users/me/dev/beta", "kind": "interactive", "startedAt": 1788530130342,
+   "sessionId": "f2fe56c9-466e-4333-bed0-4a89460dd0b8", "name": "Sakuya", "status": "waiting"},
+  {"pid": 90001, "cwd": "/Users/me/dev/gamma", "kind": "interactive", "startedAt": 1788530200000,
+   "sessionId": "0b1c2d3e-0000-4000-8000-000000000003", "status": null}
+]

@@ -18,7 +18,7 @@ VERSION=0.1.0-dev
 
 # ---------------------------------------------------------------- where am I
 self_path() {
-  local src=$0 dir
+  local src=${BASH_SOURCE[0]:-$0} dir   # BASH_SOURCE so tests can source this file
   while [ -L "$src" ]; do
     dir=$(cd "$(dirname "$src")" && pwd)
     src=$(readlink "$src")
@@ -178,10 +178,16 @@ new_uuid() {
 find_resident() {
   local f want
   want=$(lower "$1")
+  # Slot or name first; a session-id prefix only when it is at least 4 characters, so that
+  # `close 7` can never hit a session id that happens to start with 7.
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
     rec_load "$f"
     if [ "$R_slot" = "$1" ] || [ "$(lower "$R_name")" = "$want" ]; then printf '%s\n' "$f"; return 0; fi
+  done
+  [ "${#want}" -ge 4 ] || return 1
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
     case ${f##*/} in "$want"*) printf '%s\n' "$f"; return 0 ;; esac
   done
   return 1
@@ -719,6 +725,18 @@ EOF
 }
 
 # stage [layout]: re-arrange every stage window (tiled, main-vertical, even-horizontal, ...).
+# focus <name|slot>: show that resident's pane (the skill's "zoom on Marisa").
+cmd_focus() {
+  local f
+  [ -n "${1:-}" ] || die "usage: gensokyo focus <name|slot>"
+  f=$(find_resident "$1") || die "focus: no resident '$1' (gensokyo list)"
+  rec_load "$f"
+  [ -n "$R_pane" ] && [ "$R_pane" != - ] || die "focus: $R_name has no pane yet"
+  server_running || die "focus: the cockpit is not running"
+  focus_pane "$R_pane"
+  say "focused $R_name (slot $R_slot)"
+}
+
 cmd_stage() {
   local layout=${1:-} w
   if [ -z "$layout" ]; then
@@ -827,10 +845,16 @@ cmd__run() {
   rec_del "$rec" departed
   cd "$cwd" || die "cannot cd to $cwd"
   scrub_env
+  # The handbook skill runs the CLI; from a checkout `gensokyo` is not on PATH, so pass it.
+  export GENSOKYO_BIN=$SELF GENSOKYO_RESIDENT=$id
   # Ctrl-C in the pane must reach claude (it clears the input) without killing this wrapper.
   # A trap with a command is reset to the default in the child, so claude sees nothing special.
   trap : INT
   eval "set -- $args"
+  # Every resident, recalled or new, gets the plugin (handbook skill) and the short paragraph
+  # that makes Claude reach for the skill instead of guessing; both are per-session flags,
+  # nothing in ~/.claude changes.
+  set -- --plugin-dir "$SHARE/plugin" --append-system-prompt "$(system_paragraph "$name")" "$@"
   if [ -n "$resume" ]; then
     # Recall: same session id and transcript; Claude Code keeps the name it had.
     claude_ --resume "$id" "$@"
@@ -845,6 +869,12 @@ cmd__run() {
   rec_set "$rec" exit "$rc"
   name=$(rec_get "$rec" name)   # follows a /rename made while it ran
   departed_screen "$id" "$name" "$rc"
+}
+
+# One paragraph appended to Claude Code's system prompt. Kept short: everything else lives in
+# share/plugin/skills/gensokyo/SKILL.md, which Claude loads when a request matches it.
+system_paragraph() {
+  printf '%s' "You are running inside gensokyo, a tmux cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name. When the user talks about other sessions or residents, or wants to start, list, close, resume or focus one (also with the words summon, who, banish, recall), use the gensokyo skill and its CLI (\`gensokyo\`, or \$GENSOKYO_BIN when that is not on PATH); do not drive tmux yourself."
 }
 
 departed_screen() {
@@ -924,6 +954,7 @@ command_table() {
 new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a pane
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
+focus||<name or slot>|show that resident's pane
 stage||[tiled/main-vertical/even-horizontal]|arrange the panes of every stage window
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
@@ -972,6 +1003,7 @@ main() {
     new|summon) shift; cmd_new "$@" ;;
     close|banish) shift; cmd_close "$@" ;;
     list|who) shift; cmd_list "$@" ;;
+    focus) shift; need_bins; cmd_focus "$@" ;;
     stage) shift; cmd_stage "$@" ;;
     recall) cmd__not_yet resume ;;
     spell) cmd__not_yet broadcast ;;
@@ -985,4 +1017,5 @@ main() {
   esac
 }
 
-main "$@"
+# tests/run.sh sources this file for its functions; only run main when executed.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then main "$@"; fi

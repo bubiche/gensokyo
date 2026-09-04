@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, live panes, zoom to focus, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha, being built from `PLAN.md`. Nothing usable yet.
+**Status:** pre-alpha. The cockpit, summon/banish/list and the status bar work; notifications, broadcasts and schedules are not there yet.
 
 ## Requirements
 
@@ -33,6 +33,7 @@ scripts/vendor.sh --status
 bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
 bin/gensokyo               # start the cockpit (Ctrl-Space then ? lists the keys)
 bin/gensokyo help          # command list; --json is what the resident skill reads
+bin/gensokyo new ~/dev/x -n Marisa   # a resident in a pane; close <name>, list, stage <layout>
 ```
 
 Run it from the checkout; `install.sh` (symlink into `~/.local/bin`) comes later. `bin/gensokyo`
@@ -41,4 +42,6 @@ reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its o
 (`config` for KEY=value settings such as `PREFIX=C-Space`, `tmux.conf` sourced last).
 
 Environment overrides for tests and CI: `GENSOKYO_TMUX`, `GENSOKYO_JQ`, `GENSOKYO_CLAUDE`
-(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`.
+(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`. `tests/stub-claude` stands in
+for `claude` (registry, names, /rename, /exit) so the cockpit runs without Claude Code or a login:
+`GENSOKYO_CLAUDE=$PWD/tests/stub-claude GENSOKYO_SOCKET=t bin/gensokyo`.

@@ -1,0 +1,83 @@
+#!/bin/bash
+# tests/stub-claude - stands in for the `claude` binary so gensokyo can be exercised without
+# Claude Code or an Anthropic login (GENSOKYO_CLAUDE=tests/stub-claude). It implements just
+# enough of Claude Code 2.1.260:
+#   --version                 prints a version line
+#   agents --json             the registry: $STUB_REGISTRY (a fixture file) if set, else one
+#                             entry per running stub session, status from <id>.status
+#   interactive (default)     honours --session-id, --name, --resume, swallows the other
+#                             launch flags, sets the pane title to "✳ <name>", echoes input,
+#                             /rename <name> renames, /exit exits 0
+# Every session keeps its registry entry in $STUB_STATE/<session-id>.json and its launch
+# arguments in <session-id>.args so tests can assert on them. bash 3.2 compatible.
+
+set -u
+STUB_STATE=${STUB_STATE:-${GENSOKYO_STATE_DIR:-${TMPDIR:-/tmp}}/stub}
+mkdir -p "$STUB_STATE"
+
+json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+write_entry() {   # <id> <name> <status>
+  printf '{"pid": %s, "cwd": "%s", "kind": "interactive", "startedAt": %s000, "sessionId": "%s", "name": "%s", "status": %s}\n' \
+    "$$" "$(json_str "$PWD")" "$STARTED" "$1" "$(json_str "$2")" "$3" > "$STUB_STATE/$1.json"
+}
+
+case ${1:-} in
+  --version) echo "2.1.260 (Claude Code)"; exit 0 ;;
+  agents)
+    if [ -n "${STUB_REGISTRY:-}" ]; then cat "$STUB_REGISTRY"; exit 0; fi
+    printf '['
+    sep=
+    for f in "$STUB_STATE"/*.json; do
+      [ -f "$f" ] || continue
+      pid=$(sed -n 's/^{"pid": \([0-9]*\),.*/\1/p' "$f")
+      kill -0 "$pid" 2>/dev/null || { rm -f "$f"; continue; }
+      id=${f##*/}; id=${id%.json}
+      st=idle; [ -f "$STUB_STATE/$id.status" ] && st=$(cat "$STUB_STATE/$id.status")
+      case $st in null) st=null ;; *) st="\"$st\"" ;; esac
+      printf '%s' "$sep"; sed "s/\"status\": [^}]*}/\"status\": $st}/" "$f" | tr -d '\n'
+      sep=,
+    done
+    printf ']\n'
+    exit 0 ;;
+esac
+
+# interactive
+ORIG_ARGS=$*
+id='' name=stub prompt='' resume=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --session-id) id=$2; shift ;;
+    --resume) id=$2; resume=1; shift ;;
+    --name) name=$2; shift ;;
+    --settings|--plugin-dir|--append-system-prompt|--model|--effort|--permission-mode) shift ;;
+    --) shift; prompt=$*; break ;;
+    *) ;;
+  esac
+  shift
+done
+[ -n "$id" ] || id=stub-$$
+[ -n "$resume" ] && [ -f "$STUB_STATE/$id.name" ] && name=$(cat "$STUB_STATE/$id.name")
+STARTED=$(date +%s)
+printf '%s\n' "$ORIG_ARGS" > "$STUB_STATE/$id.args"
+printf '%s\n' "$name" > "$STUB_STATE/$id.name"
+rm -f "$STUB_STATE/$id.status"
+write_entry "$id" "$name" '"idle"'
+trap 'rm -f "$STUB_STATE/$id.json"' EXIT
+trap : INT   # Claude Code survives Ctrl-C (it clears the input); so does the stub
+
+printf '\033]2;✳ %s\007' "$name"
+echo "stub-claude $name ($id)${resume:+ resumed}"
+echo "env CLAUDE*: $(env | grep -c '^CLAUDE')"
+[ -n "$prompt" ] && echo "> $prompt"
+while :; do
+  IFS= read -r line; rc=$?
+  if [ "$rc" -ne 0 ]; then [ "$rc" -gt 128 ] && continue; break; fi   # Ctrl-C: input cleared, keep going
+  case $line in
+    /exit) echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
+    /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"
+                write_entry "$id" "$name" '"idle"'; printf '\033]2;✳ %s\007' "$name"; echo "renamed to $name" ;;
+    *) echo "> $line" ;;
+  esac
+done
+exit 0

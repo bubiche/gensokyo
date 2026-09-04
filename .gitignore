@@ -1,0 +1,8 @@
+# vendored binaries are fetched by scripts/vendor.sh, never committed
+vendor/*/
+!vendor/SHA256SUMS
+!vendor/README.md
+# dev-only tooling and scratch
+.tools/
+spikes/scratch/
+*.part

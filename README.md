@@ -30,4 +30,15 @@ are POSIX `sh`. Do not use bash 4 features.
 git clone … gensokyo && cd gensokyo
 scripts/vendor.sh          # fetch tmux + jq for this machine into vendor/<os>-<arch>/
 scripts/vendor.sh --status
+bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
+bin/gensokyo               # start the cockpit (Ctrl-Space then ? lists the keys)
+bin/gensokyo help          # command list; --json is what the resident skill reads
 ```
+
+Run it from the checkout; `install.sh` (symlink into `~/.local/bin`) comes later. `bin/gensokyo`
+reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its own tmux server
+(`tmux -L gensokyo`) with `share/tmux.conf`, and per-user tweaks go in `~/.config/gensokyo/`
+(`config` for KEY=value settings such as `PREFIX=C-Space`, `tmux.conf` sourced last).
+
+Environment overrides for tests and CI: `GENSOKYO_TMUX`, `GENSOKYO_JQ`, `GENSOKYO_CLAUDE`
+(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`.

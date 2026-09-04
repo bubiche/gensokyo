@@ -1,0 +1,505 @@
+#!/bin/bash
+# gensokyo - a bash + tmux cockpit for running several Claude Code sessions side by side.
+#
+# Targets macOS /bin/bash 3.2: no associative arrays, no mapfile, no ${var,,}.
+# Install layout (GENSOKYO_HOME is derived from this script's real path):
+#   bin/gensokyo   share/tmux.conf share/names.txt share/banner.txt share/plugin/
+#   vendor/<os>-<arch>/{tmux,jq}   (fetched by scripts/vendor.sh, never committed)
+# Runtime state: ~/.local/state/gensokyo   (override: GENSOKYO_STATE_DIR)
+# User config:   ~/.config/gensokyo        (override: GENSOKYO_CONFIG_DIR)
+# Binaries:      GENSOKYO_TMUX / GENSOKYO_JQ / GENSOKYO_CLAUDE env -> vendor/ -> PATH
+#
+# Facts about Claude Code (2.1.260) that this script depends on are documented next to
+# the code that uses them, so the script stays understandable without external notes.
+
+set -u
+
+VERSION=0.1.0-dev
+
+# ---------------------------------------------------------------- where am I
+self_path() {
+  local src=$0 dir
+  while [ -L "$src" ]; do
+    dir=$(cd "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    case $src in /*) ;; *) src=$dir/$src ;; esac
+  done
+  printf '%s/%s\n' "$(cd "$(dirname "$src")" && pwd)" "$(basename "$src")"
+}
+SELF=$(self_path)
+GENSOKYO_HOME=$(cd "$(dirname "$SELF")/.." && pwd)
+SHARE=$GENSOKYO_HOME/share
+
+CONFIG_DIR=${GENSOKYO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gensokyo}
+STATE_DIR=${GENSOKYO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/gensokyo}
+RES_DIR=$STATE_DIR/residents
+SOCKET=${GENSOKYO_SOCKET:-gensokyo}   # tmux -L <socket>; tests use their own
+SESSION=gensokyo                       # the one tmux session on that socket
+
+# ---------------------------------------------------------------- output helpers
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'gensokyo: %s\n' "$*" >&2; }
+die()  { warn "$@"; exit 1; }
+
+# ---------------------------------------------------------------- environment
+# A Claude Code session exports CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, CLAUDE_CODE_SESSION_ID,
+# CLAUDE_CODE_MESSAGING_SOCKET/TOKEN, CLAUDE_PID, CLAUDE_EFFORT, CLAUDE_CODE_ENTRYPOINT,
+# CLAUDE_CODE_EXECPATH, ... A `claude` started with those inherited treats itself as a child
+# session: transcript saving off and absent from `claude agents --json`. gensokyo is often
+# run from inside a resident (the handbook skill does that), so scrub them unconditionally
+# before starting the tmux server or a resident. GENSOKYO_* variables are unaffected.
+scrub_env() {
+  local v
+  for v in $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+}
+
+# ---------------------------------------------------------------- config
+CFG_PREFIX=C-Space          # tmux prefix; Claude Code does not use Ctrl+Space
+# shellcheck disable=SC2034  # CFG_* are read by later commands and by eval in load_config
+CFG_STAGE_SIZE=4            # residents per stage window
+# shellcheck disable=SC2034
+CFG_PERMISSION_MODE=        # default --permission-mode for new residents; empty = Claude Code's default
+CFG_COLOR_BAR=#c0392b       # row 1 background (Hakurei red)
+CFG_COLOR_BAR_FG=#ffffff
+CFG_COLOR_ROW2=#fbeee6      # row 2 background (cream)
+CFG_COLOR_ROW2_FG=#7a1f18
+CFG_COLOR_AWAIT=#f1c40f     # chip background when a resident awaits you (gold)
+CFG_COLOR_BORDER=#7a1f18
+CFG_MOUSE=off
+
+load_config() {
+  [ -f "$CONFIG_DIR/config" ] || return 0
+  local line key
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in ''|'#'*) continue ;; esac
+    key=${line%%=*}
+    case $key in
+      ''|*[!A-Z_0-9]*) warn "config: ignoring line: $line"; continue ;;
+    esac
+    eval "CFG_$key=\${line#*=}"
+  done < "$CONFIG_DIR/config"
+}
+
+# ---------------------------------------------------------------- binaries
+platform() {
+  local os arch
+  os=$(uname -s) arch=$(uname -m)
+  case $os in Darwin) os=macos ;; Linux) os=linux ;; *) os=unsupported ;; esac
+  case $arch in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x86_64 ;; *) arch=unsupported ;; esac
+  printf '%s-%s\n' "$os" "$arch"
+}
+PLATFORM=$(platform)
+
+# resolve_bin <name> <env override>: env -> vendor/<platform>/<name> -> PATH. Prints the path
+# and, on stderr-free second line, the origin (env|vendored|system) for doctor.
+resolve_bin() {
+  local name=$1 override=$2 cand
+  if [ -n "$override" ]; then printf '%s\n%s\n' "$override" env; return; fi
+  cand=$GENSOKYO_HOME/vendor/$PLATFORM/$name
+  if [ -x "$cand" ]; then printf '%s\n%s\n' "$cand" vendored; return; fi
+  cand=$(command -v "$name" 2>/dev/null) || cand=
+  printf '%s\n%s\n' "$cand" system
+}
+set_bins() {
+  local out
+  out=$(resolve_bin tmux "${GENSOKYO_TMUX:-}");     TMUX_BIN=${out%%$'\n'*};   TMUX_FROM=${out##*$'\n'}
+  out=$(resolve_bin jq "${GENSOKYO_JQ:-}");         JQ_BIN=${out%%$'\n'*};     JQ_FROM=${out##*$'\n'}
+  out=$(resolve_bin claude "${GENSOKYO_CLAUDE:-}"); CLAUDE_BIN=${out%%$'\n'*}; CLAUDE_FROM=${out##*$'\n'}
+}
+tmux_()   { "$TMUX_BIN" -L "$SOCKET" "$@"; }
+jq_()     { "$JQ_BIN" "$@"; }
+claude_() { "$CLAUDE_BIN" "$@"; }
+
+need_bins() {
+  [ -n "$TMUX_BIN" ] || die "tmux not found: run scripts/vendor.sh (or set GENSOKYO_TMUX)"
+  [ -n "$JQ_BIN" ]   || die "jq not found: run scripts/vendor.sh (or set GENSOKYO_JQ)"
+  [ -n "$CLAUDE_BIN" ] || die "claude not found on PATH: install Claude Code (https://code.claude.com) or set GENSOKYO_CLAUDE"
+}
+
+# ver_ge <a> <b>: true when dotted version a >= b (numeric per component, letters ignored).
+ver_ge() {
+  local a b i x y
+  a=$(printf '%s' "$1" | tr -c '0-9.\n' ' ' | tr -d ' ')
+  b=$(printf '%s' "$2" | tr -c '0-9.\n' ' ' | tr -d ' ')
+  for i in 1 2 3; do
+    x=$(printf '%s' "$a" | cut -d. -f"$i"); y=$(printf '%s' "$b" | cut -d. -f"$i")
+    x=${x:-0}; y=${y:-0}
+    [ "$x" -gt "$y" ] && return 0
+    [ "$x" -lt "$y" ] && return 1
+  done
+  return 0
+}
+
+# ---------------------------------------------------------------- resident records
+# state/residents/<session-id> holds KEY=value lines: slot, name, cwd, pane (%N), window,
+# launched (epoch), args (shell-quoted launch flags), prompt, departed (epoch), exit, resume.
+rec_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
+rec_set() {
+  local tmp=$1.tmp.$$
+  { [ -f "$1" ] && grep -v "^$2=" "$1"; printf '%s=%s\n' "$2" "$3"; } > "$tmp" && mv "$tmp" "$1"
+}
+rec_del() { [ -f "$1" ] && { grep -v "^$2=" "$1" > "$1.tmp.$$"; mv "$1.tmp.$$" "$1"; }; return 0; }
+
+ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$CONFIG_DIR"; }
+count_records() { find "$RES_DIR" -type f 2>/dev/null | wc -l | tr -d ' '; }
+
+# ---------------------------------------------------------------- tmux server
+server_running() { tmux_ has-session -t "=$SESSION" 2>/dev/null; }
+sq() { printf '%q' "$1"; }   # shell-quote for tmux command strings
+
+# Inside our own server? $TMUX looks like /tmp/tmux-501/<socket>,<pid>,<idx>.
+inside_own_server() {
+  local path=${TMUX%%,*}
+  [ -n "${TMUX:-}" ] && [ "$(basename "$path")" = "$SOCKET" ]
+}
+
+prefix_label() {
+  case $CFG_PREFIX in
+    C-Space) printf 'Ctrl-Space' ;;
+    C-*) printf 'Ctrl-%s' "${CFG_PREFIX#C-}" ;;
+    M-*) printf 'Alt-%s' "${CFG_PREFIX#M-}" ;;
+    *) printf '%s' "$CFG_PREFIX" ;;
+  esac
+}
+
+# One table drives the bindings, the `g g` menu and the `?` list, so the legend cannot
+# drift from what the keys do. Fields: table|key|label|tmux command.
+# `#{client_name}` / `#{pane_id}` are expanded by tmux before run-shell runs the command.
+key_table() {
+  local s
+  s=$(sq "$SELF")
+  cat <<EOF
+prefix|1-9|focus resident 1-9|
+prefix|z|zoom / unzoom the focused resident|resize-pane -Z
+prefix|n|next resident|run-shell "$s _cycle next '#{pane_id}'"
+prefix|p|previous resident|run-shell "$s _cycle prev '#{pane_id}'"
+prefix|g|gensokyo actions (then one key)|switch-client -T gensokyo
+prefix|?|list every key|display-popup -E -w 66 -h 30 "$s _keys"
+prefix|d|detach; the cockpit keeps running|detach-client
+gensokyo|n|summon a new resident|run-shell "$s _menu-summon '#{client_name}'"
+gensokyo|x|banish (close) the focused resident|run-shell "$s _menu-banish '#{client_name}' '#{pane_id}'"
+gensokyo|r|recall a departed resident|run-shell "$s _menu-recall '#{client_name}'"
+gensokyo|s|cast a spell card (broadcast a prompt)|run-shell "$s _menu-spell '#{client_name}'"
+gensokyo|m|message a resident|run-shell "$s _menu-message '#{client_name}'"
+gensokyo|w|who is around|display-popup -E -w 90% -h 70% "$s who --wait"
+gensokyo|l|cycle the pane layout|run-shell "$s _layout '#{client_name}'"
+gensokyo|t|timetable of rituals|run-shell "$s _menu-timetable '#{client_name}'"
+gensokyo|g|menu of every action|run-shell "$s _menu-shrine '#{client_name}'"
+gensokyo|?|list every key|display-popup -E -w 66 -h 30 "$s _keys"
+EOF
+}
+
+apply_keys() {
+  local table key label cmd i s
+  s=$(sq "$SELF")
+  tmux_ set -g prefix "$CFG_PREFIX" \; unbind C-b \; bind "$CFG_PREFIX" send-prefix
+  for i in 1 2 3 4 5 6 7 8 9; do
+    tmux_ bind "$i" run-shell "$s _focus $i '#{client_name}'"
+  done
+  while IFS='|' read -r table key label cmd; do
+    [ -n "$cmd" ] || continue
+    case $table in
+      prefix)   eval "tmux_ bind $key $cmd" ;;
+      gensokyo) eval "tmux_ bind -T gensokyo $key $cmd" ;;
+    esac
+  done <<EOF
+$(key_table)
+EOF
+}
+
+legend_text() {
+  printf '%s then  1-9 focus · z zoom · n/p next/prev · g menu · ? keys' "$(prefix_label)"
+}
+
+apply_style() {
+  local s
+  s=$(sq "$SELF")
+  tmux_ set -g status-style "bg=$CFG_COLOR_BAR,fg=$CFG_COLOR_BAR_FG" \
+    \; set -g "status-format[0]" "#($s _bar 1 '#{pane_id}')" \
+    \; set -g "status-format[1]" "#[bg=$CFG_COLOR_ROW2,fg=$CFG_COLOR_ROW2_FG]#($s _bar 2)" \
+    \; set -g pane-border-style "fg=$CFG_COLOR_BORDER" \
+    \; set -g pane-active-border-style "fg=$CFG_COLOR_BAR,bold" \
+    \; set -g pane-border-format "#($s _border '#{pane_id}' '#{pane_title}')" \
+    \; set -g message-style "bg=$CFG_COLOR_AWAIT,fg=black" \
+    \; set -g mode-style "bg=$CFG_COLOR_AWAIT,fg=black" \
+    \; set -g mouse "$CFG_MOUSE"
+}
+
+start_server() {
+  server_running && return 0
+  ensure_dirs
+  scrub_env
+  tmux_ -f "$SHARE/tmux.conf" new-session -d -s "$SESSION" -n stage1 -x 200 -y 50 \
+    "$(sq "$SELF") _shrine" || die "could not start the tmux server"
+  # Pin the resolved binaries and dirs in the server environment so run-shell commands,
+  # hooks and residents resolve exactly what this launch resolved.
+  tmux_ set-environment -g GENSOKYO_TMUX "$TMUX_BIN" \
+    \; set-environment -g GENSOKYO_JQ "$JQ_BIN" \
+    \; set-environment -g GENSOKYO_CLAUDE "$CLAUDE_BIN" \
+    \; set-environment -g GENSOKYO_STATE_DIR "$STATE_DIR" \
+    \; set-environment -g GENSOKYO_CONFIG_DIR "$CONFIG_DIR" \
+    \; set-environment -g GENSOKYO_SOCKET "$SOCKET"
+  apply_keys
+  apply_style
+  [ -f "$CONFIG_DIR/tmux.conf" ] && tmux_ source-file "$CONFIG_DIR/tmux.conf"
+  return 0
+}
+
+# ---------------------------------------------------------------- commands: cockpit
+cmd_home() {
+  local nested='' detach='' cc=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --nested) nested=1 ;;
+      --detach) detach=1 ;;
+      --cc) cc=1 ;;
+      *) die "unknown option: $1 (see: gensokyo help)" ;;
+    esac
+    shift
+  done
+  need_bins
+  if [ -n "${TMUX:-}" ]; then
+    if inside_own_server; then
+      die "you are already inside gensokyo ($(prefix_label) ? lists the keys)"
+    elif [ -z "$nested" ]; then
+      die "running inside another tmux; use 'gensokyo --nested' if you really want nested tmux (prefix conflicts are yours)"
+    else
+      warn "nested tmux: the outer prefix may shadow $(prefix_label)"
+      unset TMUX TMUX_PANE
+    fi
+  fi
+  start_server
+  if [ -n "$detach" ]; then
+    say "gensokyo is running detached (socket $SOCKET); 'gensokyo' attaches."
+    return 0
+  fi
+  if [ -n "$cc" ]; then exec "$TMUX_BIN" -L "$SOCKET" -CC attach-session -t "=$SESSION"; fi
+  exec "$TMUX_BIN" -L "$SOCKET" attach-session -t "=$SESSION"
+}
+
+# The shrine pane fills an empty stage: banner + legend. It is replaced by the first
+# resident summoned into that stage and comes back when the last one leaves.
+cmd__shrine() {
+  [ -n "${TMUX_PANE:-}" ] && tmux_ set -p -t "$TMUX_PANE" @shrine 1 2>/dev/null
+  printf '\033]2;gensokyo\007\033[2J\033[H'   # reset the pane title left by a departed resident, clear
+  [ -f "$SHARE/banner.txt" ] && cat "$SHARE/banner.txt"
+  printf '\n  Nobody is here yet.\n\n  %s then  g n   summon a resident\n  %s then  ?     every key\n  %s then  d     detach (gensokyo keeps running)\n\n  From a shell:  gensokyo new [dir] [-n name]\n' \
+    "$(prefix_label)" "$(prefix_label)" "$(prefix_label)"
+  while :; do read -r -s -n 1 _ 2>/dev/null || sleep 3600; done
+}
+
+cmd__keys() {
+  local table key label cmd
+  printf '  %s is the prefix. Press it, release, then:\n\n' "$(prefix_label)"
+  while IFS='|' read -r table key label cmd; do
+    [ "$table" = prefix ] && printf '    %-4s %s\n' "$key" "$label"
+  done <<EOF
+$(key_table)
+EOF
+  printf '\n  %s then g, then:\n\n' "$(prefix_label)"
+  while IFS='|' read -r table key label cmd; do
+    [ "$table" = gensokyo ] && printf '    %-4s %s\n' "$key" "$label"
+  done <<EOF
+$(key_table)
+EOF
+  printf '\n  Everything else goes to the resident.\n  Shift+Enter or Option+Enter: newline.\n\n  any key to close '
+  read -r -s -n 1 _ 2>/dev/null
+}
+
+cmd__menu-shrine() {
+  local client=$1 table key label cmd args
+  args=()
+  while IFS='|' read -r table key label cmd; do
+    [ "$table" = gensokyo ] || continue
+    [ "$key" = g ] && continue
+    args=(${args[@]+"${args[@]}"} "$label" "$key" "$cmd")
+  done <<EOF
+$(key_table)
+EOF
+  tmux_ display-menu -c "$client" -T " gensokyo " -x C -y C ${args[@]+"${args[@]}"}
+}
+
+# ---------------------------------------------------------------- status bar (Phase 1: skeleton)
+cmd__bar() {
+  case $1 in
+    1)
+      if [ -z "$(ls "$RES_DIR" 2>/dev/null)" ]; then
+        printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
+      else
+        printf ' ⛩ gensokyo  %s resident(s) ' "$(count_records)"
+      fi ;;
+    2)
+      printf ' ⛩ %s   %s ' "$(date +%H:%M)" "$(legend_text)" ;;
+  esac
+}
+
+cmd__border() {
+  # Claude Code sets the pane title to "✳ <name>" (from --name, follows /rename); tmux's
+  # default title is the hostname, so only titles with the glyph are shown.
+  local pane=$1 title=$2
+  case $title in
+    "✳ "*) printf ' %s ' "${title#✳ }" ;;
+    *) if [ "$(tmux_ show -p -v -t "$pane" @shrine 2>/dev/null)" = 1 ]; then printf ' ⛩ '; fi ;;
+  esac
+}
+
+# ---------------------------------------------------------------- resident pane
+# `gensokyo _run <session-id>` is what runs inside a resident's pane.
+cmd__run() {
+  local id=$1 rec=$RES_DIR/$1 cwd name args prompt rc resume
+  [ -f "$rec" ] || die "no resident record for $id"
+  cwd=$(rec_get "$rec" cwd); name=$(rec_get "$rec" name)
+  args=$(rec_get "$rec" args); prompt=$(rec_get "$rec" prompt); resume=$(rec_get "$rec" resume)
+  rec_set "$rec" pane "${TMUX_PANE:-}"
+  rec_del "$rec" departed
+  cd "$cwd" || die "cannot cd to $cwd"
+  scrub_env
+  eval "set -- $args"
+  if [ -n "$resume" ]; then
+    # Recall: same session id and transcript; Claude Code keeps the name it had.
+    claude_ --resume "$id" "$@"
+  elif [ -n "$prompt" ]; then
+    # `--` is mandatory before the prompt: --allowedTools is variadic and would swallow it.
+    claude_ --session-id "$id" --name "$name" "$@" -- "$prompt"
+  else
+    claude_ --session-id "$id" --name "$name" "$@"
+  fi
+  rc=$?
+  rec_set "$rec" departed "$(date +%s)"
+  rec_set "$rec" exit "$rc"
+  departed_screen "$id" "$name" "$rc"
+}
+
+departed_screen() {
+  local id=$1 name=$2 rc=$3 key
+  printf '\n\n  ⛩  %s has left the shrine. (exit %s)\n\n  [r] recall   [x] close this pane\n\n' "$name" "$rc"
+  while :; do
+    read -r -s -n 1 key 2>/dev/null || { sleep 3600; continue; }
+    case $key in
+      r|R) rec_set "$RES_DIR/$id" resume 1; exec "$SELF" _run "$id" ;;
+      x|X|q|Q) close_pane "$id" ;;
+    esac
+  done
+}
+
+# Remove the record and let the pane go; if it is the last pane of the last stage,
+# become the shrine instead so the tmux server survives.
+close_pane() {
+  local id=$1 panes
+  rm -f "$RES_DIR/$id"
+  panes=$(tmux_ list-panes -s -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${panes:-0}" -le 1 ]; then exec "$SELF" _shrine; fi
+  exit 0
+}
+
+# ---------------------------------------------------------------- doctor / help / version
+cmd_doctor() {
+  local v w
+  say "gensokyo $VERSION"
+  say "  home       $GENSOKYO_HOME"
+  say "  platform   $PLATFORM"
+  say "  bash       $BASH_VERSION ($BASH)"
+  if [ -n "$TMUX_BIN" ]; then
+    v=$("$TMUX_BIN" -V 2>/dev/null | sed 's/^tmux //')
+    w=; ver_ge "$v" 3.3 || w="  (too old: need >= 3.3, run scripts/vendor.sh)"
+    say "  tmux       $v  $TMUX_BIN ($TMUX_FROM)$w"
+  else
+    say "  tmux       MISSING: run scripts/vendor.sh"
+  fi
+  if [ -n "$JQ_BIN" ]; then
+    v=$("$JQ_BIN" --version 2>/dev/null | sed 's/^jq-//')
+    w=; ver_ge "$v" 1.6 || w="  (too old: need >= 1.6, run scripts/vendor.sh)"
+    say "  jq         $v  $JQ_BIN ($JQ_FROM)$w"
+  else
+    say "  jq         MISSING: run scripts/vendor.sh"
+  fi
+  if [ -n "$CLAUDE_BIN" ]; then
+    v=$("$CLAUDE_BIN" --version 2>/dev/null | sed 's/ (Claude Code)//')
+    w=; ver_ge "$v" 2.1.224 || w="  (need >= 2.1.224 for cross-session messaging)"
+    say "  claude     ${v:-?}  $CLAUDE_BIN ($CLAUDE_FROM)$w"
+  else
+    say "  claude     MISSING: install Claude Code (https://code.claude.com)"
+  fi
+  say "  config     $CONFIG_DIR$([ -f "$CONFIG_DIR/config" ] || printf ' (defaults)')"
+  say "  state      $STATE_DIR"
+  say "  prefix     $CFG_PREFIX ($(prefix_label))"
+  if [ -n "$TMUX_BIN" ] && server_running; then
+    say "  server     running (tmux -L $SOCKET), $(count_records) resident record(s)"
+    v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
+    if [ -n "$v" ]; then
+      say "  env        WARNING: server environment carries $v(residents would hide from the registry)"
+    else
+      say "  env        clean (no CLAUDE* variables in the server environment)"
+    fi
+  else
+    say "  server     not running ('gensokyo' starts it)"
+  fi
+  v=$(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
+  [ -n "$v" ] && say "  shell env  $v- scrubbed before launching anything"
+  return 0
+}
+
+# Command table: name|alias|arguments|summary. Only shipped commands are listed;
+# `help --json` is what the handbook skill reads, so it must not promise more than exists.
+command_table() {
+  cat <<'EOF'
+|||start or attach the cockpit  (--detach: server only, --nested: inside another tmux)
+help||[--json]|this list; --json for tools
+doctor|||which tmux, jq and claude are in use, versions, server state
+version|||print the version
+EOF
+}
+
+cmd_help() {
+  local name alias args summary
+  if [ "${1:-}" = --json ]; then
+    # shellcheck disable=SC2016
+    command_table | jq_ -R -s '
+      split("\n") | map(select(length > 0) | split("|"))
+      | map({name: (if .[0] == "" then "gensokyo" else .[0] end), alias: .[1], args: .[2], summary: .[3]})' \
+      | jq_ --arg v "$VERSION" --arg prefix "$CFG_PREFIX" '{version: $v, prefix: $prefix, commands: .}'
+    return 0
+  fi
+  say "gensokyo $VERSION - several Claude Code sessions side by side in tmux"
+  say
+  say "usage: gensokyo [command] [args]"
+  say
+  while IFS='|' read -r name alias args summary; do
+    if [ -n "$alias" ]; then name="$name ($alias)"; fi
+    printf '  %-22s %-36s %s\n' "gensokyo $name" "$args" "$summary"
+  done <<EOF
+$(command_table)
+EOF
+  say
+  say "keys: $(legend_text)"
+}
+
+# ---------------------------------------------------------------- not yet
+cmd__not_yet() { warn "'$1' is not available yet"; exit 2; }
+
+# ---------------------------------------------------------------- main
+main() {
+  load_config
+  set_bins
+  local cmd=${1:-}
+  case $cmd in
+    -V|--version|version) say "gensokyo $VERSION" ;;
+    ''|--*) cmd_home "$@" ;;
+    -h|help) shift; cmd_help "$@" ;;
+    doctor) cmd_doctor ;;
+    # aliases: themed -> plain
+    summon) shift; cmd__not_yet new ;;
+    banish) shift; cmd__not_yet close ;;
+    recall) shift; cmd__not_yet resume ;;
+    spell) shift; cmd__not_yet broadcast ;;
+    ritual) shift; cmd__not_yet schedule ;;
+    who|list) shift; cmd__not_yet list ;;
+    new|close|resume|broadcast|send|stage|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    _shrine|_keys|_run|_bar|_border|_menu-shrine) shift; need_bins; "cmd_$cmd" "$@" ;;
+    _focus|_cycle|_layout|_menu-summon|_menu-banish|_menu-recall|_menu-spell|_menu-message|_menu-timetable)
+      tmux_ display-message "$cmd is not available yet"; exit 0 ;;
+    *) die "unknown command: $cmd (see: gensokyo help)" ;;
+  esac
+}
+
+main "$@"

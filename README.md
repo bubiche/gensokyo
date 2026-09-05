@@ -1,7 +1,7 @@
 # gensokyo
 
 A bash + tmux cockpit for running several Claude Code sessions side by side:
-named residents in a status bar, live panes, zoom to focus, desktop notifications
+named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
 **Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications and the per-resident telemetry (model, context, cost, usage) work; broadcasts and schedules are not there yet.
@@ -43,7 +43,7 @@ scripts/vendor.sh --status
 bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
 bin/gensokyo               # attach the cockpit (--tty for the plain tmux client, --detach for the server alone)
 bin/gensokyo help          # command list; --json is what the resident skill reads
-bin/gensokyo new ~/dev/x -n Marisa   # a resident in a pane; close <name>, list, focus <name>, stage <layout>
+bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; close <name>, list, focus <name>
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
 ```
@@ -140,7 +140,7 @@ that on its own socket and state dir, so it can run in CI.
 Every resident is launched with `--plugin-dir share/plugin` and a one-paragraph
 `--append-system-prompt`, both per session (`~/.claude` is never touched). The plugin's
 `gensokyo` skill is the resident's handbook: plain requests such as "start a new agent in
-~/dev/x called Cirno", "who is waiting on me?", "close Sakuya" or "zoom on Marisa" turn into
+~/dev/x called Cirno", "who is waiting on me?", "close Sakuya" or "show me Marisa" turn into
 `gensokyo new/list/close/focus` calls, with a confirmation before closing. Themed words
 (summon, who, banish, recall) work too. The skill reads `gensokyo help --json` for the
 authoritative command list. `tests/skills/gensokyo.md` is the phrasing checklist run by hand

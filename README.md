@@ -8,9 +8,18 @@ when one needs you, broadcast "spell cards", and scheduled "rituals".
 
 ## Requirements
 
-**To run a release:** Claude Code (≥ 2.1.224). Nothing else. tmux and jq are
-vendored from their official dependency-free builds (`vendor/README.md`).
-macOS and Linux, arm64 and x86_64.
+**To run a release:** macOS, iTerm2 3.5 or newer, and Claude Code (≥ 2.1.224).
+Nothing else. tmux and jq are vendored from their official dependency-free builds
+(`vendor/README.md`).
+
+Started from an iTerm2 tab, `gensokyo` runs its tmux session in control mode: the residents
+are native iTerm2 panes and tabs, the chips live in iTerm2's status bar, and no key belongs
+to gensokyo. Anywhere else — another terminal, or `gensokyo --tty` in iTerm2 — the plain tmux
+client draws the cockpit itself, with its own status bar and the `Ctrl-Space` keys. One tmux
+server serves both, but its status line can only be set up one way at a time, so detach one
+kind of client before attaching the other. `gensokyo doctor` says which one you are about to
+get, who is attached, and whether iTerm2 has the gensokyo profile that carries the status bar
+and the per-pane title bars.
 
 **To develop** (not needed for the release):
 
@@ -32,7 +41,7 @@ git clone … gensokyo && cd gensokyo
 scripts/vendor.sh          # fetch tmux + jq for this machine into vendor/<os>-<arch>/
 scripts/vendor.sh --status
 bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
-bin/gensokyo               # start the cockpit (Ctrl-Space then ? lists the keys)
+bin/gensokyo               # attach the cockpit (--tty for the plain tmux client, --detach for the server alone)
 bin/gensokyo help          # command list; --json is what the resident skill reads
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a pane; close <name>, list, focus <name>, stage <layout>
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back

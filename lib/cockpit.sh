@@ -4,13 +4,23 @@
 # shellcheck shell=bash
 
 # ---------------------------------------------------------------- commands: cockpit
+# Which client attaches. In iTerm2 tmux runs in control mode (`-CC`): iTerm2 draws the
+# session as native tabs and panes, with its own status bar and no keys of ours. Anywhere
+# else, and with --tty or --nested, the plain tmux client draws the cockpit itself.
+home_mode() {   # home_mode <--tty given> <--nested given>
+  if [ -n "$1" ] || [ -n "$2" ]; then printf 'tty\n'
+  elif [ "${TERM_PROGRAM:-}" = iTerm.app ]; then printf 'cc\n'
+  else printf 'tty\n'
+  fi
+}
+
 cmd_home() {
-  local nested='' detach='' cc=''
+  local nested='' detach='' tty='' mode other n
   while [ $# -gt 0 ]; do
     case $1 in
       --nested) nested=1 ;;
       --detach) detach=1 ;;
-      --cc) cc=1 ;;
+      --tty) tty=1 ;;
       *) die "unknown option: $1 (see: gensokyo help)" ;;
     esac
     shift
@@ -25,12 +35,20 @@ cmd_home() {
       unset TMUX TMUX_PANE
     fi
   fi
+  mode=$(home_mode "$tty" "$nested")
   start_server
   if [ -n "$detach" ]; then
     say "gensokyo is running detached (socket $SOCKET); 'gensokyo' attaches."
     return 0
   fi
-  if [ -n "$cc" ]; then exec "$TMUX_BIN" -L "$SOCKET" -CC attach-session -t "=$SESSION"; fi
+  [ "$mode" = tty ] && [ -z "$tty" ] && [ -z "$nested" ] &&
+    warn "not started from iTerm2 (TERM_PROGRAM=${TERM_PROGRAM:-unset}): using the plain tmux client, $(prefix_label) then ? lists its keys"
+  other=cc; [ "$mode" = cc ] && other=tty
+  n=$(clients_in_mode "$other")
+  [ "$n" -gt 0 ] && warn "$n other client(s) are attached the other way; one status bar serves both, so theirs goes blank until they detach"
+  apply_status "$mode"
+  apply_user_conf
+  if [ "$mode" = cc ]; then exec "$TMUX_BIN" -L "$SOCKET" -CC attach-session -t "=$SESSION"; fi
   exec "$TMUX_BIN" -L "$SOCKET" attach-session -t "=$SESSION"
 }
 

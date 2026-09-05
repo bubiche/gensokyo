@@ -106,9 +106,12 @@ Claude Code feeds it JSON after every API response (model, effort, context windo
 rate, cost, and on Pro/Max/Team accounts the 5-hour and weekly usage); gensokyo keeps the last
 report per resident under its state directory and shows it everywhere:
 
-- **Chips** (bar row 1): `1 ✦ Reimu Sonnet 42%`, model and context used.
-- **Bar row 2, right**: the account-wide usage from the newest report,
-  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts).
+- **Chips**: `1 ✦ Reimu Sonnet 42%`, model and context used. In iTerm2's status bar (left),
+  where a resident who needs you comes first; row 1 of the tmux bar under `--tty`, where it
+  turns gold instead. They follow a hook at once and are refreshed every three seconds.
+- **Usage**: the account-wide numbers from the newest report,
+  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts), at the
+  right of iTerm2's status bar, or of row 2 under `--tty`.
 - **Pane border**: `1 Reimu · gensokyo ⎇ main · Sonnet 5→⚖ Opus · high · plan · ⚡91% · $0.42`:
   directory and branch (read from `.git/HEAD`, no git needed), model and advisor model (from
   the resident's settings chain), effort, permission mode (from the hooks: known after the first

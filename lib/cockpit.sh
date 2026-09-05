@@ -37,6 +37,7 @@ cmd_home() {
   fi
   mode=$(home_mode "$tty" "$nested")
   start_server
+  ensure_clock
   if [ -n "$detach" ]; then
     say "gensokyo is running detached (socket $SOCKET); 'gensokyo' attaches."
     return 0
@@ -48,6 +49,7 @@ cmd_home() {
   [ "$n" -gt 0 ] && warn "$n other client(s) are attached the other way; one status bar serves both, so theirs goes blank until they detach"
   apply_status "$mode"
   apply_user_conf
+  push_bar   # so iTerm2 has the chips the moment it attaches, not three seconds later
   if [ "$mode" = cc ]; then exec "$TMUX_BIN" -L "$SOCKET" -CC attach-session -t "=$SESSION"; fi
   exec "$TMUX_BIN" -L "$SOCKET" attach-session -t "=$SESSION"
 }
@@ -99,40 +101,108 @@ EOF
 # resident awaits you, dim when departed, bold for the focused pane. Right: waiting count and
 # outsiders. Row 2: clock, the always-visible key legend and, at the right, the account-wide
 # 5-hour and weekly usage from the newest status line report.
-# `#()` output may carry #[...] styles; it must never fail or print more than one line.
-cmd__bar() {
-  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win mode detail model ctx rest attrs tele
+#
+# Two readers with different rules. The plain tmux client runs `_bar` from `status-format` as
+# a `#()` command and understands `#[...]` styles: that is the `styled` text, and `#()` output
+# must never fail or print more than one line. iTerm2 never draws tmux's status line; it shows
+# the *value* of `status-left` / `status-right`, where one `#[...]` blanks the whole bar. So
+# `plain` carries no styles at all: a resident who needs you is told apart by its ✦ / ✧ glyph
+# and by coming first, and row 2 is the usage alone (iTerm2 has its own clock, and no key of
+# ours to put in a legend).
+cmd__bar() {   # cmd__bar <row 1|2> [active pane] [styled|plain]
+  local right
   case $1 in
-    1)
-      prune_records
-      load_registry
-      rows=$(resident_rows)
-      if [ -z "$rows" ]; then
-        printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
-        return 0
-      fi
-      while IFS='|' read -r slot id name state cwd pane win mode detail model ctx rest; do
-        [ -n "$slot" ] || continue
-        attrs= tele=
-        case $state in
-          waiting|question) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
-          departed) attrs=dim; model= ;;
-        esac
-        [ "$pane" = "$active" ] && attrs="${attrs:+$attrs,}bold"
-        [ -n "$model" ] && tele=" $(model_short "$model")${ctx:+ $ctx%}"
-        out="$out#[${attrs:-default}] $slot $(glyph_for "$state") ${name:0:14}$tele #[default]│"
-      done <<EOF
-$rows
-EOF
-      [ "$waiting" -gt 0 ] && right="#[bg=$CFG_COLOR_AWAIT,fg=black] ✦ $waiting #[default] "
-      n=$(outsider_count)
-      [ "$n" -gt 0 ] && right="$right+$n outside "
-      printf '%s%s' "${out%│}" "${right:+#[align=right]$right}" ;;
+    1) bar_chips "${2:-}" "${3:-styled}" ;;
     2)
       right=$(usage_text)
-      printf ' ⛩ %s   %s %s' "$(date +%H:%M)" "$(legend_text)" "${right:+#[align=right]$right }" ;;
+      if [ "${3:-styled}" = plain ]; then
+        printf '%s' "$right"
+      else
+        printf ' ⛩ %s   %s %s' "$(date +%H:%M)" "$(legend_text)" "${right:+#[align=right]$right }"
+      fi ;;
   esac
   return 0
+}
+
+bar_chips() {   # bar_chips <active pane> <styled|plain>
+  local active=$1 style=$2 rows out='' first='' right='' waiting=0 n chip \
+    slot id name state cwd pane win mode detail model ctx rest attrs tele
+  prune_records
+  load_registry
+  rows=$(resident_rows)
+  if [ -z "$rows" ]; then
+    if [ "$style" = plain ]; then
+      printf ' ⛩ gensokyo  no residents yet '
+    else
+      printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
+    fi
+    return 0
+  fi
+  while IFS='|' read -r slot id name state cwd pane win mode detail model ctx rest; do
+    [ -n "$slot" ] || continue
+    attrs= tele=
+    case $state in
+      waiting|question) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
+      departed) attrs=dim; model= ;;
+    esac
+    [ "$pane" = "$active" ] && attrs="${attrs:+$attrs,}bold"
+    [ -n "$model" ] && tele=" $(model_short "$model")${ctx:+ $ctx%}"
+    # The separator is braced off every chip: bash 3.2 reads "$chip│" as the name "chip│".
+    chip=" $slot $(glyph_for "$state") ${name:0:14}$tele "
+    if [ "$style" = plain ]; then
+      case $state in
+        waiting|question) first="$first${chip}│" ;;
+        *) out="$out${chip}│" ;;
+      esac
+    else
+      out="$out#[${attrs:-default}]${chip}#[default]│"
+    fi
+  done <<EOF
+$rows
+EOF
+  out="$first$out"
+  n=$(outsider_count)
+  if [ "$style" = plain ]; then
+    [ "$waiting" -gt 0 ] && right="✦ $waiting "
+    [ "$n" -gt 0 ] && right="$right+$n outside "
+    printf '%s%s' "${out%│}" "${right:+  $right}"
+  else
+    [ "$waiting" -gt 0 ] && right="#[bg=$CFG_COLOR_AWAIT,fg=black] ✦ $waiting #[default] "
+    [ "$n" -gt 0 ] && right="$right+$n outside "
+    printf '%s%s' "${out%│}" "${right:+#[align=right]$right}"
+  fi
+  return 0
+}
+
+# push_bar: render the bar and write it into `status-left` / `status-right`, the two options
+# tmux exposes to iTerm2, which draws them in its own status bar and follows a change within
+# a second with no re-attach. Called every few seconds by the clock and immediately by the
+# hooks, so those two options belong to gensokyo while the cockpit runs: a
+# ~/.config/gensokyo/tmux.conf that sets them is overwritten at the next tick. The plain tmux
+# client reads neither (it draws `status-format` itself), so this costs it nothing and leaves
+# the bar correct for the next client, whichever kind it is.
+push_bar() {   # push_bar [stale registry ok]
+  local left right ttl=$REGISTRY_TTL
+  [ -n "${1:-}" ] && ttl=86400
+  local REGISTRY_TTL=$ttl   # dynamic scope: it reaches load_registry, and only for this call
+  left=$(cmd__bar 1 '' plain 2>/dev/null)
+  right=$(cmd__bar 2 '' plain 2>/dev/null)
+  # The chips are never legitimately empty (with no residents they say so), so an empty render
+  # is a failure: keep the last good bar rather than blanking it. The usage half is empty on
+  # accounts without rate limits.
+  [ -n "$left" ] || return 0
+  left=$(bar_escape "$left"); right=$(bar_escape "$right")
+  [ "$(tmux_ show -gv status-left 2>/dev/null)" = "$left" ] || tmux_ set -g status-left "$left"
+  [ "$(tmux_ show -gv status-right 2>/dev/null)" = "$right" ] || tmux_ set -g status-right "$right"
+  return 0
+}
+
+# tmux expands both options before iTerm2 sees their value: `%` goes through strftime and `#`
+# starts a format substitution, so `ctx 42% used` would arrive as `ctx 42 used`. Doubling both
+# characters is what survives.
+bar_escape() {
+  local s=${1//\#/\#\#}
+  printf '%s' "${s//%/%%}"
 }
 
 # Pane border: "slot name · dir ⎇ branch · model→⚖ advisor · effort · mode · ⚡cache · $cost"

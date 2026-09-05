@@ -1,6 +1,6 @@
 ---
 name: gensokyo
-description: Use when the user talks about other Claude Code sessions on this machine or wants to start a new agent/session in some directory, list who is running or waiting, close or stop a session, bring a departed session back, or zoom on/focus one. Also triggers on the cockpit's own words - resident, summon, who, banish, recall, stage, shrine. Runs the gensokyo CLI; never drives tmux directly.
+description: Use when the user talks about other Claude Code sessions on this machine or wants to start a new agent/session in some directory, list who is running or waiting, close or stop a session, bring a departed session back, or focus one. Also triggers on the cockpit's own words - resident, summon, who, banish, recall, shrine. Runs the gensokyo CLI; never drives tmux directly.
 ---
 
 # gensokyo handbook
@@ -25,8 +25,7 @@ and never promise a command that is not in it.
 | list | who | the residents: slot, state, name, directory |
 | close, stop | banish | ask a resident to `/exit`; its pane shows a "departed" screen |
 | resume | recall | bring a departed resident back into a pane |
-| focus, zoom | focus | show a resident's pane |
-| window of panes | stage | up to four residents per tmux window |
+| focus, switch to | focus | bring a resident's window to the front |
 | status bar | shrine bar | the two red/cream rows at the top |
 | exited | departed | the resident has left; it can be recalled |
 
@@ -40,8 +39,7 @@ and never promise a command that is not in it.
 | "close the fretwork session", "stop Youmu", "banish Youmu" | confirm first (another session's work is at stake), then `gensokyo close Youmu` (name or slot number) |
 | "recall Youmu", "bring Youmu back", "resume session 3" | `gensokyo resume Youmu` (name or slot of a departed resident, or a session id). It comes back into its pane, or into a new slot when its pane is gone. |
 | "resume the session I had on higan yesterday", "who can I bring back?" | `gensokyo resume --json` lists everyone who has departed (newest first: `session_id`, `name`, `cwd`, `departed_at`, `in_pane`). Match on directory and time; if more than one fits, ask which; then `gensokyo resume <session_id>`. |
-| "zoom on Marisa", "show me Sakuya's pane", "focus 3" | `gensokyo focus Marisa` |
-| "show all panes", "tile the windows" | `gensokyo stage tiled` |
+| "show me Marisa", "switch to Sakuya", "focus 3" | `gensokyo focus Marisa` |
 | "tell Marisa to run the tests", "ask Sakuya what she found" | not the CLI: use the SendMessage tool; residents are addressable by their session name |
 | "message from Marisa?" | `gensokyo list --json` gives names; messages arrive through your normal channel |
 

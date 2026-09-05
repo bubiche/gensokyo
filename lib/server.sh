@@ -1,5 +1,5 @@
-# lib/server.sh - gensokyo's own tmux server: start it, bind the keys, style the bar, place
-# stage windows and move focus between panes. Sourced by bin/gensokyo; bash 3.2.
+# lib/server.sh - gensokyo's own tmux server: start it, bind the keys, style the bar and
+# bring a resident's window to the front. Sourced by bin/gensokyo; bash 3.2.
 # shellcheck shell=bash
 
 # ---------------------------------------------------------------- tmux server
@@ -29,9 +29,6 @@ key_table() {
   s=$(sq "$SELF")
   cat <<EOF
 prefix|1-9|focus resident 1-9|
-prefix|z|zoom / unzoom the focused resident|resize-pane -Z
-prefix|n|next resident|run-shell "$s _cycle next '#{pane_id}'"
-prefix|p|previous resident|run-shell "$s _cycle prev '#{pane_id}'"
 prefix|g|gensokyo actions (then one key)|switch-client -T gensokyo
 prefix|?|list every key|display-popup -E -w 66 -h 30 "$s _keys"
 prefix|d|detach; the cockpit keeps running|detach-client
@@ -41,7 +38,6 @@ gensokyo|r|recall a departed resident|run-shell "$s _menu-recall '#{client_name}
 gensokyo|s|cast a spell card (broadcast a prompt)|run-shell "$s _menu-spell '#{client_name}'"
 gensokyo|m|message a resident|run-shell "$s _menu-message '#{client_name}'"
 gensokyo|w|who is around|display-popup -E -w 90% -h 70% "$s who --wait"
-gensokyo|l|cycle the pane layout|run-shell "$s _layout '#{client_name}'"
 gensokyo|t|timetable of rituals|run-shell "$s _menu-timetable '#{client_name}'"
 gensokyo|g|menu of every action|run-shell "$s _menu-shrine '#{client_name}'"
 gensokyo|?|list every key|display-popup -E -w 66 -h 30 "$s _keys"
@@ -69,7 +65,7 @@ EOF
 }
 
 legend_text() {
-  printf '%s then  1-9 focus · z zoom · n/p next/prev · g menu · ? keys' "$(prefix_label)"
+  printf '%s then  1-9 focus · g menu · ? keys' "$(prefix_label)"
 }
 
 apply_style() {
@@ -138,7 +134,10 @@ start_server() {
   ensure_dirs
   archive_records
   scrub_env
-  tmux_ -f "$SHARE/tmux.conf" new-session -d -s "$SESSION" -n stage1 -x 200 -y 50 \
+  # The shrine gets the first window, and keeps it for as long as the cockpit runs: every
+  # tmux window is an iTerm2 tab, so this is the tab the user lands on and the one that is
+  # still there when the last resident leaves.
+  tmux_ -f "$SHARE/tmux.conf" new-session -d -s "$SESSION" -n "$SHRINE_NAME" -x 200 -y 50 \
     "$(sq "$SELF") _shrine" || die "could not start the tmux server"
   # Pin the resolved binaries and dirs in the server environment so run-shell commands,
   # hooks and residents resolve exactly what this launch resolved.
@@ -204,17 +203,12 @@ cmd__tick() {
   done
 }
 
-stage_of_slot() { printf 'stage%s\n' "$(( ($1 - 1) / ${CFG_STAGE_SIZE:-4} + 1 ))"; }
-find_window() { tmux_ list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null | awk -v n="$1" '$2 == n {print $1; exit}'; }
-
-# focus_pane <pane> [client]: switch to the pane's window and pane; a zoom in the client's
-# current window carries over so `prefix N` while zoomed shows resident N zoomed.
-focus_pane() {
-  local pane=$1 client=${2:-} zoomed=0
-  [ -n "$client" ] && zoomed=$(tmux_ display -p -c "$client" '#{window_zoomed_flag}' 2>/dev/null)
-  tmux_ select-window -t "$pane" \; select-pane -Z -t "$pane" 2>/dev/null || return 0
-  if [ "$zoomed" = 1 ] && [ "$(tmux_ display -p -t "$pane" '#{window_zoomed_flag}')" != 1 ]; then
-    tmux_ resize-pane -Z -t "$pane"
-  fi
+# focus_window <window or pane>: bring that resident to the front. One window per resident
+# and one pane in it, so there is nothing to select inside it and nothing to zoom; iTerm2
+# raises the native tab, the plain client switches windows. A pane id is a valid target too,
+# which is what the callers use while a record has a pane but not yet its window.
+focus_window() {
+  [ -n "$1" ] || return 0
+  tmux_ select-window -t "$1" 2>/dev/null
   return 0
 }

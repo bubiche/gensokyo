@@ -74,7 +74,7 @@ find_resident() {
 }
 record_by_pane() { grep -l "^pane=$1\$" "$RES_DIR"/* 2>/dev/null | head -n 1; }
 
-# A fresh tmux server starts with an empty stage; records of the previous run point at panes
+# A fresh tmux server starts with the shrine alone; records of the previous run point at panes
 # that no longer exist, so they move to state/departed/ (the recall menu reads them later).
 archive_records() {
   local f

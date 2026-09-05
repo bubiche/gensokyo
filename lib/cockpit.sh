@@ -54,11 +54,11 @@ cmd_home() {
   exec "$TMUX_BIN" -L "$SOCKET" attach-session -t "=$SESSION"
 }
 
-# The shrine pane fills an empty stage: banner + legend. It is replaced by the first
-# resident summoned into that stage and comes back when the last one leaves.
+# The shrine has a window of its own - the first tab, and the one still there when the last
+# resident leaves: banner + legend. Residents never take it over.
 cmd__shrine() {
   [ -n "${TMUX_PANE:-}" ] && tmux_ set -p -t "$TMUX_PANE" @shrine 1 2>/dev/null
-  printf '\033]2;gensokyo\007\033[2J\033[H'   # reset the pane title left by a departed resident, clear
+  printf '\033]2;gensokyo\007\033[2J\033[H'   # own pane title, clear screen
   [ -f "$SHARE/banner.txt" ] && cat "$SHARE/banner.txt"
   printf '\n  Nobody is here yet.\n\n  %s then  g n   summon a resident\n  %s then  ?     every key\n  %s then  d     detach (gensokyo keeps running)\n\n  From a shell:  gensokyo new [dir] [-n name]\n' \
     "$(prefix_label)" "$(prefix_label)" "$(prefix_label)"
@@ -185,6 +185,10 @@ push_bar() {   # push_bar [stale registry ok]
   local left right ttl=$REGISTRY_TTL
   [ -n "${1:-}" ] && ttl=86400
   local REGISTRY_TTL=$ttl   # dynamic scope: it reaches load_registry, and only for this call
+  # The tabs first: they are the other always-visible surface, and they must not go stale
+  # because a bar render came back empty.
+  load_registry
+  push_titles "$(resident_rows)"
   left=$(cmd__bar 1 '' plain 2>/dev/null)
   right=$(cmd__bar 2 '' plain 2>/dev/null)
   # The chips are never legitimately empty (with no residents they say so), so an empty render
@@ -194,6 +198,33 @@ push_bar() {   # push_bar [stale registry ok]
   left=$(bar_escape "$left"); right=$(bar_escape "$right")
   [ "$(tmux_ show -gv status-left 2>/dev/null)" = "$left" ] || tmux_ set -g status-left "$left"
   [ "$(tmux_ show -gv status-right 2>/dev/null)" = "$right" ] || tmux_ set -g status-right "$right"
+  return 0
+}
+
+# resident_title <slot> <state> <name>: the short form a tab carries, e.g. "1 ✦ Reimu".
+# iTerm2 shrinks tab titles as tabs multiply, so it is the slot, the state glyph and the
+# name and nothing else; the full telemetry is in the status bar, the shrine tab and `list`.
+resident_title() { printf '%s %s %s' "$1" "$(glyph_for "$2")" "$3"; }
+
+# push_titles <resident_rows output>: keep every resident's tab title current. iTerm2 shows
+# the tmux window name as the tab title (share/tmux.conf) and follows a `rename-window`
+# live, including tabs the user is not looking at, which is what makes the tab bar a
+# sidebar: who is here, who needs you, who you are in. Renaming only on change keeps the tab
+# from flickering, like the bar.
+push_titles() {
+  local rows=$1 names slot id name state cwd pane win rest title
+  names=$'\n'$(tmux_ list-windows -t "=$SESSION" -F '#{window_id} #{window_name}' 2>/dev/null)$'\n'
+  [ "$names" != $'\n\n' ] || return 0
+  while IFS='|' read -r slot id name state cwd pane win rest; do
+    case $win in @[0-9]*) ;; *) continue ;; esac   # no window yet, or an outsider's row
+    title=$(resident_title "$slot" "$state" "$name")
+    case $names in *$'\n'"$win $title"$'\n'*) continue ;; esac
+    # `rename-window` expands formats and a resident can rename itself (/rename), so a `#`
+    # in the name is doubled to arrive as one. `%` means nothing here (no strftime).
+    tmux_ rename-window -t "$win" "${title//\#/\#\#}" 2>/dev/null
+  done <<EOF
+$rows
+EOF
   return 0
 }
 
@@ -237,31 +268,10 @@ cmd__focus() {
   f=$(grep -l "^slot=$n\$" "$RES_DIR"/* 2>/dev/null | head -n 1)
   [ -n "$f" ] || { tmux_ display-message -c "$client" "no resident $n"; return 0; }
   rec_load "$f"
-  focus_pane "$R_pane" "$client"
-}
-
-cmd__cycle() {
-  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p rest
-  while IFS='|' read -r slot id name state cwd p rest; do
-    [ -n "$slot" ] && [ "$p" != - ] || continue
-    [ -z "$first" ] && first=$p
-    [ -n "$found" ] && [ -z "$target" ] && [ "$dir" = next ] && target=$p
-    if [ "$p" = "$pane" ]; then found=1; [ "$dir" = prev ] && target=$prev; fi
-    prev=$p; last=$p
-  done <<EOF
-$(resident_rows)
-EOF
-  [ -n "$target" ] || { if [ "$dir" = prev ] && [ -n "$found" ]; then target=$last; else target=$first; fi; }
-  [ -n "$target" ] && focus_pane "$target"
-  return 0
-}
-
-cmd__layout() {
-  local client=$1 win cur next
-  win=$(tmux_ display -p -c "$client" '#{window_id}')
-  cur=$(tmux_ show -w -v -t "$win" @layout 2>/dev/null)
-  case $cur in tiled) next=main-vertical ;; main-vertical) next=even-horizontal ;; *) next=tiled ;; esac
-  tmux_ select-layout -t "$win" "$next" \; set -w -t "$win" @layout "$next" \; display-message -c "$client" "layout: $next"
+  # Between the summon and the resident's first breath the record has neither field yet;
+  # say so rather than doing nothing, since this is the key pressed right after a summon.
+  [ -n "${R_window:-$R_pane}" ] || { tmux_ display-message -c "$client" "$R_name is still starting"; return 0; }
+  focus_window "${R_window:-$R_pane}"
 }
 
 cmd__menu-summon() {

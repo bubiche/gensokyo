@@ -82,11 +82,12 @@ unit_tests() {
   assert_re "$(new_uuid)" '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
   assert_ok test "$(new_uuid)" != "$(new_uuid)"
 
-  t "stage_of_slot: four residents per stage"
-  assert_eq "$(stage_of_slot 1) $(stage_of_slot 4) $(stage_of_slot 5) $(stage_of_slot 9)" 'stage1 stage1 stage2 stage3'
-
   t "glyph_for"
   assert_eq "$(glyph_for busy)$(glyph_for waiting)$(glyph_for idle)$(glyph_for departed)$(glyph_for starting)" '●✦○·○'
+
+  t "resident_title: what a tab reads"
+  assert_eq "$(resident_title 1 waiting Reimu)" '1 ✦ Reimu'
+  assert_eq "$(resident_title 3 starting Sakuya)" '3 ○ Sakuya'
 
   t "records: set, get, del, load"
   fresh; rec r1 slot=1 name=Reimu cwd=/tmp/a
@@ -120,17 +121,13 @@ unit_tests() {
   rm -f "$CONFIG_DIR/names.txt"
   fresh; assert_re "$(pick_name)" '^[A-Z][A-Za-z]+$'
 
-  t "load_config: KEY=value lines, comments, bad keys ignored with a warning, STAGE_SIZE sanity"
-  printf '# gensokyo\nPREFIX=C-a\nSTAGE_SIZE=6\nbad key=1\n\n' > "$CONFIG_DIR/config"
-  out=$(load_config 2>&1; printf '%s|%s' "$CFG_PREFIX" "$CFG_STAGE_SIZE")
+  t "load_config: KEY=value lines, comments, bad keys ignored with a warning"
+  printf '# gensokyo\nPREFIX=C-a\nMOUSE=on\nbad key=1\n\n' > "$CONFIG_DIR/config"
+  out=$(load_config 2>&1; printf '%s|%s' "$CFG_PREFIX" "$CFG_MOUSE")
   assert_match "$out" 'ignoring line: bad key=1'
-  assert_match "$out" 'C-a|6'
-  printf 'STAGE_SIZE=0\n' > "$CONFIG_DIR/config"
-  out=$(load_config 2>&1; printf '%s' "$CFG_STAGE_SIZE")
-  assert_match "$out" 'STAGE_SIZE must be a positive number'
-  assert_re "$out" '4$'
+  assert_match "$out" 'C-a|on'
   rm -f "$CONFIG_DIR/config"
-  CFG_PREFIX=C-Space; CFG_STAGE_SIZE=4
+  CFG_PREFIX=C-Space; CFG_MOUSE=off
 
   t "scrub_env drops CLAUDE* session markers but keeps CLAUDE_CONFIG_DIR"
   out=$(CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=x CLAUDE_CONFIG_DIR=/tmp/cc bash -c '. "$1"; scrub_env; env | grep "^CLAUDE" | sort | tr "\n" " "' _ "$root/bin/gensokyo")
@@ -150,24 +147,24 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   REG=$'\n'$(registry_filter)
   assert_eq "$(registry_row f2fe56c9-466e-4333-bed0-4a89460dd0b8)" 'waiting|Sakuya|/Users/me/dev/beta|85270'
   assert_eq "$(registry_row nope)" ''
-  fresh; rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/Users/me/dev/alpha pane=%1 window=stage1
+  fresh; rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/Users/me/dev/alpha pane=%1 window=@1
   assert_eq "$(outsider_count)" 2
 
   t "resident_rows: registry state and name win over the record; departed wins over both"
-  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=OldName cwd=/Users/me/dev/beta pane=%2 window=stage1
-  rec 33333333-cccc-4000-8000-000000000003 slot=3 name=Youmu cwd=/tmp pane=%3 window=stage1 departed=1
-  rec 44444444-dddd-4000-8000-000000000004 slot=4 name=Cirno cwd=/tmp window=stage1
-  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|stage1|||||||||||||||
-2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|stage1|||||||||||||||
-3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|stage1|||||||||||||||
-4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|stage1|||||||||||||||'
+  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=OldName cwd=/Users/me/dev/beta pane=%2 window=@1
+  rec 33333333-cccc-4000-8000-000000000003 slot=3 name=Youmu cwd=/tmp pane=%3 window=@1 departed=1
+  rec 44444444-dddd-4000-8000-000000000004 slot=4 name=Cirno cwd=/tmp window=@1
+  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|@1|||||||||||||||
+2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|@1|||||||||||||||
+3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|@1|||||||||||||||
+4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|@1|||||||||||||||'
   assert_eq "$(rec_get "$RES_DIR/f2fe56c9-466e-4333-bed0-4a89460dd0b8" name)" Sakuya
 
   t "resident_rows: a pending question or finished turn from the hooks shows as needing you"
   fresh; rm -rf "$STATE_DIR/status"
-  rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/a pane=%1 window=stage1 mode=plan   # idle in the registry
-  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=Sakuya cwd=/b pane=%2 window=stage1            # waiting
-  rec 0b1c2d3e-0000-4000-8000-000000000003 slot=3 name=Youmu cwd=/c pane=%3 window=stage1             # null -> idle
+  rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/a pane=%1 window=@1 mode=plan   # idle in the registry
+  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=Sakuya cwd=/b pane=%2 window=@1            # waiting
+  rec 0b1c2d3e-0000-4000-8000-000000000003 slot=3 name=Youmu cwd=/c pane=%3 window=@1             # null -> idle
   status_write ed82e343-81ce-4b9e-8fdb-9b32d8136a5c stopped 'all tests pass'
   status_write f2fe56c9-466e-4333-bed0-4a89460dd0b8 question 'Delete the branch?'
   status_write 0b1c2d3e-0000-4000-8000-000000000003 '' '' acceptEdits
@@ -181,7 +178,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   fresh; rm -rf "$STATE_DIR/status"
   printf '[{"pid": 1, "cwd": "/a", "kind": "interactive", "startedAt": 1, "sessionId": "aaaaaaaa-0000-4000-8000-000000000001", "name": "Reimu", "status": "busy"}]\n' > "$REGISTRY"
   REG=$'\n'$(registry_filter)
-  rec aaaaaaaa-0000-4000-8000-000000000001 slot=1 name=Reimu cwd=/a pane=%1 window=stage1
+  rec aaaaaaaa-0000-4000-8000-000000000001 slot=1 name=Reimu cwd=/a pane=%1 window=@1
   status_write aaaaaaaa-0000-4000-8000-000000000001 stopped 'done'      # since = now > registry mtime? no: same second
   printf 'pending=stopped\ndetail=done\nsince=%s\nmode=\n' "$(( $(date +%s) - 30 ))" > "$STATE_DIR/status/aaaaaaaa-0000-4000-8000-000000000001"
   assert_eq "$(resident_rows | cut -d'|' -f4)" busy
@@ -198,7 +195,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="list") | .alias')" who
   assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("focus") != null')" true
   assert_eq "$(printf '%s' "$out" | jq_ -r '.prefix')" C-Space
-  for f in new close list focus stage help doctor; do
+  for f in new close list focus resume help doctor; do
     assert_match "$("$root/bin/gensokyo" help)" "gensokyo $f"
   done
 
@@ -305,7 +302,7 @@ AskUserQuestion'
 
   t "_hook: Stop marks the turn as awaiting you and notifies once; UserPromptSubmit clears and records the mode"
   fresh; rm -rf "$STATE_DIR/status"; : > "$scratch/notify.log"
-  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=stage1
+  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=@1
   hook "$id" Stop ',"permission_mode":"default","last_assistant_message":"pong\nsecond line"'
   assert_eq "$(cut -d= -f1,2 "$st" | grep -v since | tr '\n' ' ')" 'pending=stopped detail=pong mode=default '
   assert_eq "$(notifications)" 'Reimu|Reimu is done: pong'
@@ -383,7 +380,7 @@ telemetry_tests() {
 
   t "_statusline: keeps the JSON and a digest, then prints gensokyo's own status line"
   fresh; rm -rf "$TELE_DIR"
-  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=stage1
+  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=@1
   out=$("$root/bin/gensokyo" _statusline "$id" < "$here/fixtures/statusline.json")
   assert_eq "$out" 'Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m'
   assert_eq "$(jq_ -r .model.display_name "$TELE_DIR/$id.json")" 'Sonnet 5'
@@ -427,9 +424,9 @@ recall_tests() {
 
   t "recall_rows: departed residents in panes and archived records, newest first, transcript found by id"
   fresh; rm -rf "$DEPARTED_DIR"; mkdir -p "$DEPARTED_DIR" "$scratch/cc/projects/-tmp-a" "$scratch/cc/projects/-tmp-b"
-  rec $id1 slot=1 name=Reimu cwd=/tmp/a pane=%1 window=stage1                      # here: not listed
-  rec $id2 slot=2 name=Youmu cwd=/tmp/a pane=%2 window=stage1 departed=1700000300   # departed screen in its pane
-  printf 'slot=3\nname=Sakuya\ncwd=/tmp/b\nwindow=stage1\nlaunched=1700000000\ndeparted=1700000200\nexit=0\n' > "$DEPARTED_DIR/$id3"
+  rec $id1 slot=1 name=Reimu cwd=/tmp/a pane=%1 window=@1                      # here: not listed
+  rec $id2 slot=2 name=Youmu cwd=/tmp/a pane=%2 window=@1 departed=1700000300   # departed screen in its pane
+  printf 'slot=3\nname=Sakuya\ncwd=/tmp/b\nwindow=@1\nlaunched=1700000000\ndeparted=1700000200\nexit=0\n' > "$DEPARTED_DIR/$id3"
   : > "$scratch/cc/projects/-tmp-b/$id3.jsonl"; touch -t 202001010000 "$scratch/cc/projects/-tmp-b/$id3.jsonl"   # older than Youmu
   assert_eq "$(recall_rows | cut -d'|' -f2-5)" "$id2|Youmu|/tmp/a|2
 $id3|Sakuya|/tmp/b|"
@@ -515,10 +512,12 @@ smoke_tests() {
   mkdir -p "$scratch/work/alpha" "$scratch/work/beta"
   fresh; rm -f "$REGISTRY"
 
-  t "smoke: --detach starts the server with a shrine pane and an empty bar"
+  t "smoke: --detach starts the server with the shrine in its own window and an empty bar"
   out=$(cd "$scratch/work" && : > a && "$G" --detach 2>&1)   # a one-letter file: `?` must not glob
   assert_match "$out" 'running detached'
   assert_ok tm has-session -t =gensokyo
+  assert_eq "$(tm list-windows -t =gensokyo -F '#{window_name}')" '⛩ gensokyo'
+  assert_eq "$(tm show -gv set-titles-string)" '#W'   # else every tab reads the same
   assert_re "$(tm list-keys -T prefix)" '-T prefix +\? +display-popup .*_keys'
   assert_match "$("$G" _bar 1 %0)" 'no residents yet'
   assert_match "$("$G" list)" 'nobody is here yet'
@@ -533,7 +532,7 @@ smoke_tests() {
   assert_eq "$(tm show -gv status)" 2
   assert_match "$(tm show -g status-format)" '_bar 1'
 
-  t "smoke: summon two residents; records, panes, launch flags"
+  t "smoke: summon two residents; a window each, records, launch flags"
   out=$("$G" new "$scratch/work/alpha" -n Alpha 2>&1)
   assert_match "$out" 'summoned Alpha (slot 1)'
   out=$("$G" new "$scratch/work/beta" -n Beta -m haiku -p plan 2>&1)
@@ -544,7 +543,18 @@ smoke_tests() {
   id1=$(basename "$(find_resident Alpha)"); id2=$(basename "$(find_resident Beta)")
   pane1=$(rec_get "$RES_DIR/$id1" pane); pane2=$(rec_get "$RES_DIR/$id2" pane)
   assert_re "$pane1" '^%[0-9]+$'
-  assert_eq "$(tm list-panes -t =gensokyo:stage1 -F '#{pane_id}' | wc -l | tr -d ' ')" 2
+  assert_re "$(rec_get "$RES_DIR/$id1" window)" '^@[0-9]+$'
+  # One window per resident, one pane in each, plus the shrine's; the tab title is the
+  # resident's short form, which is what iTerm2 puts in the tab bar.
+  assert_eq "$(tm list-windows -t =gensokyo -F '#{window_id}' | wc -l | tr -d ' ')" 3
+  assert_eq "$(tm list-panes -s -t =gensokyo -F x | wc -l | tr -d ' ')" 3
+  assert_eq "$(tm display -p -t "$pane1" '#{window_panes}')" 1
+  # The titles, not their order: the user reorders tabs, and iTerm2 reorders tmux's window
+  # indexes to match, so the order in this list is theirs and not ours to assert.
+  out=$(tm list-windows -t =gensokyo -F '#{window_name}')
+  assert_match "$out" '⛩ gensokyo'
+  assert_match "$out" '1 ○ Alpha'
+  assert_match "$out" '2 ○ Beta'
   args=$(cat "$STUB_STATE/$id2.args")
   assert_match "$args" "--session-id $id2 --name Beta"
   assert_match "$args" "--plugin-dir $root/share/plugin"
@@ -562,7 +572,7 @@ smoke_tests() {
   assert_re "$out" '^  2   ○  Beta .*beta .*idle$'
   out=$("$G" list --json)
   assert_eq "$(printf '%s' "$out" | jq_ -r 'map(.name) | join(",")')" 'Alpha,Beta'
-  assert_eq "$(printf '%s' "$out" | jq_ -r '.[1] | "\(.slot) \(.status) \(.window) \(.outside)"')" '2 idle stage1 false'
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.[1] | "\(.slot) \(.status) \(.window) \(.outside)"')" "2 idle $(rec_get "$RES_DIR/$id2" window) false"
 
   t "smoke: bar chips, bold for the active pane, waiting highlight and count"
   rm -f "$REGISTRY"
@@ -584,7 +594,7 @@ smoke_tests() {
   payload "$id1" Stop ',"permission_mode":"acceptEdits","last_assistant_message":"done here"' | TMUX_PANE=$pane1 "$G" _hook
   rm -f "$REGISTRY"
   assert_match "$("$G" _bar 1 "$pane2")" "#[bg=$CFG_COLOR_AWAIT,fg=black] 1 ✦ Alpha "
-  assert_eq "$(tm display -p -t =gensokyo:stage1 '#{window_bell_flag}')" 1
+  assert_eq "$(tm display -p -t "$pane1" '#{window_bell_flag}')" 1
   assert_eq "$(notifications)" 'Alpha|Alpha is done: done here'
   assert_re "$("$G" list)" '^  1   ✦  Alpha .*waiting \(done here\)$'
   assert_eq "$("$G" list --json | jq_ -r '.[0] | "\(.status) \(.permission_mode) \(.detail)"')" 'waiting acceptEdits done here'
@@ -594,7 +604,7 @@ smoke_tests() {
   assert_match "$("$G" _bar 1 "$pane2")" '#[default] 1 ○ Alpha '
 
   t "smoke: no desktop alert for the pane on screen in a client that was just used"
-  tm select-window -t =gensokyo:stage1 \; select-pane -t "$pane1"
+  tm select-window -t "$pane1"
   attach_headless
   if [ "$(tm list-clients 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then skip "could not attach a headless client (script(1))"; else
     t "smoke: an attached client is counted by its kind (a plain one here, not control mode)"
@@ -656,15 +666,26 @@ null'
     done
     assert_match "$out" ' 1 ✦ Alpha'
     assert_match "$out" '  ✦ 1 '
+
+    t "smoke: and the tab title with it, so the tab bar says who needs you"
+    assert_eq "$(tm display -p -t "$pane1" '#{window_name}')" '1 ✦ Alpha'
     payload "$id1" UserPromptSubmit '' | "$G" _hook
+    for _ in 1 2 3 4; do
+      out=$(tm display -p -t "$pane1" '#{window_name}')
+      [ "$out" = '1 ○ Alpha' ] && break
+      pause 0.25
+    done
+    assert_eq "$out" '1 ○ Alpha'
     tm detach-client; pause 0.3
   fi
 
-  t "smoke: focus by name and slot"
+  t "smoke: focus by name and slot brings that resident's window to the front"
   assert_match "$("$G" focus beta)" 'focused Beta (slot 2)'
-  assert_eq "$(tm display -p -t =gensokyo:stage1 '#{pane_id}')" "$pane2"
+  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane2"
   assert_match "$("$G" focus 1)" 'focused Alpha'
-  assert_eq "$(tm display -p -t =gensokyo:stage1 '#{pane_id}')" "$pane1"
+  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane1"
+  "$G" _focus 2 "$(tm list-clients -F '#{client_name}' | head -n 1)" >/dev/null 2>&1   # the prefix-2 key
+  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane2"
   assert_fails "$G" focus 7
 
   t "smoke: /rename inside a resident reaches list and close"
@@ -702,27 +723,26 @@ null'
   "$G" close gamma >/dev/null 2>&1; pause 1.2
   assert_match "$(tm capture-pane -p -t "$pane2")" 'Gamma has left the shrine'
 
-  t "smoke: closing the departed pane frees the slot; the next summon reuses it"
+  t "smoke: closing the departed pane takes its window with it and frees the slot"
   "$G" close 2 >/dev/null 2>&1; pause 0.5
   assert_ok test ! -f "$RES_DIR/$id2"
-  assert_eq "$(tm list-panes -t =gensokyo:stage1 -F '#{pane_id}' | wc -l | tr -d ' ')" 1
+  assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 2   # Alpha and the shrine
   assert_match "$("$G" new "$scratch/work/beta")" '(slot 2)'
   pause 0.5
 
-  t "smoke: five residents overflow into stage2; stage applies a layout"
+  t "smoke: every resident gets a window of its own, one pane in each, the shrine's aside"
   "$G" new "$scratch/work/alpha" >/dev/null; "$G" new "$scratch/work/alpha" >/dev/null; "$G" new "$scratch/work/alpha" >/dev/null
   pause 0.5
-  assert_eq "$(tm list-panes -t =gensokyo:stage1 -F x | wc -l | tr -d ' ')" 4
-  assert_eq "$(tm list-panes -t =gensokyo:stage2 -F x | wc -l | tr -d ' ')" 1
-  assert_ok "$G" stage main-vertical
-  assert_eq "$(tm show -w -v -t =gensokyo:stage1 @layout)" main-vertical
+  assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 6
+  assert_eq "$(tm list-windows -t =gensokyo -F '#{window_panes}' | sort -u | tr '\n' ' ')" '1 '
+  assert_eq "$(tm list-windows -t =gensokyo -F '#{window_name}' | grep -c '^[1-9] ')" 5
 
   t "smoke: a pane killed behind gensokyo's back is pruned from the bar"
   tm kill-pane -t "$pane1"; pause 0.3
   "$G" _bar 1 %99 >/dev/null
   assert_ok test ! -f "$RES_DIR/$id1"
 
-  t "smoke: the last resident leaving brings the shrine back and stale records are archived on restart"
+  t "smoke: stale records are archived when the server is restarted"
   tm kill-server; pause 0.3
   assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" 4
   "$G" --detach >/dev/null
@@ -742,11 +762,12 @@ null'
   pause 1.5
   assert_ok test -f "$RES_DIR/$id3"
   assert_ok test ! -f "$STATE_DIR/departed/$id3"
-  assert_eq "$(rec_get "$RES_DIR/$id3" slot)|$(rec_get "$RES_DIR/$id3" window)|$(rec_get "$RES_DIR/$id3" resume)|$(rec_get "$RES_DIR/$id3" launched)" "1|stage1|1|$(rec_get "$RES_DIR/$id3" launched)"
+  assert_eq "$(rec_get "$RES_DIR/$id3" slot)|$(rec_get "$RES_DIR/$id3" window)|$(rec_get "$RES_DIR/$id3" resume)|$(rec_get "$RES_DIR/$id3" launched)" "1|$(rec_get "$RES_DIR/$id3" window)|1|$(rec_get "$RES_DIR/$id3" launched)"
   pane=$(rec_get "$RES_DIR/$id3" pane)
   assert_match "$(tm capture-pane -p -t "$pane")" "($id3) resumed"
   assert_match "$(cat "$STUB_STATE/$id3.args")" "--resume $id3"
-  assert_eq "$(tm list-panes -t =gensokyo:stage1 -F x | wc -l | tr -d ' ')" 1   # took the shrine's place
+  assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 2   # its own window, next to the shrine's
+  assert_eq "$(tm display -p -t "$pane" '#{window_name}')" "1 ○ $name3"
   assert_eq "$(ls "$STATE_DIR/departed" | wc -l | tr -d ' ')" 3
   assert_match "$("$G" resume "$name3" 2>&1)" "$name3 is still here (slot 1)"
   rm -f "$REGISTRY"
@@ -762,6 +783,13 @@ null'
   assert_ok test -f "$STATE_DIR/departed/$id4"
   out=$("$G" resume 2>&1)
   assert_match "$out" 'no transcript'
+
+  t "smoke: the last resident leaving leaves the shrine window, and the server, alone"
+  "$G" close 1 >/dev/null 2>&1; pause 1.2
+  "$G" close 1 >/dev/null 2>&1; pause 0.5
+  assert_ok tm has-session -t =gensokyo
+  assert_eq "$(tm list-windows -t =gensokyo -F '#{window_name}')" '⛩ gensokyo'
+  assert_match "$(tm capture-pane -p -t '=gensokyo:')" 'Nobody is here yet'
   tm kill-server
 }
 

@@ -1,10 +1,10 @@
-# lib/residents.sh - the resident commands (new, close, list, focus, stage) and the wrapper
+# lib/residents.sh - the resident commands (new, close, list, focus) and the wrapper
 # that runs inside a resident's pane. Sourced by bin/gensokyo; bash 3.2.
 # shellcheck shell=bash
 
 cmd_new() {
   local dir='' name='' model='' effort='' mode='' focus='' prompt='' flags=() argstr='' f
-  local id slot stage pane rec
+  local id slot rec
   while [ $# -gt 0 ]; do
     case $1 in
       -n|--name) name=${2:-}; shift ;;
@@ -36,42 +36,45 @@ cmd_new() {
   for f in ${flags[@]+"${flags[@]}"}; do argstr="$argstr $(sq "$f")"; done
 
   start_server
-  id=$(new_uuid); slot=$(next_slot); stage=$(stage_of_slot "$slot"); rec=$RES_DIR/$id
+  id=$(new_uuid); slot=$(next_slot); rec=$RES_DIR/$id
+  # No `pane=` or `window=` here: `_run` writes both from inside the pane it lands in, so
+  # there is one writer for them and no interleaved rec_set to lose a field.
   {
-    printf 'slot=%s\nname=%s\ncwd=%s\nwindow=%s\nlaunched=%s\nargs=%s\n' "$slot" "$name" "$dir" "$stage" "$(date +%s)" "${argstr# }"
+    printf 'slot=%s\nname=%s\ncwd=%s\nlaunched=%s\nargs=%s\n' "$slot" "$name" "$dir" "$(date +%s)" "${argstr# }"
     [ -n "$prompt" ] && printf 'prompt=%s\n' "$prompt"
     [ -n "$mode" ] && printf 'mode=%s\n' "$mode"   # shown until the first prompt reports the live mode
   } > "$rec"
 
-  pane=$(open_pane "$id" "$stage") || { rm -f "$rec"; die "new: tmux could not open a pane"; }
-  rec_set "$rec" pane "$pane"
+  open_pane "$id" "$(resident_title "$slot" starting "$name")" "$focus" >/dev/null \
+    || { rm -f "$rec"; die "new: tmux could not open a window"; }
   remember_dir "$dir"
-  [ -n "$focus" ] && focus_pane "$pane"
   say "summoned $name (slot $slot) in $dir"
 }
 
-# open_pane <session-id> <stage>: a pane running `_run <session-id>` in that stage window;
-# prints the pane id. Stage windows hold CFG_STAGE_SIZE residents each. The first resident of a
-# stage replaces the shrine pane in place; later ones split the window and re-tile it.
+# open_pane <session-id> <title> [focus]: a window of its own, one pane, running
+# `_run <session-id>`; prints the window id. One resident per window is the whole layout -
+# gensokyo never splits, tiles or zooms, because every tmux window is an iTerm2 tab and the
+# tab bar is the sidebar. No `-t <index>`: iTerm2 rewrites window indexes to match the tab
+# bar as soon as the user drags a tab, so the index is the user's and the id is ours.
 open_pane() {
-  local id=$1 stage=$2 cmd win out n shrine pane
+  local id=$1 title=$2 focus=${3:-} cmd win here
   cmd="$(sq "$SELF") _run $id"
-  win=$(find_window "$stage")
-  if [ -z "$win" ]; then
-    out=$(tmux_ new-window -d -P -F '#{window_id} #{pane_id}' -n "$stage" "$cmd") || return 1
-    pane=${out#* }
-  else
-    n=$(tmux_ list-panes -t "$win" | wc -l | tr -d ' ')
-    shrine=$(tmux_ list-panes -t "$win" -F '#{pane_id} #{@shrine}' | awk '$2 == "1" {print $1; exit}')
-    if [ "$n" -eq 1 ] && [ -n "$shrine" ]; then
-      tmux_ set -p -t "$shrine" -u @shrine \; respawn-pane -k -t "$shrine" "$cmd" || return 1
-      pane=$shrine
-    else
-      pane=$(tmux_ split-window -d -P -F '#{pane_id}' -t "$win" "$cmd") || return 1
-      tmux_ select-layout -t "$win" tiled
-    fi
+  here=$(tmux_ display -p '#{window_id}' 2>/dev/null)
+  win=$(tmux_ new-window -d -P -F '#{window_id}' -n "$title" "$cmd") || return 1
+  if [ -n "$focus" ]; then
+    focus_window "$win"
+  elif [ -n "$here" ] && [ "$here" != "$win" ] && inside_own_server && [ "$(clients_in_mode cc)" -gt 0 ]; then
+    # iTerm2 opens the tab and moves to it even for a detached `new-window -d`. That is a
+    # rude interruption when the summon came from inside the cockpit - a resident asking for
+    # a helper should not rip the user out of the tab they were reading - so focus goes back
+    # to where it was. Selecting back at once loses the race with the tab opening; a moment's
+    # wait wins it, at the price of a visible flick. A summon typed in a shell outside the
+    # cockpit is the other way round: the user asked for that resident and wants to be in it,
+    # so the steal is left alone.
+    sleep 1.5
+    focus_window "$here"
   fi
-  printf '%s\n' "$pane"
+  printf '%s\n' "$win"
 }
 
 cmd_close() {
@@ -164,31 +167,16 @@ EOF
   return 0
 }
 
-# stage [layout]: re-arrange every stage window (tiled, main-vertical, even-horizontal, ...).
-# focus <name|slot>: show that resident's pane (the skill's "zoom on Marisa").
+# focus <name|slot>: bring that resident's window (its iTerm2 tab) to the front.
 cmd_focus() {
   local f
   [ -n "${1:-}" ] || die "usage: gensokyo focus <name|slot>"
   f=$(find_resident "$1") || die "focus: no resident '$1' (gensokyo list)"
   rec_load "$f"
-  [ -n "$R_pane" ] && [ "$R_pane" != - ] || die "focus: $R_name has no pane yet"
+  [ -n "${R_window:-$R_pane}" ] || die "focus: $R_name has no window yet"
   server_running || die "focus: the cockpit is not running"
-  focus_pane "$R_pane"
+  focus_window "${R_window:-$R_pane}"
   say "focused $R_name (slot $R_slot)"
-}
-
-cmd_stage() {
-  local layout=${1:-} w
-  if [ -z "$layout" ]; then
-    tmux_ list-windows -t "=$SESSION" -F '#{window_name}: #{window_panes} pane(s)#{?window_zoomed_flag, (zoomed),}' 2>/dev/null \
-      || die "stage: the cockpit is not running"
-    return 0
-  fi
-  for w in $(tmux_ list-windows -t "=$SESSION" -F '#{window_id}' 2>/dev/null); do
-    tmux_ select-layout -t "$w" "$layout" 2>/dev/null || die "stage: unknown layout '$layout' (tiled, main-vertical, main-horizontal, even-horizontal, even-vertical)"
-    tmux_ set -w -t "$w" @layout "$layout"
-  done
-  say "stage: $layout"
 }
 
 # ---------------------------------------------------------------- resident pane
@@ -198,7 +186,10 @@ cmd__run() {
   [ -f "$rec" ] || die "no resident record for $id"
   cwd=$(rec_get "$rec" cwd); name=$(rec_get "$rec" name)
   args=$(rec_get "$rec" args); prompt=$(rec_get "$rec" prompt); resume=$(rec_get "$rec" resume)
+  # The only writer of `pane` and `window`: this runs inside them, and it runs again when a
+  # departed resident is recalled in place, so both follow the resident wherever it lands.
   rec_set "$rec" pane "${TMUX_PANE:-}"
+  rec_set "$rec" window "$(tmux_ display -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)"
   rec_del "$rec" departed
   rm -f "$STATE_DIR/status/$id"   # a fresh launch waits for nothing yet
   cd "$cwd" || die "cannot cd to $cwd"
@@ -249,12 +240,10 @@ departed_screen() {
   done
 }
 
-# Remove the record and let the pane go; if it is the last pane of the last stage,
-# become the shrine instead so the tmux server survives.
+# Remove the record and let the pane go, which takes its window (its tab) with it. The
+# shrine has a window of its own and never goes, so the tmux server survives the last
+# resident leaving with nothing to hand over.
 close_pane() {
-  local id=$1 panes
-  drop_record "$RES_DIR/$id"
-  panes=$(tmux_ list-panes -s -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
-  if [ "${panes:-0}" -le 1 ]; then exec "$SELF" _shrine; fi
+  drop_record "$RES_DIR/$1"
   exit 0
 }

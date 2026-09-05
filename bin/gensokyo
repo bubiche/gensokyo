@@ -36,6 +36,7 @@ STATE_DIR=${GENSOKYO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/gensokyo}
 RES_DIR=$STATE_DIR/residents
 SOCKET=${GENSOKYO_SOCKET:-gensokyo}   # tmux -L <socket>; tests use their own
 SESSION=gensokyo                       # the one tmux session on that socket
+SHRINE_NAME='⛩ gensokyo'              # the shrine window, so the first tab reads like one
 
 # ---------------------------------------------------------------- output helpers
 say()  { printf '%s\n' "$*"; }
@@ -59,7 +60,6 @@ scrub_env() {
 
 # ---------------------------------------------------------------- config
 CFG_PREFIX=C-Space          # tmux prefix; Claude Code does not use Ctrl+Space
-CFG_STAGE_SIZE=4            # residents per stage window
 CFG_PERMISSION_MODE=        # default --permission-mode for new residents; empty = Claude Code's default
 CFG_COLOR_BAR=#c0392b       # row 1 background (Hakurei red)
 CFG_COLOR_BAR_FG=#ffffff
@@ -85,7 +85,6 @@ load_config() {
       eval "CFG_$key=\${line#*=}"
     done < "$CONFIG_DIR/config"
   fi
-  case $CFG_STAGE_SIZE in ''|*[!0-9]*|0) warn "config: STAGE_SIZE must be a positive number; using 4"; CFG_STAGE_SIZE=4 ;; esac
 }
 
 # ---------------------------------------------------------------- binaries
@@ -254,12 +253,11 @@ cmd_doctor() {
 command_table() {
   cat <<'EOF'
 |||start or attach the cockpit  (--tty: plain tmux client, --detach: server only, --nested: inside another tmux)
-new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a pane
+new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a window of its own
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
-focus||<name or slot>|show that resident's pane
-stage||[tiled/main-vertical/even-horizontal]|arrange the panes of every stage window
+focus||<name or slot>|bring that resident's window to the front
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 version|||print the version
@@ -312,12 +310,11 @@ main() {
     close|banish) shift; cmd_close "$@" ;;
     list|who) shift; cmd_list "$@" ;;
     focus) shift; cmd_focus "$@" ;;
-    stage) shift; cmd_stage "$@" ;;
     resume|recall) shift; cmd_resume "$@" ;;
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
       shift; "cmd_$cmd" "$@" ;;
     _menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

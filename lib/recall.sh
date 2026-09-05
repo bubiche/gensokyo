@@ -47,7 +47,7 @@ EOF
 # the name and transcript; the launch flags chosen at summon time apply again, the first
 # prompt is not replayed.
 cmd_resume() {
-  local who='' focus='' json='' f id rec slot stage pane
+  local who='' focus='' json='' f id rec slot
   while [ $# -gt 0 ]; do
     case $1 in
       --focus) focus=1 ;;
@@ -63,7 +63,7 @@ cmd_resume() {
     rec_load "$f"
     [ -n "$R_departed" ] || die "resume: $R_name is still here (slot $R_slot)"
     tmux_ send-keys -t "$R_pane" r
-    [ -n "$focus" ] && focus_pane "$R_pane"
+    [ -n "$focus" ] && focus_window "${R_window:-$R_pane}"
     say "recalled $R_name into its pane (slot $R_slot)"
     return 0
   fi
@@ -73,14 +73,14 @@ cmd_resume() {
   find_resident "$R_name" >/dev/null && die "resume: another $R_name is here already (gensokyo list); close it first"
   [ -n "$(transcript_of "$id")" ] || warn "no transcript for $R_name under $CLAUDE_DIR/projects; Claude Code may not find the session"
   start_server
-  slot=$(next_slot); stage=$(stage_of_slot "$slot"); rec=$RES_DIR/$id
+  slot=$(next_slot); rec=$RES_DIR/$id
   mv "$f" "$rec"
-  rec_set "$rec" slot "$slot"; rec_set "$rec" window "$stage"; rec_set "$rec" resume 1
-  rec_del "$rec" pane; rec_del "$rec" departed; rec_del "$rec" exit
-  pane=$(open_pane "$id" "$stage") || { mv "$rec" "$f"; die "resume: tmux could not open a pane"; }
-  rec_set "$rec" pane "$pane"
+  rec_set "$rec" slot "$slot"; rec_set "$rec" resume 1
+  rec_del "$rec" pane; rec_del "$rec" window; rec_del "$rec" departed; rec_del "$rec" exit
+  # `pane` and `window` come back from `_run` in the window it lands in (lib/residents.sh).
+  open_pane "$id" "$(resident_title "$slot" starting "$R_name")" "$focus" >/dev/null \
+    || { mv "$rec" "$f"; die "resume: tmux could not open a window"; }
   remember_dir "$R_cwd"
-  [ -n "$focus" ] && focus_pane "$pane"
   say "recalled $R_name (slot $slot) in $R_cwd"
 }
 

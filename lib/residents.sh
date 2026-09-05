@@ -89,7 +89,8 @@ cmd_close() {
 }
 
 cmd_list() {
-  local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail
+  local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail now tele
+  local model ctx effort cache tcache cost branch advisor five freset week wreset at
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;; --all) all=1 ;; --wait) wait=1 ;;
@@ -104,36 +105,51 @@ cmd_list() {
     while IFS='|' read -r id status name cwd _; do
       [ -n "$id" ] || continue
       [ -f "$RES_DIR/$id" ] && continue
-      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside||"
+      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside|||||||||||||||"
     done <<EOF
 $REG
 EOF
   fi
   rows=$(printf '%s\n' "$rows" | sed '/^$/d')
   if [ -n "$json" ]; then
+    # Columns as in resident_rows (lib/registry.sh); telemetry is null until the resident's
+    # status line has reported once.
     # shellcheck disable=SC2016
     printf '%s\n' "$rows" | jq_ -R -s '
       def opt: if . == "" or . == "-" then null else . end;
+      def num: if . == "" then null else tonumber end;
+      def window($p; $r): if $p == "" then null else {used_pct: ($p | tonumber), resets_at: ($r | num)} end;
       split("\n") | map(select(length > 0) | split("|"))
       | map({slot: (.[0] | opt | if . == null then null else tonumber end), session_id: .[1], name: .[2],
              status: .[3], cwd: .[4], pane: (.[5] | opt), window: .[6], outside: (.[6] == "outside"),
-             permission_mode: (.[7] | opt), detail: (.[8] | opt)})'
+             permission_mode: (.[7] | opt), detail: (.[8] | opt), branch: (.[15] | opt),
+             telemetry: (if .[21] == "" then null else
+               {model: (.[9] | opt), context_pct: (.[10] | num), effort: (.[11] | opt),
+                cache_pct: (.[12] | num), turn_cache_pct: (.[13] | num), cost_usd: (.[14] | num),
+                advisor: (.[16] | opt), five_hour: window(.[17]; .[18]), seven_day: window(.[19]; .[20]),
+                at: (.[21] | tonumber)} end)})'
     return 0
   fi
   if [ -z "$rows" ]; then
     say "nobody is here yet: gensokyo new [dir] [-n name]"
   else
+    now=$(date +%s)
     printf '  %-3s %-2s %-16s %-36s %s\n' '#' '' name directory session
-    while IFS='|' read -r slot id name state cwd pane win mode detail; do
+    while IFS='|' read -r slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor five freset week wreset at; do
       [ -n "$slot" ] || continue
       [ "$slot" = - ] && slot=' '
       printf '  %-3s %s  %-16s %-36s %s  %s%s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" \
         "$state" "${detail:+ ($detail)}"
+      # A second line once the resident's status line has reported (mode alone is not worth one).
+      [ -n "$at" ] && printf '         %s · %s ago\n' \
+        "$(tele_fields "$model" "$ctx" "$effort" "$cache" "$tcache" "$cost" "$branch" "$advisor" "$mode" verbose)" "$(fmt_age $((now - at)))"
     done <<EOF
 $rows
 EOF
     say
     say "  ● busy  ✦ awaits you  ✧ asked you a question  ○ resting  · departed"
+    usage_newest; tele=$(usage_text)
+    [ -n "$tele" ] && say "  usage  $tele   ($(fmt_age $((now - U_at))) ago)"
   fi
   if [ -n "$wait" ]; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
   return 0
@@ -184,10 +200,11 @@ cmd__run() {
   # A trap with a command is reset to the default in the child, so claude sees nothing special.
   trap : INT
   eval "set -- $args"
-  # Every resident, recalled or new, gets the hooks (lib/hooks.sh), the plugin (handbook skill)
-  # and the short paragraph that makes Claude reach for the skill instead of guessing; all are
-  # per-session flags, nothing in ~/.claude changes.
-  set -- --settings "$(launch_settings)" --plugin-dir "$SHARE/plugin" \
+  # Every resident, recalled or new, gets the hooks and status line wrapper (lib/hooks.sh,
+  # lib/telemetry.sh), the plugin (handbook skill) and the short paragraph that makes Claude
+  # reach for the skill instead of guessing; all are per-session flags, nothing in ~/.claude
+  # changes.
+  set -- --settings "$(launch_settings "$id" "$cwd")" --plugin-dir "$SHARE/plugin" \
     --append-system-prompt "$(system_paragraph "$name")" "$@"
   if [ -n "$resume" ]; then
     # Recall: same session id and transcript; Claude Code keeps the name it had.

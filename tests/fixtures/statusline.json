@@ -1,0 +1,75 @@
+{
+  "session_id": "f2fe56c9-466e-4333-bed0-4a89460dd0b8",
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-dev-beta/f2fe56c9-466e-4333-bed0-4a89460dd0b8.jsonl",
+  "cwd": "/Users/me/dev/beta",
+  "scratchpad_dir": "/Users/me/.claude/scratchpad/beta",
+  "prompt_id": "7584f6aa-f2d0-4100-a508-3d37c8fb0f23",
+  "effort": {
+    "level": "medium"
+  },
+  "session_name": "Sakuya",
+  "model": {
+    "id": "claude-sonnet-5",
+    "display_name": "Sonnet 5"
+  },
+  "workspace": {
+    "current_dir": "/Users/me/dev/beta",
+    "project_dir": "/Users/me/dev/beta",
+    "added_dirs": []
+  },
+  "version": "2.1.260",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.18978259999999997,
+    "total_duration_ms": 325221,
+    "total_api_duration_ms": 19227,
+    "total_lines_added": 8,
+    "total_lines_removed": 0
+  },
+  "context_window": {
+    "total_input_tokens": 54027,
+    "total_output_tokens": 75,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 75,
+      "cache_creation_input_tokens": 47,
+      "cache_read_input_tokens": 53978
+    },
+    "used_percentage": 5,
+    "remaining_percentage": 95
+  },
+  "exceeds_200k_tokens": false,
+  "prompt_cache": {
+    "warm": true,
+    "caching_observed": true,
+    "ttl": "1h",
+    "expires_at": 1788534053,
+    "requests": 8,
+    "misses": 0,
+    "expected_rebuilds": 0,
+    "hit_ratio": 0.937022010930958,
+    "cache_write_tokens": 26187,
+    "miss_recache_tokens": 0,
+    "last_miss_at": null,
+    "last_miss_cause": null,
+    "miss_causes": {},
+    "recache_tokens_if_cold": 54027
+  },
+  "fast_mode": false,
+  "thinking": {
+    "enabled": true
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 36,
+      "resets_at": 1788543000
+    },
+    "seven_day": {
+      "used_percentage": 49,
+      "resets_at": 1788595200
+    }
+  }
+}

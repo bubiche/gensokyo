@@ -77,12 +77,13 @@ EOF
 }
 
 # ---------------------------------------------------------------- status bar
-# Row 1: one chip per resident (slot, glyph, name); gold when the resident awaits you, dim
-# when departed, bold for the focused pane. Right: waiting count and outsiders.
-# Row 2: clock and the always-visible key legend (usage bars arrive with the statusLine).
+# Row 1: one chip per resident (slot, glyph, name, model, context used); gold when the
+# resident awaits you, dim when departed, bold for the focused pane. Right: waiting count and
+# outsiders. Row 2: clock, the always-visible key legend and, at the right, the account-wide
+# 5-hour and weekly usage from the newest status line report.
 # `#()` output may carry #[...] styles; it must never fail or print more than one line.
 cmd__bar() {
-  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win rest attrs
+  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win mode detail model ctx rest attrs tele
   case $1 in
     1)
       prune_records
@@ -92,15 +93,16 @@ cmd__bar() {
         printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
         return 0
       fi
-      while IFS='|' read -r slot id name state cwd pane win rest; do
+      while IFS='|' read -r slot id name state cwd pane win mode detail model ctx rest; do
         [ -n "$slot" ] || continue
-        attrs=
+        attrs= tele=
         case $state in
           waiting|question) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
-          departed) attrs=dim ;;
+          departed) attrs=dim; model= ;;
         esac
         [ "$pane" = "$active" ] && attrs="${attrs:+$attrs,}bold"
-        out="$out#[${attrs:-default}] $slot $(glyph_for "$state") ${name:0:14} #[default]│"
+        [ -n "$model" ] && tele=" $(model_short "$model")${ctx:+ $ctx%}"
+        out="$out#[${attrs:-default}] $slot $(glyph_for "$state") ${name:0:14}$tele #[default]│"
       done <<EOF
 $rows
 EOF
@@ -109,16 +111,18 @@ EOF
       [ "$n" -gt 0 ] && right="$right+$n outside "
       printf '%s%s' "${out%│}" "${right:+#[align=right]$right}" ;;
     2)
-      printf ' ⛩ %s   %s ' "$(date +%H:%M)" "$(legend_text)" ;;
+      right=$(usage_text)
+      printf ' ⛩ %s   %s %s' "$(date +%H:%M)" "$(legend_text)" "${right:+#[align=right]$right }" ;;
   esac
   return 0
 }
 
-# Pane border: "slot name · dir" for a resident, "⛩" for the shrine. Claude Code sets the
-# pane title to "✳ <name>" (from --name, following /rename); the title wins over the record
+# Pane border: "slot name · dir ⎇ branch · model→⚖ advisor · effort · mode · ⚡cache · $cost"
+# for a resident (unknown fields left out), "⛩" for the shrine. Claude Code sets the pane
+# title to "✳ <name>" (from --name, following /rename); the title wins over the record
 # because it changes within a second, tmux's default hostname title is ignored.
 cmd__border() {
-  local pane=$1 title=$2 f name
+  local pane=$1 title=$2 f name branch tele
   f=$(record_by_pane "$pane")
   if [ -n "$f" ]; then
     rec_load "$f"
@@ -127,7 +131,10 @@ cmd__border() {
     if [ -n "$R_departed" ]; then
       printf ' %s %s · departed  [r] recall  [x] close ' "$R_slot" "$name"
     else
-      printf ' %s %s · %s ' "$R_slot" "$name" "$(basename "$R_cwd")"
+      status_load "${f##*/}"; tele_load "${f##*/}"
+      branch=$(git_branch "$R_cwd")
+      tele=$(tele_fields "$T_model" "$T_ctx" "$T_effort" "$T_cache" "$T_tcache" "$T_cost" "$branch" "$T_advisor" "${S_mode:-$R_mode}")
+      printf ' %s %s · %s%s%s ' "$R_slot" "$name" "$(basename "$R_cwd")" "${branch:+ ⎇ $branch}" "${tele:+ · $tele}"
     fi
   elif [ "$(tmux_ show -p -v -t "$pane" @shrine 2>/dev/null)" = 1 ]; then
     printf ' ⛩ '
@@ -146,8 +153,8 @@ cmd__focus() {
 }
 
 cmd__cycle() {
-  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p win rest
-  while IFS='|' read -r slot id name state cwd p win rest; do
+  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p rest
+  while IFS='|' read -r slot id name state cwd p rest; do
     [ -n "$slot" ] && [ "$p" != - ] || continue
     [ -z "$first" ] && first=$p
     [ -n "$found" ] && [ -z "$target" ] && [ "$dir" = next ] && target=$p

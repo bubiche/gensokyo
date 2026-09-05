@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, live panes, zoom to focus, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list, the status bar and the "needs you" notifications work; telemetry, recall, broadcasts and schedules are not there yet.
+**Status:** pre-alpha. The cockpit, summon/banish/list, the status bar, the "needs you" notifications and the per-resident telemetry (model, context, cost, usage) work; recall, broadcasts and schedules are not there yet.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ macOS and Linux, arm64 and x86_64.
 
 `/bin/bash` 3.2 is the target for `bin/gensokyo` and the `lib/*.sh` files it sources
 (records, registry, tmux server, cockpit keys and bar, resident commands, hooks and
-notifications); `install.sh` and `scripts/*.sh` are POSIX `sh`. Do not use bash 4 features.
+notifications, telemetry); `install.sh` and `scripts/*.sh` are POSIX `sh`. Do not use bash 4 features.
 
 ## Developing
 
@@ -70,6 +70,33 @@ on screen in a client you touched in the last ten seconds, and nothing repeats w
 keeps waiting. Typing in the resident clears the flag. `~/.config/gensokyo/config` can set
 `NOTIFY_TOAST`, `NOTIFY_DESKTOP` or `NOTIFY_BELL` to `off`. macOS asks once whether your terminal
 application may show notifications; `gensokyo doctor` reminds you.
+
+## What each resident reports
+
+The same `--settings` points the resident's Claude Code status line at `gensokyo _statusline`.
+Claude Code feeds it JSON after every API response (model, effort, context window, cache hit
+rate, cost, and on Pro/Max/Team accounts the 5-hour and weekly usage); gensokyo keeps the last
+report per resident under its state directory and shows it everywhere:
+
+- **Chips** (bar row 1): `1 ✦ Reimu Sonnet 42%`, model and context used.
+- **Bar row 2, right**: the account-wide usage from the newest report,
+  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts).
+- **Pane border**: `1 Reimu · gensokyo ⎇ main · Sonnet 5→⚖ Opus · high · plan · ⚡91% · $0.42`:
+  directory and branch (read from `.git/HEAD`, no git needed), model and advisor model (from
+  the resident's settings chain), effort, permission mode (from the hooks: known after the first
+  prompt; a Shift+Tab shows at the next prompt), session cache hit rate, cost. Unknown fields
+  are left out.
+- **Inside the pane**: gensokyo's own one-line status line,
+  `Sonnet 5→⚖ Opus · medium · ▓░░░░░░░░░ 12% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m`
+  (context bar with the window size, session and per-turn cache, cost, lines added/removed, age).
+  Prefer your own Claude Code status line? `STATUSLINE=user` in the config makes gensokyo run
+  your `statusLine` command with the same JSON after recording it, output untouched.
+- **`gensokyo list`** (and `Ctrl-Space g w`) adds a line per resident with all of it plus the
+  age of the data, and a `usage` line; `list --json` carries the same under `telemetry`
+  (null until the first report) and `branch`.
+
+Numbers refresh only when Claude Code calls the API, so a resident idle for hours shows its
+last values; the age tells. Sessions not started by gensokyo have no telemetry.
 
 Environment overrides for tests and CI: `GENSOKYO_TMUX`, `GENSOKYO_JQ`, `GENSOKYO_CLAUDE`
 (binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`. `tests/stub-claude` stands in

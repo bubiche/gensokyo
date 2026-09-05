@@ -385,6 +385,42 @@ telemetry_tests() {
   fresh; rm -rf "$TELE_DIR"
 }
 
+recall_tests() {
+  local out id1=aaaaaaaa-1111-4000-8000-000000000001 id2=bbbbbbbb-2222-4000-8000-000000000002 id3=cccccccc-3333-4000-8000-000000000003
+
+  t "recall_rows: departed residents in panes and archived records, newest first, transcript found by id"
+  fresh; rm -rf "$DEPARTED_DIR"; mkdir -p "$DEPARTED_DIR" "$scratch/cc/projects/-tmp-a" "$scratch/cc/projects/-tmp-b"
+  rec $id1 slot=1 name=Reimu cwd=/tmp/a pane=%1 window=stage1                      # here: not listed
+  rec $id2 slot=2 name=Youmu cwd=/tmp/a pane=%2 window=stage1 departed=1700000300   # departed screen in its pane
+  printf 'slot=3\nname=Sakuya\ncwd=/tmp/b\nwindow=stage1\nlaunched=1700000000\ndeparted=1700000200\nexit=0\n' > "$DEPARTED_DIR/$id3"
+  : > "$scratch/cc/projects/-tmp-b/$id3.jsonl"; touch -t 202001010000 "$scratch/cc/projects/-tmp-b/$id3.jsonl"   # older than Youmu
+  assert_eq "$(recall_rows | cut -d'|' -f2-5)" "$id2|Youmu|/tmp/a|2
+$id3|Sakuya|/tmp/b|"
+  assert_eq "$(recall_rows | sed -n 1p | cut -d'|' -f1,6)" '1700000300|'
+  assert_eq "$(recall_rows | sed -n 2p | cut -d'|' -f6)" "$scratch/cc/projects/-tmp-b/$id3.jsonl"
+
+  t "find_departed: name in any case, else an id prefix of 4+ characters; only archived records"
+  assert_eq "$(find_departed sakuya)" "$DEPARTED_DIR/$id3"
+  assert_eq "$(find_departed CCCC)" "$DEPARTED_DIR/$id3"
+  assert_fails find_departed youmu   # departed, but still in its pane: find_resident's business
+  assert_fails find_departed ccc
+  assert_fails find_departed Nobody
+
+  t "resume alone lists who can be recalled, --json the same for tools; wrong names and options fail"
+  out=$(cmd_resume)
+  assert_re "$out" '^  Youmu +/tmp/a +bbbbbbbb +[0-9]+[a-z]+ ago · still in its pane \(slot 2\) · no transcript$'
+  assert_re "$out" '^  Sakuya +/tmp/b +cccccccc +[0-9]+[a-z]+ ago$'
+  assert_match "$out" 'gensokyo resume <name|session id>'
+  assert_eq "$(cmd_resume --json | jq_ -r '.[] | "\(.name) \(.slot) \(.in_pane) \(.transcript) \(.departed_at)"')" "Youmu 2 true false 1700000300
+Sakuya null false true $(mtime_of "$scratch/cc/projects/-tmp-b/$id3.jsonl")"
+  assert_match "$("$root/bin/gensokyo" resume Nobody 2>&1)" "nobody called 'Nobody' has departed"
+  assert_match "$("$root/bin/gensokyo" resume reimu 2>&1)" 'Reimu is still here (slot 1)'
+  assert_match "$("$root/bin/gensokyo" recall --bogus 2>&1)" 'unknown option --bogus'
+  assert_match "$("$root/bin/gensokyo" resume a b 2>&1)" 'one resident at a time'
+  fresh; rm -rf "$DEPARTED_DIR" "$scratch/cc/projects"
+  assert_match "$(cmd_resume)" 'nobody has departed'
+}
+
 # install.sh: POSIX sh, run from the checkout into a scratch bin dir; --no-fetch keeps it offline.
 install_tests() {
   local out bin=$scratch/ibin
@@ -433,7 +469,7 @@ cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scrat
 trap cleanup EXIT
 
 smoke_tests() {
-  local out pane1 pane2 id1 id2 args
+  local out pane1 pane2 pane id1 id2 id3 id4 name3 args
   t "smoke: prerequisites"
   if [ -z "$TMUX_BIN" ] || [ -z "$JQ_BIN" ]; then skip "no tmux/jq (run scripts/vendor.sh)"; return; fi
   ok
@@ -563,6 +599,24 @@ null'
   assert_match "$("$G" _bar 1 "$pane1")" '#[dim] 2 · Gamma '
   assert_match "$("$G" _border "$pane2" 'x')" 'departed'
   assert_re "$("$G" list)" '^  2   ·  Gamma .*departed$'
+  assert_re "$("$G" resume)" '^  Gamma +.*beta +'"${id2:0:8}"' +[0-9]+[a-z]+ ago · still in its pane \(slot 2\) · no transcript$'
+
+  t "smoke: resume recalls a departed pane in place with --resume and the summon flags; the name stays"
+  out=$("$G" resume gamma 2>&1)
+  assert_match "$out" 'recalled Gamma into its pane (slot 2)'
+  pause 1.2
+  assert_match "$(tm capture-pane -p -t "$pane2")" "stub-claude Gamma ($id2) resumed"
+  args=$(cat "$STUB_STATE/$id2.args")
+  assert_match "$args" "--resume $id2"
+  assert_nomatch "$args" '--session-id'
+  assert_match "$args" '--model haiku --permission-mode plan'
+  assert_match "$args" '--settings {"hooks":{"UserPromptSubmit"'
+  assert_eq "$(rec_get "$RES_DIR/$id2" departed)|$(rec_get "$RES_DIR/$id2" pane)" "|$pane2"
+  assert_match "$("$G" resume gamma 2>&1)" 'Gamma is still here (slot 2)'
+  rm -f "$REGISTRY"
+  assert_re "$("$G" list)" '^  2   ○  Gamma .*idle$'
+  "$G" close gamma >/dev/null 2>&1; pause 1.2
+  assert_match "$(tm capture-pane -p -t "$pane2")" 'Gamma has left the shrine'
 
   t "smoke: closing the departed pane frees the slot; the next summon reuses it"
   "$G" close 2 >/dev/null 2>&1; pause 0.5
@@ -590,13 +644,47 @@ null'
   "$G" --detach >/dev/null
   assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" 0
   assert_eq "$(ls "$STATE_DIR/departed" | wc -l | tr -d ' ')" 4
+  rm -f "$REGISTRY"
+  assert_match "$("$G" list)" '4 from earlier runs can be recalled: gensokyo resume'
+
+  t "smoke: a resident from an earlier run is recalled into a fresh slot; its record moves back"
+  id3=$(grep -l '^slot=3$' "$STATE_DIR/departed"/* | head -n 1); id3=${id3##*/}; name3=$(rec_get "$STATE_DIR/departed/$id3" name)
+  mkdir -p "$scratch/cc/projects/-work-alpha"; : > "$scratch/cc/projects/-work-alpha/$id3.jsonl"   # a fresh transcript: newest
+  assert_eq "$("$G" resume | sed -n 2p | awk '{print $1}')" "$name3"
+  assert_eq "$("$G" resume --json | jq_ -r --arg id "$id3" 'map(select(.session_id == $id)) | .[0] | "\(.transcript) \(.in_pane) \(.slot)"')" 'true false null'
+  out=$("$G" resume "$name3" 2>&1)
+  assert_match "$out" "recalled $name3 (slot 1) in $scratch/work/alpha"
+  assert_nomatch "$out" 'no transcript'
+  pause 1.5
+  assert_ok test -f "$RES_DIR/$id3"
+  assert_ok test ! -f "$STATE_DIR/departed/$id3"
+  assert_eq "$(rec_get "$RES_DIR/$id3" slot)|$(rec_get "$RES_DIR/$id3" window)|$(rec_get "$RES_DIR/$id3" resume)|$(rec_get "$RES_DIR/$id3" launched)" "1|stage1|1|$(rec_get "$RES_DIR/$id3" launched)"
+  pane=$(rec_get "$RES_DIR/$id3" pane)
+  assert_match "$(tm capture-pane -p -t "$pane")" "($id3) resumed"
+  assert_match "$(cat "$STUB_STATE/$id3.args")" "--resume $id3"
+  assert_eq "$(tm list-panes -t =gensokyo:stage1 -F x | wc -l | tr -d ' ')" 1   # took the shrine's place
+  assert_eq "$(ls "$STATE_DIR/departed" | wc -l | tr -d ' ')" 3
+  assert_match "$("$G" resume "$name3" 2>&1)" "$name3 is still here (slot 1)"
+  rm -f "$REGISTRY"
+  assert_re "$("$G" list)" "^  1   ○  $name3 .*idle\$"
+  assert_match "$("$G" list)" '3 from earlier runs can be recalled'
+
+  t "smoke: recall refuses a name that is here already and a directory that is gone; the record stays archived"
+  id4=$(ls "$STATE_DIR/departed" | head -n 1)
+  rec_set "$STATE_DIR/departed/$id4" name "$name3"
+  assert_match "$("$G" resume "${id4:0:8}" 2>&1)" "another $name3 is here already"
+  rec_set "$STATE_DIR/departed/$id4" name Gone; rec_set "$STATE_DIR/departed/$id4" cwd "$scratch/work/vanished"
+  assert_match "$("$G" resume gone 2>&1)" "Gone's directory is gone: $scratch/work/vanished"
+  assert_ok test -f "$STATE_DIR/departed/$id4"
+  out=$("$G" resume 2>&1)
+  assert_match "$out" 'no transcript'
   tm kill-server
 }
 
 case $what in
-  unit) unit_tests; hook_tests; telemetry_tests; install_tests ;;
+  unit) unit_tests; hook_tests; telemetry_tests; recall_tests; install_tests ;;
   smoke) smoke_tests ;;
-  all) unit_tests; hook_tests; telemetry_tests; install_tests; smoke_tests ;;
+  all) unit_tests; hook_tests; telemetry_tests; recall_tests; install_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

@@ -4,7 +4,7 @@
 
 cmd_new() {
   local dir='' name='' model='' effort='' mode='' focus='' prompt='' flags=() argstr='' f
-  local id slot stage win pane cmd rec out n shrine
+  local id slot stage pane rec
   while [ $# -gt 0 ]; do
     case $1 in
       -n|--name) name=${2:-}; shift ;;
@@ -43,28 +43,35 @@ cmd_new() {
     [ -n "$mode" ] && printf 'mode=%s\n' "$mode"   # shown until the first prompt reports the live mode
   } > "$rec"
 
-  # Stage windows hold CFG_STAGE_SIZE residents each. The first resident of a stage replaces
-  # the shrine pane in place; later ones split the window and re-tile it.
+  pane=$(open_pane "$id" "$stage") || { rm -f "$rec"; die "new: tmux could not open a pane"; }
+  rec_set "$rec" pane "$pane"
+  remember_dir "$dir"
+  [ -n "$focus" ] && focus_pane "$pane"
+  say "summoned $name (slot $slot) in $dir"
+}
+
+# open_pane <session-id> <stage>: a pane running `_run <session-id>` in that stage window;
+# prints the pane id. Stage windows hold CFG_STAGE_SIZE residents each. The first resident of a
+# stage replaces the shrine pane in place; later ones split the window and re-tile it.
+open_pane() {
+  local id=$1 stage=$2 cmd win out n shrine pane
   cmd="$(sq "$SELF") _run $id"
   win=$(find_window "$stage")
   if [ -z "$win" ]; then
-    out=$(tmux_ new-window -d -P -F '#{window_id} #{pane_id}' -n "$stage" "$cmd") || { rm -f "$rec"; die "new: tmux could not open a window"; }
+    out=$(tmux_ new-window -d -P -F '#{window_id} #{pane_id}' -n "$stage" "$cmd") || return 1
     pane=${out#* }
   else
     n=$(tmux_ list-panes -t "$win" | wc -l | tr -d ' ')
     shrine=$(tmux_ list-panes -t "$win" -F '#{pane_id} #{@shrine}' | awk '$2 == "1" {print $1; exit}')
     if [ "$n" -eq 1 ] && [ -n "$shrine" ]; then
-      tmux_ set -p -t "$shrine" -u @shrine \; respawn-pane -k -t "$shrine" "$cmd" || { rm -f "$rec"; die "new: tmux could not start the pane"; }
+      tmux_ set -p -t "$shrine" -u @shrine \; respawn-pane -k -t "$shrine" "$cmd" || return 1
       pane=$shrine
     else
-      pane=$(tmux_ split-window -d -P -F '#{pane_id}' -t "$win" "$cmd") || { rm -f "$rec"; die "new: tmux could not split the window"; }
+      pane=$(tmux_ split-window -d -P -F '#{pane_id}' -t "$win" "$cmd") || return 1
       tmux_ select-layout -t "$win" tiled
     fi
   fi
-  rec_set "$rec" pane "$pane"
-  remember_dir "$dir"
-  [ -n "$focus" ] && focus_pane "$pane"
-  say "summoned $name (slot $slot) in $dir"
+  printf '%s\n' "$pane"
 }
 
 cmd_close() {
@@ -89,7 +96,7 @@ cmd_close() {
 }
 
 cmd_list() {
-  local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail now tele
+  local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail now tele n
   local model ctx effort cache tcache cost branch advisor five freset week wreset at
   while [ $# -gt 0 ]; do
     case $1 in
@@ -151,6 +158,8 @@ EOF
     usage_newest; tele=$(usage_text)
     [ -n "$tele" ] && say "  usage  $tele   ($(fmt_age $((now - U_at))) ago)"
   fi
+  n=$(find "$STATE_DIR/departed" -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "$n" -gt 0 ] && say "  $n from earlier runs can be recalled: gensokyo resume"
   if [ -n "$wait" ]; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
   return 0
 }

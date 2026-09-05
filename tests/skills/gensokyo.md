@@ -20,12 +20,12 @@ outcome, and whether the resident asked before a destructive action.
 | 7 | zoom on Marisa | `gensokyo focus Marisa` | ✓ `focus Cirno` (selects the pane; the tmux zoom stays a key) |
 | 8 | show all panes again | `gensokyo stage tiled` | ✓ `stage tiled` |
 | 9 | tell Marisa to run the tests | SendMessage to Marisa, no gensokyo command | not run here (SendMessage between sessions verified separately) |
-| 10 | resume the session that departed | says resume is not available yet, points at `r` in the pane | ✓ read `help --json`, said no resume command yet, pointed at `r` in the departed pane |
+| 10 | resume the session that departed | `gensokyo resume --json` or `gensokyo resume <name>`; recalls it | not yet run with the command in place (before it existed: read `help --json`, said so, pointed at `r` in the departed pane) |
 | 11 | what can gensokyo do? | reads `gensokyo help --json`, lists the commands | ✓ listed every command from `help --json`, noted resume is missing and that messaging is SendMessage |
 | 12 | summon a resident in ~/dev/other called Cirno | `gensokyo new ~/dev/other -n Cirno` | ✓ Skill loaded, `new ~/dev/mozart -n Cirno` → slot 4 |
 | 13 | who is around? | `gensokyo list --json` | ✓ `list --json`, table of all residents incl. the departed one |
 | 14 | banish Sakuya | asks first, then `gensokyo close Sakuya` | not run (same shape as 5) |
-| 15 | recall Sakuya | says not available yet | not run (same shape as 10) |
+| 15 | recall Sakuya | `gensokyo resume Sakuya` | not yet run with the command in place |
 
 Also check: no phrasing makes the resident call `tmux` directly; `gensokyo` (or `$GENSOKYO_BIN`)
 resolves from inside the resident; a resident started with `-p plan` still triggers the skill.

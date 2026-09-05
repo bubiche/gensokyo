@@ -35,7 +35,7 @@ and never promise a command that is not in it.
 | User says (plain first, cockpit words also count) | Run |
 |---|---|
 | "start a new agent in ~/dev/mozart called Marisa", "spin up another session for the rails repo", "summon a resident in ..." | `gensokyo new ~/dev/mozart -n Marisa` (`-n` optional: a name is picked; `-m model`, `-e effort`, `-p permission-mode` only when the user asked for them) |
-| "list the sessions", "who's around?", "who's waiting on me?", "who" | `gensokyo list --json`, then summarize: slot, name, state (busy / waiting / idle / departed), directory. `--all` adds sessions not started by gensokyo. |
+| "list the sessions", "who's around?", "who's waiting on me?", "who" | `gensokyo list --json`, then summarize: slot, name, state, directory. States: `busy`, `waiting` (needs the user: a permission prompt, or a finished turn the user has not seen; `detail` says what), `question` (asked the user something; `detail` is the question), `idle`, `departed`. "Waiting on me" means `waiting` or `question`. `--all` adds sessions not started by gensokyo. |
 | "close the fretwork session", "stop Youmu", "banish Youmu" | confirm first (another session's work is at stake), then `gensokyo close Youmu` (name or slot number) |
 | "resume the session I had on higan yesterday", "recall Youmu" | `gensokyo resume` is not available yet; say so. Tell the user the departed pane offers `r` to recall. |
 | "zoom on Marisa", "show me Sakuya's pane", "focus 3" | `gensokyo focus Marisa` |

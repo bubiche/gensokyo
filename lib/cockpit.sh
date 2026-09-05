@@ -82,7 +82,7 @@ EOF
 # Row 2: clock and the always-visible key legend (usage bars arrive with the statusLine).
 # `#()` output may carry #[...] styles; it must never fail or print more than one line.
 cmd__bar() {
-  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win attrs
+  local active=${2:-} rows out='' right='' waiting=0 n slot id name state cwd pane win rest attrs
   case $1 in
     1)
       prune_records
@@ -92,11 +92,11 @@ cmd__bar() {
         printf ' ⛩ gensokyo  no residents yet · %s then g n to summon ' "$(prefix_label)"
         return 0
       fi
-      while IFS='|' read -r slot id name state cwd pane win; do
+      while IFS='|' read -r slot id name state cwd pane win rest; do
         [ -n "$slot" ] || continue
         attrs=
         case $state in
-          waiting) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
+          waiting|question) waiting=$((waiting + 1)); attrs="bg=$CFG_COLOR_AWAIT,fg=black" ;;
           departed) attrs=dim ;;
         esac
         [ "$pane" = "$active" ] && attrs="${attrs:+$attrs,}bold"
@@ -146,8 +146,8 @@ cmd__focus() {
 }
 
 cmd__cycle() {
-  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p win
-  while IFS='|' read -r slot id name state cwd p win; do
+  local dir=$1 pane=$2 first='' prev='' target='' found='' last='' slot id name state cwd p win rest
+  while IFS='|' read -r slot id name state cwd p win rest; do
     [ -n "$slot" ] && [ "$p" != - ] || continue
     [ -z "$first" ] && first=$p
     [ -n "$found" ] && [ -z "$target" ] && [ "$dir" = next ] && target=$p

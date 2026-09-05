@@ -48,10 +48,13 @@ die()  { warn "$@"; exit 1; }
 # CLAUDE_CODE_EXECPATH, ... A `claude` started with those inherited treats itself as a child
 # session: transcript saving off and absent from `claude agents --json`. gensokyo is often
 # run from inside a resident (the handbook skill does that), so scrub them unconditionally
-# before starting the tmux server or a resident. GENSOKYO_* variables are unaffected.
+# before starting the tmux server or a resident. CLAUDE_CONFIG_DIR is the user's own choice
+# of where Claude Code keeps its settings, not a session marker, and stays.
 scrub_env() {
   local v
-  for v in $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+  for v in $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p'); do
+    [ "$v" = CLAUDE_CONFIG_DIR ] || unset "$v"
+  done
 }
 
 # ---------------------------------------------------------------- config
@@ -65,18 +68,23 @@ CFG_COLOR_ROW2_FG=#7a1f18
 CFG_COLOR_AWAIT=#f1c40f     # chip background when a resident awaits you (gold)
 CFG_COLOR_BORDER=#7a1f18
 CFG_MOUSE=off
+CFG_NOTIFY_TOAST=on         # "needs you" channels: tmux message, desktop alert, terminal bell
+CFG_NOTIFY_DESKTOP=on
+CFG_NOTIFY_BELL=on
 
 load_config() {
-  [ -f "$CONFIG_DIR/config" ] || return 0
   local line key
-  while IFS= read -r line || [ -n "$line" ]; do
-    case $line in ''|'#'*) continue ;; esac
-    key=${line%%=*}
-    case $key in
-      ''|*[!A-Z_0-9]*) warn "config: ignoring line: $line"; continue ;;
-    esac
-    eval "CFG_$key=\${line#*=}"
-  done < "$CONFIG_DIR/config"
+  if [ -f "$CONFIG_DIR/config" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case $line in ''|'#'*) continue ;; esac
+      key=${line%%=*}
+      case $key in
+        ''|*[!A-Z_0-9]*) warn "config: ignoring line: $line"; continue ;;
+      esac
+      eval "CFG_$key=\${line#*=}"
+    done < "$CONFIG_DIR/config"
+  fi
+  case $CFG_STAGE_SIZE in ''|*[!0-9]*|0) warn "config: STAGE_SIZE must be a positive number; using 4"; CFG_STAGE_SIZE=4 ;; esac
 }
 
 # ---------------------------------------------------------------- binaries
@@ -136,6 +144,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/cockpit.sh" || exit 1
 # shellcheck source=../lib/residents.sh
 . "$LIB/residents.sh" || exit 1
+# shellcheck source=../lib/hooks.sh
+. "$LIB/hooks.sh" || exit 1
 
 # ---------------------------------------------------------------- doctor / help / version
 cmd_doctor() {
@@ -181,6 +191,8 @@ cmd_doctor() {
     say "  on PATH    $v -> a different copy ($(real_path "$v")); residents launched from here use \$GENSOKYO_BIN"
   fi
   say "  prefix     $CFG_PREFIX ($(prefix_label))"
+  say "  needs you  toast=$CFG_NOTIFY_TOAST desktop=$CFG_NOTIFY_DESKTOP ($(desktop_notifier)) bell=$CFG_NOTIFY_BELL  (config: NOTIFY_TOAST/NOTIFY_DESKTOP/NOTIFY_BELL=off)"
+  [ "$(desktop_notifier)" = osascript ] && say "             macOS asks once to allow notifications from your terminal application; say yes"
   if [ -n "$TMUX_BIN" ] && server_running; then
     say "  server     running (tmux -L $SOCKET), $(count_records) resident record(s)"
     v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
@@ -264,7 +276,7 @@ main() {
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     resume|broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
+    _shrine|_keys|_run|_hook|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
       shift; "cmd_$cmd" "$@" ;;
     _menu-recall|_menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

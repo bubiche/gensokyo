@@ -43,16 +43,27 @@ registry_row() {
   esac
 }
 
-# resident_rows: "slot|id|name|state|cwd|pane|window" per record, sorted by slot.
-# state: busy|waiting|idle|departed|starting ("starting": launched, not in the registry yet).
-# Precedence: departed record > registry status. The registry name wins over the recorded one
-# (/rename inside the resident) and is written back so `close <name>` follows the rename.
+# resident_rows: one "slot|id|name|state|cwd|pane|window|mode|detail" line per record, sorted
+# by slot. state: busy|waiting|question|idle|departed|starting ("starting": launched, not in
+# the registry yet); mode is the permission mode (from the hooks, else the launch flag);
+# detail is the one line the hooks recorded about what the resident waits for.
+#
+# The registry gives busy|waiting|idle; the status file the hooks write adds what the registry
+# cannot see: a question dialog (`question`) and a finished turn nobody has looked at yet
+# (`stopped`), both shown as needing you. Precedence: departed > question > registry waiting
+# > busy > pending awaits/stopped > idle. A busy resident whose pending flag predates the
+# registry snapshot has moved on (the permission was granted, or a new turn started), so the
+# flag is cleared here; the timestamp check keeps a Stop that raced a stale snapshot alive.
+# The registry name wins over the recorded one (/rename inside the resident) and is written
+# back so `close <name>` follows the rename.
 resident_rows() {
-  local f id row state rname
+  local f id row state rname regtime
+  regtime=$(mtime_of "$REGISTRY")
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
     id=${f##*/}
     rec_load "$f"
+    status_load "$id"
     row=$(registry_row "$id")
     rname=$R_name
     if [ -n "$R_departed" ]; then
@@ -61,10 +72,18 @@ resident_rows() {
       state=${row%%|*}; case $state in busy|waiting|idle) ;; *) state=idle ;; esac
       rname=${row#*|}; rname=${rname%%|*}
       if [ -z "$rname" ]; then rname=$R_name; elif [ "$rname" != "$R_name" ]; then rec_set "$f" name "$rname"; fi
+      case $state:$S_pending in
+        *:question) state=question ;;
+        busy:awaits|busy:stopped) [ "$regtime" -gt "${S_since:-0}" ] && status_write "$id" '' '' ;;
+        idle:awaits|idle:stopped) state=waiting ;;
+      esac
+    elif [ "$S_pending" = question ]; then
+      state=question
     else
       state=starting
     fi
-    printf '%s|%s|%s|%s|%s|%s|%s\n' "$R_slot" "$id" "$rname" "$state" "$R_cwd" "${R_pane:--}" "$R_window"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$R_slot" "$id" "$rname" "$state" "$R_cwd" "${R_pane:--}" "$R_window" \
+      "${S_mode:-$R_mode}" "$S_detail"
   done | sort -n
 }
 
@@ -82,8 +101,11 @@ EOF
   printf '%s\n' "$n"
 }
 
+# glyph_for <state or pending kind>: ● busy, ✦ awaits you (permission, or a finished turn),
+# ✧ asked you a question, · departed, ○ resting.
 glyph_for() {
   case $1 in
-    busy) printf '●' ;; waiting) printf '✦' ;; departed) printf '·' ;; *) printf '○' ;;
+    busy) printf '●' ;; waiting|awaits|stopped) printf '✦' ;; question) printf '✧' ;;
+    departed) printf '·' ;; *) printf '○' ;;
   esac
 }

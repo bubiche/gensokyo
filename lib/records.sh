@@ -4,7 +4,8 @@
 
 # ---------------------------------------------------------------- resident records
 # state/residents/<session-id> holds KEY=value lines: slot, name, cwd, pane (%N), window,
-# launched (epoch), args (shell-quoted launch flags), prompt, departed (epoch), exit, resume.
+# launched (epoch), args (shell-quoted launch flags), prompt, mode (the --permission-mode
+# passed at launch, if any), departed (epoch), exit, resume.
 rec_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
 rec_set() {
   local tmp=$1.tmp.$$
@@ -12,19 +13,26 @@ rec_set() {
 }
 rec_del() { [ -f "$1" ] && { grep -v "^$2=" "$1" > "$1.tmp.$$"; mv "$1.tmp.$$" "$1"; }; return 0; }
 
-# rec_load <file>: read every key into R_<key> without spawning a process (the bar and
-# border call this for each resident on every redraw). Values are expanded from $line after
-# eval parses, so a prompt containing quotes or $ is safe.
-rec_load() {
-  local line key
-  # shellcheck disable=SC2034  # every key is loaded; not every caller reads all of them
-  R_slot='' R_name='' R_cwd='' R_pane='' R_window='' R_launched='' R_args='' R_prompt='' R_departed='' R_exit='' R_resume=''
+# load_kv <file> <PREFIX> <key>...: read KEY=value lines into PREFIX_<key> for the listed keys
+# without spawning a process (the bar and border do this per resident on every redraw). The
+# caller pre-sets the variables to '' (so a missing file or key leaves them empty and
+# the linter sees the assignment). Values are expanded from $line after eval parses, so a
+# prompt containing quotes or $ is safe.
+load_kv() {
+  local file=$1 prefix=$2 line key
+  shift 2
+  [ -f "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     key=${line%%=*}
-    case $key in
-      slot|name|cwd|pane|window|launched|args|prompt|departed|exit|resume) eval "R_$key=\${line#*=}" ;;
-    esac
-  done < "$1"
+    case " $* " in *" $key "*) eval "${prefix}_$key=\${line#*=}" ;; esac
+  done < "$file"
+}
+
+# rec_load <file>: every record key into R_<key>.
+rec_load() {
+  # shellcheck disable=SC2034  # every key is loaded; not every caller reads all of them
+  R_slot='' R_name='' R_cwd='' R_pane='' R_window='' R_launched='' R_args='' R_prompt='' R_mode='' R_departed='' R_exit='' R_resume=''
+  load_kv "$1" R slot name cwd pane window launched args prompt mode departed exit resume
 }
 
 ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$CONFIG_DIR"; }
@@ -73,6 +81,7 @@ archive_records() {
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
     mkdir -p "$STATE_DIR/departed" && mv "$f" "$STATE_DIR/departed/"
+    rm -f "$STATE_DIR/status/${f##*/}"
   done
 }
 
@@ -87,12 +96,13 @@ prune_records() {
     [ -f "$f" ] || continue
     rec_load "$f"
     if [ -n "$R_pane" ]; then
-      case $live in *$'\n'"$R_pane"$'\n'*) ;; *) rm -f "$f" ;; esac
+      case $live in *$'\n'"$R_pane"$'\n'*) ;; *) drop_record "$f" ;; esac
     elif [ $((now - ${R_launched:-0})) -gt 30 ]; then
-      rm -f "$f"
+      drop_record "$f"
     fi
   done
 }
+drop_record() { rm -f "$1" "$STATE_DIR/status/${1##*/}"; }   # the record and its status file
 
 pick_name() {
   local file=$SHARE/names.txt used='' f n free

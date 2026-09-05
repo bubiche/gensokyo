@@ -25,6 +25,12 @@ export GENSOKYO_SOCKET=gtest$$ GENSOKYO_CLAUDE=$root/tests/stub-claude
 export STUB_STATE=$scratch/stub
 export HOME=${HOME:-/tmp}
 unset TMUX TMUX_PANE
+# A fake osascript / notify-send logs "subtitle|text" (its last two arguments) instead of
+# showing a desktop notification.
+mkdir -p "$scratch/fakebin"
+printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${@: -2:1}" "${@: -1}" >> "%s"\n' "$scratch/notify.log" > "$scratch/fakebin/osascript"
+cp "$scratch/fakebin/osascript" "$scratch/fakebin/notify-send"; chmod +x "$scratch/fakebin"/*
+export PATH=$scratch/fakebin:$PATH
 
 pass=0 fail=0 skipped=0 current=''
 ok()   { pass=$((pass + 1)); [ -n "$verbose" ] && printf 'ok    %s\n' "$current"; return 0; }
@@ -109,13 +115,21 @@ unit_tests() {
   rm -f "$CONFIG_DIR/names.txt"
   fresh; assert_re "$(pick_name)" '^[A-Z][A-Za-z]+$'
 
-  t "load_config: KEY=value lines, comments, bad keys ignored with a warning"
+  t "load_config: KEY=value lines, comments, bad keys ignored with a warning, STAGE_SIZE sanity"
   printf '# gensokyo\nPREFIX=C-a\nSTAGE_SIZE=6\nbad key=1\n\n' > "$CONFIG_DIR/config"
   out=$(load_config 2>&1; printf '%s|%s' "$CFG_PREFIX" "$CFG_STAGE_SIZE")
   assert_match "$out" 'ignoring line: bad key=1'
   assert_match "$out" 'C-a|6'
+  printf 'STAGE_SIZE=0\n' > "$CONFIG_DIR/config"
+  out=$(load_config 2>&1; printf '%s' "$CFG_STAGE_SIZE")
+  assert_match "$out" 'STAGE_SIZE must be a positive number'
+  assert_re "$out" '4$'
   rm -f "$CONFIG_DIR/config"
   CFG_PREFIX=C-Space; CFG_STAGE_SIZE=4
+
+  t "scrub_env drops CLAUDE* session markers but keeps CLAUDE_CONFIG_DIR"
+  out=$(CLAUDECODE=1 CLAUDE_CODE_CHILD_SESSION=x CLAUDE_CONFIG_DIR=/tmp/cc bash -c '. "$1"; scrub_env; env | grep "^CLAUDE" | sort | tr "\n" " "' _ "$root/bin/gensokyo")
+  assert_eq "$out" 'CLAUDE_CONFIG_DIR=/tmp/cc '
   assert_eq "$(prefix_label)" Ctrl-Space
   CFG_PREFIX=C-a; assert_eq "$(prefix_label)" Ctrl-a; CFG_PREFIX=C-Space
 
@@ -138,11 +152,39 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=OldName cwd=/Users/me/dev/beta pane=%2 window=stage1
   rec 33333333-cccc-4000-8000-000000000003 slot=3 name=Youmu cwd=/tmp pane=%3 window=stage1 departed=1
   rec 44444444-dddd-4000-8000-000000000004 slot=4 name=Cirno cwd=/tmp window=stage1
-  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|stage1
-2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|stage1
-3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|stage1
-4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|stage1'
+  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|stage1||
+2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|stage1||
+3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|stage1||
+4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|stage1||'
   assert_eq "$(rec_get "$RES_DIR/f2fe56c9-466e-4333-bed0-4a89460dd0b8" name)" Sakuya
+
+  t "resident_rows: a pending question or finished turn from the hooks shows as needing you"
+  fresh; rm -rf "$STATE_DIR/status"
+  rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/a pane=%1 window=stage1 mode=plan   # idle in the registry
+  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=Sakuya cwd=/b pane=%2 window=stage1            # waiting
+  rec 0b1c2d3e-0000-4000-8000-000000000003 slot=3 name=Youmu cwd=/c pane=%3 window=stage1             # null -> idle
+  status_write ed82e343-81ce-4b9e-8fdb-9b32d8136a5c stopped 'all tests pass'
+  status_write f2fe56c9-466e-4333-bed0-4a89460dd0b8 question 'Delete the branch?'
+  status_write 0b1c2d3e-0000-4000-8000-000000000003 '' '' acceptEdits
+  assert_eq "$(resident_rows | cut -d'|' -f1,3,4,8,9)" '1|Marisa|waiting|plan|all tests pass
+2|Sakuya|question||Delete the branch?
+3|Youmu|idle|acceptEdits|'
+  status_write ed82e343-81ce-4b9e-8fdb-9b32d8136a5c '' '' default   # the hook mode beats the launch mode
+  assert_eq "$(resident_rows | head -n 1 | cut -d'|' -f4,8)" 'idle|default'
+
+  t "resident_rows: busy clears a stale awaits/stopped flag, but not one newer than the registry snapshot"
+  fresh; rm -rf "$STATE_DIR/status"
+  printf '[{"pid": 1, "cwd": "/a", "kind": "interactive", "startedAt": 1, "sessionId": "aaaaaaaa-0000-4000-8000-000000000001", "name": "Reimu", "status": "busy"}]\n' > "$REGISTRY"
+  REG=$'\n'$(registry_filter)
+  rec aaaaaaaa-0000-4000-8000-000000000001 slot=1 name=Reimu cwd=/a pane=%1 window=stage1
+  status_write aaaaaaaa-0000-4000-8000-000000000001 stopped 'done'      # since = now > registry mtime? no: same second
+  printf 'pending=stopped\ndetail=done\nsince=%s\nmode=\n' "$(( $(date +%s) - 30 ))" > "$STATE_DIR/status/aaaaaaaa-0000-4000-8000-000000000001"
+  assert_eq "$(resident_rows | cut -d'|' -f4)" busy
+  assert_eq "$(rec_get "$STATE_DIR/status/aaaaaaaa-0000-4000-8000-000000000001" pending)" ''   # cleared: older than the snapshot
+  printf 'pending=stopped\ndetail=done\nsince=%s\nmode=\n' "$(( $(date +%s) + 30 ))" > "$STATE_DIR/status/aaaaaaaa-0000-4000-8000-000000000001"
+  assert_eq "$(resident_rows | cut -d'|' -f4)" busy
+  assert_eq "$(rec_get "$STATE_DIR/status/aaaaaaaa-0000-4000-8000-000000000001" pending)" stopped   # kept: a Stop that raced the snapshot
+  cp "$here/fixtures/agents.json" "$REGISTRY"; REG=$'\n'$(registry_filter)
 
   t "help --json lists every public command with plain name first and its alias"
   out=$("$root/bin/gensokyo" help --json)
@@ -188,6 +230,83 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'on PATH    no: run ./install.sh'
 }
 
+# The hooks Claude Code runs inside a resident: payloads piped to `gensokyo _hook`, no tmux
+# server (the toast and bell need one; the fake osascript logs the desktop alerts).
+payload() { printf '{"session_id":"%s","hook_event_name":"%s"%s}\n' "$1" "$2" "${3:-}"; }
+hook() { payload "$@" | "$root/bin/gensokyo" _hook; }
+notifications() { cat "$scratch/notify.log" 2>/dev/null; : > "$scratch/notify.log"; }
+hook_tests() {
+  local id=cafecafe-0000-4000-8000-000000000001 st=$STATE_DIR/status/cafecafe-0000-4000-8000-000000000001 out
+  if [ -z "$JQ_BIN" ]; then t "hook tests"; skip "no jq"; return; fi
+
+  t "status_write/status_load: since moves only when pending changes; mode is kept when not given"
+  fresh; rm -rf "$STATE_DIR/status"
+  status_write "$id" awaits 'permission: Bash' plan
+  status_load "$id"; out=$S_since
+  assert_eq "$S_pending|$S_detail|$S_mode" 'awaits|permission: Bash|plan'
+  assert_re "$out" '^[0-9]+$'
+  status_write "$id" awaits 'permission: Edit'
+  status_load "$id"
+  assert_eq "$S_since|$S_mode|$S_detail" "$out|plan|permission: Edit"
+  status_write "$id" '' '' ; status_load "$id"
+  assert_eq "$S_pending|$S_mode" '|plan'
+
+  t "launch_settings: the hooks Claude Code merges into the resident, all calling _hook"
+  out=$(launch_settings)
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.hooks | keys | join(",")')" 'Notification,PostToolUse,PreToolUse,Stop,UserPromptSubmit'
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.hooks.PreToolUse[0].matcher, .hooks.PostToolUse[0].matcher')" 'AskUserQuestion
+AskUserQuestion'
+  assert_eq "$(printf '%s' "$out" | jq_ -r '[.hooks[][].hooks[].command] | unique | .[]')" "'$SELF' _hook"
+
+  t "_hook: Stop marks the turn as awaiting you and notifies once; UserPromptSubmit clears and records the mode"
+  fresh; rm -rf "$STATE_DIR/status"; : > "$scratch/notify.log"
+  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=stage1
+  hook "$id" Stop ',"permission_mode":"default","last_assistant_message":"pong\nsecond line"'
+  assert_eq "$(cut -d= -f1,2 "$st" | grep -v since | tr '\n' ' ')" 'pending=stopped detail=pong mode=default '
+  assert_eq "$(notifications)" 'Reimu|Reimu is done: pong'
+  hook "$id" Stop ',"permission_mode":"default","last_assistant_message":"pong"'
+  assert_eq "$(notifications)" ''             # same waiting period: no second alert
+  hook "$id" UserPromptSubmit ',"permission_mode":"plan","prompt":"go on"'
+  assert_eq "$(cut -d= -f1,2 "$st" | grep -v since | tr '\n' ' ')" 'pending= detail= mode=plan '
+  assert_eq "$(notifications)" ''
+
+  t "_hook: permission prompt, question dialog open/close, idle_prompt as a late backup"
+  hook "$id" Notification ',"notification_type":"permission_prompt","message":"Claude needs your permission","tool_name":"Bash"'
+  assert_eq "$(rec_get "$st" pending)|$(rec_get "$st" detail)|$(rec_get "$st" mode)" 'awaits|permission: Bash|plan'
+  assert_eq "$(notifications)" 'Reimu|Reimu needs your permission (Bash)'
+  hook "$id" Notification ',"notification_type":"permission_prompt","message":"Claude needs your permission"'
+  assert_eq "$(rec_get "$st" detail)" ''
+  assert_eq "$(notifications)" ''
+  hook "$id" PreToolUse ',"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Delete the branch | yes/no?\nreally","header":"Branch"}]}'
+  assert_eq "$(rec_get "$st" pending)|$(rec_get "$st" detail)" 'question|Delete the branch   yes/no? really'
+  assert_eq "$(notifications)" 'Reimu|Reimu asks: Delete the branch   yes/no? really'
+  hook "$id" PostToolUse ',"tool_name":"AskUserQuestion","tool_response":{}'
+  assert_eq "$(rec_get "$st" pending)" ''
+  hook "$id" Notification ',"notification_type":"idle_prompt","message":"Claude is waiting for your input"'
+  assert_eq "$(rec_get "$st" pending)" stopped
+  assert_eq "$(notifications)" 'Reimu|Reimu is done'
+  hook "$id" Notification ',"notification_type":"idle_prompt","message":"Claude is waiting for your input"'
+  assert_eq "$(notifications)" ''
+  hook "$id" PreToolUse ',"tool_name":"Bash","tool_input":{"command":"ls"}'
+  assert_eq "$(rec_get "$st" pending)" stopped   # only AskUserQuestion matters
+
+  t "_hook: unknown sessions and garbage are ignored, stdout stays empty, exit 0"
+  out=$(hook dead-beef Stop ',"last_assistant_message":"x"' 2>&1; echo "rc=$?")
+  assert_eq "$out" 'rc=0'
+  assert_ok test ! -f "$STATE_DIR/status/dead-beef"
+  out=$(printf 'not json' | "$root/bin/gensokyo" _hook 2>&1; echo "rc=$?")
+  assert_eq "$out" 'rc=0'
+
+  t "_hook: NOTIFY_DESKTOP=off silences the desktop alert; the state still changes"
+  printf 'NOTIFY_DESKTOP=off\n' > "$CONFIG_DIR/config"
+  hook "$id" UserPromptSubmit ',"permission_mode":"default"'
+  hook "$id" Stop ',"permission_mode":"default","last_assistant_message":"quiet"'
+  assert_eq "$(rec_get "$st" pending)" stopped
+  assert_eq "$(notifications)" ''
+  rm -f "$CONFIG_DIR/config"
+  fresh; rm -rf "$STATE_DIR/status"
+}
+
 # install.sh: POSIX sh, run from the checkout into a scratch bin dir; --no-fetch keeps it offline.
 install_tests() {
   local out bin=$scratch/ibin
@@ -220,6 +339,16 @@ install_tests() {
 # A real tmux server on its own socket, stub claude in the panes.
 G=$root/bin/gensokyo
 tm() { "$TMUX_BIN" -L "$GENSOKYO_SOCKET" "$@"; }
+# attach_headless: an attached client without a terminal, through script(1)'s pty (BSD and
+# util-linux spellings); it lives until detach-client or kill-server.
+attach_headless() {
+  if script --version >/dev/null 2>&1; then
+    (script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET attach -t =gensokyo" /dev/null </dev/null >/dev/null 2>&1 &)
+  else
+    (script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" attach -t =gensokyo </dev/null >/dev/null 2>&1 &)
+  fi
+  pause 1
+}
 cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scratch"; }
 trap cleanup EXIT
 
@@ -255,7 +384,9 @@ smoke_tests() {
   assert_match "$args" "--session-id $id2 --name Beta"
   assert_match "$args" "--plugin-dir $root/share/plugin"
   assert_match "$args" '--append-system-prompt'
+  assert_match "$args" '--settings {"hooks":{"UserPromptSubmit"'
   assert_match "$args" '--model haiku --permission-mode plan'
+  assert_eq "$(rec_get "$RES_DIR/$id2" mode)" plan
   assert_nomatch "$(cat "$STUB_STATE/$id1.args")" '--model'
   assert_match "$(tm capture-pane -p -t "$pane1")" 'env CLAUDE*: 0'
 
@@ -278,6 +409,34 @@ smoke_tests() {
   assert_match "$out" '#[align=right]#[bg='"$CFG_COLOR_AWAIT"',fg=black] ✦ 1 '
   rm -f "$STUB_STATE/$id2.status"
   assert_match "$("$G" _border "$pane1" '✳ Alpha')" ' 1 Alpha · alpha '
+
+  t "smoke: a Stop hook turns the chip gold, rings the bell and alerts the desktop; typing clears it"
+  : > "$scratch/notify.log"
+  payload "$id1" Stop ',"permission_mode":"acceptEdits","last_assistant_message":"done here"' | TMUX_PANE=$pane1 "$G" _hook
+  rm -f "$REGISTRY"
+  assert_match "$("$G" _bar 1 "$pane2")" "#[bg=$CFG_COLOR_AWAIT,fg=black] 1 ✦ Alpha "
+  assert_eq "$(tm display -p -t =gensokyo:stage1 '#{window_bell_flag}')" 1
+  assert_eq "$(notifications)" 'Alpha|Alpha is done: done here'
+  assert_re "$("$G" list)" '^  1   ✦  Alpha .*waiting \(done here\)$'
+  assert_eq "$("$G" list --json | jq_ -r '.[0] | "\(.status) \(.permission_mode) \(.detail)"')" 'waiting acceptEdits done here'
+  assert_eq "$("$G" list --json | jq_ -r '.[1] | "\(.status) \(.permission_mode) \(.detail)"')" 'idle plan null'
+  payload "$id1" UserPromptSubmit ',"permission_mode":"acceptEdits"' | "$G" _hook
+  rm -f "$REGISTRY"
+  assert_match "$("$G" _bar 1 "$pane2")" '#[default] 1 ○ Alpha '
+
+  t "smoke: no desktop alert for the pane on screen in a client that was just used"
+  tm select-window -t =gensokyo:stage1 \; select-pane -t "$pane1"
+  attach_headless
+  if [ "$(tm list-clients 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then skip "could not attach a headless client (script(1))"; else
+    : > "$scratch/notify.log"
+    payload "$id1" Stop ',"permission_mode":"default","last_assistant_message":"seen"' | "$G" _hook
+    assert_eq "$(notifications)" ''
+    payload "$id2" Stop ',"permission_mode":"default","last_assistant_message":"unseen"' | "$G" _hook
+    assert_eq "$(notifications)" 'Beta|Beta is done: unseen'
+    tm detach-client; pause 0.3
+    assert_eq "$(tm list-clients 2>/dev/null | wc -l | tr -d ' ')" 0
+  fi
+  payload "$id1" UserPromptSubmit '' | "$G" _hook; payload "$id2" UserPromptSubmit '' | "$G" _hook
 
   t "smoke: focus by name and slot"
   assert_match "$("$G" focus beta)" 'focused Beta (slot 2)'
@@ -333,9 +492,9 @@ smoke_tests() {
 }
 
 case $what in
-  unit) unit_tests; install_tests ;;
+  unit) unit_tests; hook_tests; install_tests ;;
   smoke) smoke_tests ;;
-  all) unit_tests; install_tests; smoke_tests ;;
+  all) unit_tests; hook_tests; install_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

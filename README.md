@@ -16,13 +16,14 @@ macOS and Linux, arm64 and x86_64.
 
 | Tool | Why | Install |
 |---|---|---|
-| `shellcheck` | every commit is shellcheck-clean (`shellcheck -s bash bin/gensokyo tests/run.sh`, `-s sh install.sh scripts/vendor.sh`) | `brew install shellcheck` |
+| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh scripts/vendor.sh`; `-x` follows the `lib/*.sh` sources) | `brew install shellcheck` |
 | `curl` | fetches the vendored binaries | preinstalled on macOS |
 | Docker (optional) | run the Linux vendor binaries in `debian:stable-slim` | https://docker.com |
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
 
-`/bin/bash` 3.2 is the target for `bin/gensokyo`; `install.sh` and `scripts/*.sh`
-are POSIX `sh`. Do not use bash 4 features.
+`/bin/bash` 3.2 is the target for `bin/gensokyo` and the `lib/*.sh` files it sources
+(records, registry, tmux server, cockpit keys and bar, resident commands); `install.sh` and
+`scripts/*.sh` are POSIX `sh`. Do not use bash 4 features.
 
 ## Developing
 

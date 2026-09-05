@@ -68,7 +68,7 @@ trap : INT   # Claude Code survives Ctrl-C (it clears the input); so does the st
 
 printf '\033]2;✳ %s\007' "$name"
 echo "stub-claude $name ($id)${resume:+ resumed}"
-echo "env CLAUDE*: $(env | grep -c '^CLAUDE')"
+echo "env CLAUDE*: $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | grep -c -v -x CLAUDE_CONFIG_DIR)"
 [ -n "$prompt" ] && echo "> $prompt"
 while :; do
   IFS= read -r line; rc=$?

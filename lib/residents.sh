@@ -40,6 +40,7 @@ cmd_new() {
   {
     printf 'slot=%s\nname=%s\ncwd=%s\nwindow=%s\nlaunched=%s\nargs=%s\n' "$slot" "$name" "$dir" "$stage" "$(date +%s)" "${argstr# }"
     [ -n "$prompt" ] && printf 'prompt=%s\n' "$prompt"
+    [ -n "$mode" ] && printf 'mode=%s\n' "$mode"   # shown until the first prompt reports the live mode
   } > "$rec"
 
   # Stage windows hold CFG_STAGE_SIZE residents each. The first resident of a stage replaces
@@ -88,7 +89,7 @@ cmd_close() {
 }
 
 cmd_list() {
-  local json='' all='' wait='' rows='' id status name cwd slot state pane win
+  local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;; --all) all=1 ;; --wait) wait=1 ;;
@@ -103,7 +104,7 @@ cmd_list() {
     while IFS='|' read -r id status name cwd _; do
       [ -n "$id" ] || continue
       [ -f "$RES_DIR/$id" ] && continue
-      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside"
+      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside||"
     done <<EOF
 $REG
 EOF
@@ -112,25 +113,27 @@ EOF
   if [ -n "$json" ]; then
     # shellcheck disable=SC2016
     printf '%s\n' "$rows" | jq_ -R -s '
+      def opt: if . == "" or . == "-" then null else . end;
       split("\n") | map(select(length > 0) | split("|"))
-      | map({slot: (if .[0] == "-" then null else (.[0] | tonumber) end), session_id: .[1], name: .[2],
-             status: .[3], cwd: .[4], pane: (if .[5] == "-" then null else .[5] end),
-             window: .[6], outside: (.[6] == "outside")})'
+      | map({slot: (.[0] | opt | if . == null then null else tonumber end), session_id: .[1], name: .[2],
+             status: .[3], cwd: .[4], pane: (.[5] | opt), window: .[6], outside: (.[6] == "outside"),
+             permission_mode: (.[7] | opt), detail: (.[8] | opt)})'
     return 0
   fi
   if [ -z "$rows" ]; then
     say "nobody is here yet: gensokyo new [dir] [-n name]"
   else
     printf '  %-3s %-2s %-16s %-36s %s\n' '#' '' name directory session
-    while IFS='|' read -r slot id name state cwd pane win; do
+    while IFS='|' read -r slot id name state cwd pane win mode detail; do
       [ -n "$slot" ] || continue
       [ "$slot" = - ] && slot=' '
-      printf '  %-3s %s  %-16s %-36s %s  %s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" "$state"
+      printf '  %-3s %s  %-16s %-36s %s  %s%s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" \
+        "$state" "${detail:+ ($detail)}"
     done <<EOF
 $rows
 EOF
     say
-    say "  ● busy  ✦ awaits you  ○ resting  · departed"
+    say "  ● busy  ✦ awaits you  ✧ asked you a question  ○ resting  · departed"
   fi
   if [ -n "$wait" ]; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
   return 0
@@ -172,6 +175,7 @@ cmd__run() {
   args=$(rec_get "$rec" args); prompt=$(rec_get "$rec" prompt); resume=$(rec_get "$rec" resume)
   rec_set "$rec" pane "${TMUX_PANE:-}"
   rec_del "$rec" departed
+  rm -f "$STATE_DIR/status/$id"   # a fresh launch waits for nothing yet
   cd "$cwd" || die "cannot cd to $cwd"
   scrub_env
   # The handbook skill runs the CLI; from a checkout `gensokyo` is not on PATH, so pass it.
@@ -180,10 +184,11 @@ cmd__run() {
   # A trap with a command is reset to the default in the child, so claude sees nothing special.
   trap : INT
   eval "set -- $args"
-  # Every resident, recalled or new, gets the plugin (handbook skill) and the short paragraph
-  # that makes Claude reach for the skill instead of guessing; both are per-session flags,
-  # nothing in ~/.claude changes.
-  set -- --plugin-dir "$SHARE/plugin" --append-system-prompt "$(system_paragraph "$name")" "$@"
+  # Every resident, recalled or new, gets the hooks (lib/hooks.sh), the plugin (handbook skill)
+  # and the short paragraph that makes Claude reach for the skill instead of guessing; all are
+  # per-session flags, nothing in ~/.claude changes.
+  set -- --settings "$(launch_settings)" --plugin-dir "$SHARE/plugin" \
+    --append-system-prompt "$(system_paragraph "$name")" "$@"
   if [ -n "$resume" ]; then
     # Recall: same session id and transcript; Claude Code keeps the name it had.
     claude_ --resume "$id" "$@"
@@ -222,7 +227,7 @@ departed_screen() {
 # become the shrine instead so the tmux server survives.
 close_pane() {
   local id=$1 panes
-  rm -f "$RES_DIR/$id"
+  drop_record "$RES_DIR/$id"
   panes=$(tmux_ list-panes -s -F '#{pane_id}' 2>/dev/null | wc -l | tr -d ' ')
   if [ "${panes:-0}" -le 1 ]; then exec "$SELF" _shrine; fi
   exit 0

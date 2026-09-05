@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, live panes, zoom to focus, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list, the status bar, the "needs you" notifications and the per-resident telemetry (model, context, cost, usage) work; recall, broadcasts and schedules are not there yet.
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications and the per-resident telemetry (model, context, cost, usage) work; broadcasts and schedules are not there yet.
 
 ## Requirements
 
@@ -22,7 +22,7 @@ macOS and Linux, arm64 and x86_64.
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
 
 `/bin/bash` 3.2 is the target for `bin/gensokyo` and the `lib/*.sh` files it sources
-(records, registry, tmux server, cockpit keys and bar, resident commands, hooks and
+(records, registry, tmux server, cockpit keys and bar, resident commands, recall, hooks and
 notifications, telemetry); `install.sh` and `scripts/*.sh` are POSIX `sh`. Do not use bash 4 features.
 
 ## Developing
@@ -35,6 +35,7 @@ bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, se
 bin/gensokyo               # start the cockpit (Ctrl-Space then ? lists the keys)
 bin/gensokyo help          # command list; --json is what the resident skill reads
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a pane; close <name>, list, focus <name>, stage <layout>
+bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
 ```
 
@@ -70,6 +71,24 @@ on screen in a client you touched in the last ten seconds, and nothing repeats w
 keeps waiting. Typing in the resident clears the flag. `~/.config/gensokyo/config` can set
 `NOTIFY_TOAST`, `NOTIFY_DESKTOP` or `NOTIFY_BELL` to `off`. macOS asks once whether your terminal
 application may show notifications; `gensokyo doctor` reminds you.
+
+## Departing and coming back
+
+`gensokyo close Youmu` (or `/exit` inside the pane) ends the Claude Code session; the pane
+stays and shows `Youmu has left the shrine` with `r` to recall and `x` to close. The session
+is Claude Code's, so it can be resumed as long as its transcript exists under
+`~/.claude/projects/`. `gensokyo resume Youmu` (name, slot or session id; `recall` is the
+same command) brings a departed resident back: into its pane if that is still open, otherwise
+into a new slot. `gensokyo resume` alone lists everyone who has departed, newest first,
+including residents from earlier runs of the cockpit (their records move to the state
+directory's `departed/` when the tmux server restarts); `--json` gives the same to tools.
+`Ctrl-Space g r` is the menu of the same list. A recalled resident keeps its session id, name
+and transcript, gets the same launch flags as at summon time, and the hooks and status line
+again; the first prompt given at summon is not replayed.
+
+Claude Code asks its workspace trust question the first time it runs in a directory. That
+dialog appears inside the pane like any other prompt; the hooks do not fire before it is
+answered, so a fresh resident that sits in `starting` for long is usually waiting for that.
 
 ## What each resident reports
 

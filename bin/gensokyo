@@ -145,6 +145,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/cockpit.sh" || exit 1
 # shellcheck source=../lib/residents.sh
 . "$LIB/residents.sh" || exit 1
+# shellcheck source=../lib/recall.sh
+. "$LIB/recall.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh
@@ -227,6 +229,7 @@ command_table() {
 |||start or attach the cockpit  (--detach: server only, --nested: inside another tmux)
 new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a pane
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
+resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
 focus||<name or slot>|show that resident's pane
 stage||[tiled/main-vertical/even-horizontal]|arrange the panes of every stage window
@@ -283,13 +286,13 @@ main() {
     list|who) shift; cmd_list "$@" ;;
     focus) shift; cmd_focus "$@" ;;
     stage) shift; cmd_stage "$@" ;;
-    recall) cmd__not_yet resume ;;
+    resume|recall) shift; cmd_resume "$@" ;;
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
-    resume|broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
+    broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
       shift; "cmd_$cmd" "$@" ;;
-    _menu-recall|_menu-spell|_menu-message|_menu-timetable)
+    _menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;
     *) die "unknown command: $cmd (see: gensokyo help)" ;;
   esac

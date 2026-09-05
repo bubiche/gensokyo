@@ -232,9 +232,10 @@ smoke_tests() {
   fresh; rm -f "$REGISTRY"
 
   t "smoke: --detach starts the server with a shrine pane and an empty bar"
-  out=$("$G" --detach 2>&1)
+  out=$(cd "$scratch/work" && : > a && "$G" --detach 2>&1)   # a one-letter file: `?` must not glob
   assert_match "$out" 'running detached'
   assert_ok tm has-session -t =gensokyo
+  assert_re "$(tm list-keys -T prefix)" '-T prefix +\? +display-popup .*_keys'
   assert_match "$("$G" _bar 1 %0)" 'no residents yet'
   assert_match "$("$G" list)" 'nobody is here yet'
 
@@ -244,6 +245,7 @@ smoke_tests() {
   out=$("$G" new "$scratch/work/beta" -n Beta -m haiku -p plan 2>&1)
   assert_match "$out" 'summoned Beta (slot 2)'
   assert_fails "$G" new "$scratch/work/beta" -n alpha
+  assert_fails "$G" new "$scratch/work/beta" -n 7
   pause 1.5
   id1=$(basename "$(find_resident Alpha)"); id2=$(basename "$(find_resident Beta)")
   pane1=$(rec_get "$RES_DIR/$id1" pane); pane2=$(rec_get "$RES_DIR/$id2" pane)

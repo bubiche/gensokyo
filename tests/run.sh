@@ -22,6 +22,7 @@ scratch=${TMPDIR:-/tmp}/gensokyo-tests.$$
 mkdir -p "$scratch"; scratch=$(cd "$scratch" && pwd)   # TMPDIR may end in a slash
 export GENSOKYO_STATE_DIR=$scratch/state GENSOKYO_CONFIG_DIR=$scratch/config
 export GENSOKYO_SOCKET=gtest$$ GENSOKYO_CLAUDE=$root/tests/stub-claude
+export CLAUDE_CONFIG_DIR=$scratch/cc   # a stand-in ~/.claude: the status line tests need a known settings.json
 export STUB_STATE=$scratch/stub
 export HOME=${HOME:-/tmp}
 unset TMUX TMUX_PANE
@@ -30,6 +31,10 @@ unset TMUX TMUX_PANE
 mkdir -p "$scratch/fakebin"
 printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${@: -2:1}" "${@: -1}" >> "%s"\n' "$scratch/notify.log" > "$scratch/fakebin/osascript"
 cp "$scratch/fakebin/osascript" "$scratch/fakebin/notify-send"; chmod +x "$scratch/fakebin"/*
+# The stand-in user status line command: keeps the JSON it was given, prints one known line.
+printf '#!/bin/bash\ncat > "%s/sl.in"; echo "USER LINE"\n' "$scratch" > "$scratch/fakebin/userline"; chmod +x "$scratch/fakebin/userline"
+mkdir -p "$scratch/cc" "$scratch/cc-empty"
+printf '{"statusLine": {"type": "command", "command": "%s/fakebin/userline", "padding": 1}, "advisorModel": "opus"}\n' "$scratch" > "$scratch/cc/settings.json"
 export PATH=$scratch/fakebin:$PATH
 
 pass=0 fail=0 skipped=0 current=''
@@ -152,10 +157,10 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=OldName cwd=/Users/me/dev/beta pane=%2 window=stage1
   rec 33333333-cccc-4000-8000-000000000003 slot=3 name=Youmu cwd=/tmp pane=%3 window=stage1 departed=1
   rec 44444444-dddd-4000-8000-000000000004 slot=4 name=Cirno cwd=/tmp window=stage1
-  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|stage1||
-2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|stage1||
-3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|stage1||
-4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|stage1||'
+  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|stage1|||||||||||||||
+2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|stage1|||||||||||||||
+3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|stage1|||||||||||||||
+4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|stage1|||||||||||||||'
   assert_eq "$(rec_get "$RES_DIR/f2fe56c9-466e-4333-bed0-4a89460dd0b8" name)" Sakuya
 
   t "resident_rows: a pending question or finished turn from the hooks shows as needing you"
@@ -251,12 +256,15 @@ hook_tests() {
   status_write "$id" '' '' ; status_load "$id"
   assert_eq "$S_pending|$S_mode" '|plan'
 
-  t "launch_settings: the hooks Claude Code merges into the resident, all calling _hook"
-  out=$(launch_settings)
+  t "launch_settings: the hooks Claude Code merges into the resident, all calling _hook; the status line wrapper with the user's padding"
+  out=$(launch_settings "$id" /tmp)
   assert_eq "$(printf '%s' "$out" | jq_ -r '.hooks | keys | join(",")')" 'Notification,PostToolUse,PreToolUse,Stop,UserPromptSubmit'
   assert_eq "$(printf '%s' "$out" | jq_ -r '.hooks.PreToolUse[0].matcher, .hooks.PostToolUse[0].matcher')" 'AskUserQuestion
 AskUserQuestion'
   assert_eq "$(printf '%s' "$out" | jq_ -r '[.hooks[][].hooks[].command] | unique | .[]')" "'$SELF' _hook"
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.statusLine | "\(.type) \(.command) \(.padding)"')" "command '$SELF' _statusline '$id' 1"
+  out=$(CLAUDE_DIR=$scratch/cc-empty launch_settings "$id" /tmp)
+  assert_eq "$(printf '%s' "$out" | jq_ -c '.statusLine | keys')" '["command","type"]'
 
   t "_hook: Stop marks the turn as awaiting you and notifies once; UserPromptSubmit clears and records the mode"
   fresh; rm -rf "$STATE_DIR/status"; : > "$scratch/notify.log"
@@ -307,6 +315,76 @@ AskUserQuestion'
   fresh; rm -rf "$STATE_DIR/status"
 }
 
+# The status line wrapper and what the bar, border and list make of its digest.
+telemetry_tests() {
+  local id=cafecafe-0000-4000-8000-000000000002 id2=cafecafe-0000-4000-8000-000000000003 out now
+  if [ -z "$JQ_BIN" ]; then t "telemetry tests"; skip "no jq"; return; fi
+
+  t "git_branch reads .git/HEAD walking up, follows worktree files, shows a detached head short; nothing outside a repo"
+  mkdir -p "$scratch/repo/.git/worktrees/wt" "$scratch/repo/sub/dir" "$scratch/wt" "$scratch/norepo"
+  echo 'ref: refs/heads/feature/x' > "$scratch/repo/.git/HEAD"
+  assert_eq "$(git_branch "$scratch/repo/sub/dir")" feature/x
+  echo 'abcdef1234567890' > "$scratch/repo/.git/HEAD"
+  assert_eq "$(git_branch "$scratch/repo")" abcdef1
+  printf 'gitdir: %s/repo/.git/worktrees/wt\n' "$scratch" > "$scratch/wt/.git"
+  echo 'ref: refs/heads/wt-branch' > "$scratch/repo/.git/worktrees/wt/HEAD"
+  assert_eq "$(git_branch "$scratch/wt")" wt-branch
+  assert_eq "$(git_branch "$scratch/norepo")" ''
+
+  t "formatting: pct_bar, fmt_eta, fmt_age, fmt_cost, mode_label, model_short, tele_fields leaves unknowns out"
+  assert_eq "$(pct_bar 0)|$(pct_bar 36)|$(pct_bar 100)|$(pct_bar 250)" '░░░░░░░░░░|▓▓▓░░░░░░░|▓▓▓▓▓▓▓▓▓▓|▓▓▓▓▓▓▓▓▓▓'
+  assert_eq "$(fmt_eta 7860) $(fmt_eta 275000) $(fmt_eta 840) $(fmt_eta 0)" '2h11m 3d4h 14m now'
+  assert_eq "$(fmt_age 12) $(fmt_age 200) $(fmt_age 7200) $(fmt_age 90000)" '12s 3m 2h 1d'
+  assert_eq "$(fmt_cost 0.18978) $(fmt_cost 12)" '$0.19 $12.00'
+  assert_eq "$(mode_label acceptEdits)/$(mode_label bypassPermissions)/$(mode_label dontAsk)/$(mode_label plan)" 'accept-edits/bypass/dont-ask/plan'
+  assert_eq "$(model_short 'Sonnet 5')|$(model_short Fable)" 'Sonnet|Fable'
+  assert_eq "$(tele_fields 'Sonnet 5' 42 high 91 88 0.42 main opus acceptEdits)" 'Sonnet 5→⚖ Opus · high · accept-edits · ⚡91% · $0.42'
+  assert_eq "$(fmt_tokens 1000000) $(fmt_tokens 200000) $(fmt_tokens 999)" '1M 200k 999'
+  assert_eq "$(tele_fields 'Sonnet 5' 42 high 91 88 0.42 main opus acceptEdits verbose)" 'Sonnet 5→⚖ Opus · ctx 42% · high · accept-edits · ⚡91% (turn 88%) · $0.42 · ⎇ main'
+  assert_eq "$(tele_fields Haiku '' '' '' '' '' '' '' '')" 'Haiku'
+  assert_eq "$(tele_fields '' '' '' '' '' '' main '' plan)" 'plan'
+
+  t "_statusline: keeps the JSON and a digest, then prints gensokyo's own status line"
+  fresh; rm -rf "$TELE_DIR"
+  rec "$id" slot=1 name=Reimu cwd=/tmp pane=%9 window=stage1
+  out=$("$root/bin/gensokyo" _statusline "$id" < "$here/fixtures/statusline.json")
+  assert_eq "$out" 'Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m'
+  assert_eq "$(jq_ -r .model.display_name "$TELE_DIR/$id.json")" 'Sonnet 5'
+  tele_load "$id"
+  assert_eq "$T_model|$T_ctx|$T_effort|$T_cache|$T_tcache|$T_cost|$T_five|$T_five_reset|$T_week|$T_week_reset|$T_advisor|$T_added|$T_removed|$T_dur" \
+    'Sonnet 5|5|medium|93|99|0.18978259999999997|36|1788543000|49|1788595200|opus|8|0|325'
+  assert_re "$T_at" '^[0-9]+$'
+
+  t "_statusline: a sparse report (haiku, API key: no effort, no rate limits, no usage yet) leaves fields empty"
+  out=$(jq_ 'del(.effort, .rate_limits, .prompt_cache, .cost) | .context_window.current_usage = null' "$here/fixtures/statusline.json" \
+    | "$root/bin/gensokyo" _statusline "$id")
+  assert_eq "$out" 'Sonnet 5→⚖ Opus · ░░░░░░░░░░ 5% of 1M'
+  tele_load "$id"
+  assert_eq "$T_model|$T_ctx|$T_effort|$T_cache|$T_tcache|$T_five|$T_week" 'Sonnet 5|5|||||'
+  assert_eq "$(usage_text)" ''
+
+  t "_statusline: STATUSLINE=user runs the user's own status line command with the same JSON; own line when they have none"
+  printf 'STATUSLINE=user\n' > "$CONFIG_DIR/config"
+  out=$("$root/bin/gensokyo" _statusline "$id" < "$here/fixtures/statusline.json")
+  assert_eq "$out" 'USER LINE'
+  assert_eq "$(jq_ -r .session_id "$scratch/sl.in")" f2fe56c9-466e-4333-bed0-4a89460dd0b8
+  out=$(CLAUDE_CONFIG_DIR=$scratch/cc-empty "$root/bin/gensokyo" _statusline "$id" < "$here/fixtures/statusline.json")
+  assert_match "$out" 'Sonnet 5 · medium · ░░░░░░░░░░ 5% of 1M'
+  assert_eq "$(rec_get "$TELE_DIR/$id.kv" advisor)" ''
+  rm -f "$CONFIG_DIR/config"
+
+  t "usage_text: newest digest with rate limits wins; countdowns only for resets still ahead"
+  now=$(date +%s)
+  printf 'five=36\nfive_reset=%s\nweek=49\nweek_reset=%s\nat=%s\n' "$((now + 7900))" "$((now + 275000))" "$now" > "$TELE_DIR/$id.kv"
+  printf 'five=80\nfive_reset=%s\nweek=90\nweek_reset=%s\nat=%s\n' "$((now + 100))" "$((now + 100))" "$((now - 60))" > "$TELE_DIR/$id2.kv"
+  assert_eq "$(usage_text)" '5h ▓▓▓░░░░░░░ 36% ↻2h11m   wk ▓▓▓▓░░░░░░ 49% ↻3d4h'
+  printf 'five=36\nfive_reset=%s\nweek=49\nweek_reset=\nat=%s\n' "$((now - 5))" "$now" > "$TELE_DIR/$id.kv"
+  assert_eq "$(usage_text)" '5h ▓▓▓░░░░░░░ 36%   wk ▓▓▓▓░░░░░░ 49%'
+  rm -f "$TELE_DIR/$id.kv"
+  assert_eq "$(usage_text)" '5h ▓▓▓▓▓▓▓▓░░ 80% ↻1m   wk ▓▓▓▓▓▓▓▓▓░ 90% ↻1m'
+  fresh; rm -rf "$TELE_DIR"
+}
+
 # install.sh: POSIX sh, run from the checkout into a scratch bin dir; --no-fetch keeps it offline.
 install_tests() {
   local out bin=$scratch/ibin
@@ -340,12 +418,14 @@ install_tests() {
 G=$root/bin/gensokyo
 tm() { "$TMUX_BIN" -L "$GENSOKYO_SOCKET" "$@"; }
 # attach_headless: an attached client without a terminal, through script(1)'s pty (BSD and
-# util-linux spellings); it lives until detach-client or kill-server.
+# util-linux spellings); it lives until detach-client or kill-server. Its stdin is a pipe that
+# stays open for a minute: script forwards an EOF on stdin as Ctrl-D into the pty, and the
+# client would type that into the active pane (the stub exits on it, Claude Code asks twice).
 attach_headless() {
   if script --version >/dev/null 2>&1; then
-    (script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET attach -t =gensokyo" /dev/null </dev/null >/dev/null 2>&1 &)
+    (sleep 60 | script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET attach -t =gensokyo" /dev/null >/dev/null 2>&1 &)
   else
-    (script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" attach -t =gensokyo </dev/null >/dev/null 2>&1 &)
+    (sleep 60 | script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" attach -t =gensokyo >/dev/null 2>&1 &)
   fi
   pause 1
 }
@@ -438,6 +518,28 @@ smoke_tests() {
   fi
   payload "$id1" UserPromptSubmit '' | "$G" _hook; payload "$id2" UserPromptSubmit '' | "$G" _hook
 
+  t "smoke: a status line report puts model and context in the chip, telemetry in the border, usage in row 2 and everything in list"
+  mkdir -p "$scratch/work/alpha/.git"; echo 'ref: refs/heads/main' > "$scratch/work/alpha/.git/HEAD"
+  jq_ --arg id "$id1" --argjson now "$(date +%s)" \
+    '.session_id = $id | .rate_limits.five_hour.resets_at = $now + 7900 | .rate_limits.seven_day.resets_at = $now + 275000' \
+    "$here/fixtures/statusline.json" > "$scratch/sl.json"
+  assert_eq "$("$G" _statusline "$id1" < "$scratch/sl.json")" 'Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m'
+  rm -f "$REGISTRY"
+  assert_match "$("$G" _bar 1 "$pane2")" '#[default] 1 ○ Alpha Sonnet 5% #[default]│#[bold] 2 ○ Beta #[default]'
+  assert_match "$("$G" _bar 2)" '#[align=right]5h ▓▓▓░░░░░░░ 36% ↻2h11m   wk ▓▓▓▓░░░░░░ 49% ↻3d4h '
+  payload "$id1" UserPromptSubmit ',"permission_mode":"plan"' | "$G" _hook
+  assert_eq "$("$G" _border "$pane1" '✳ Alpha')" ' 1 Alpha · alpha ⎇ main · Sonnet 5→⚖ Opus · medium · plan · ⚡93% · $0.19 '
+  assert_eq "$("$G" _border "$pane2" '✳ Beta')" ' 2 Beta · beta · default '   # the Stop above reported default
+  out=$("$G" list --json)
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.[0] | .telemetry | "\(.model) \(.context_pct) \(.effort) \(.cache_pct) \(.turn_cache_pct) \(.advisor) \(.five_hour.used_pct) \(.seven_day.used_pct) \(.cost_usd)"')" \
+    'Sonnet 5 5 medium 93 99 opus 36 49 0.18978259999999997'
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.[0].branch, .[1].branch, .[1].telemetry')" 'main
+null
+null'
+  out=$("$G" list)
+  assert_match "$out" 'Sonnet 5→⚖ Opus · ctx 5% · medium · plan · ⚡93% (turn 99%) · $0.19 · ⎇ main · '
+  assert_match "$out" '  usage  5h ▓▓▓░░░░░░░ 36% ↻2h11m   wk ▓▓▓▓░░░░░░ 49% ↻3d4h   ('
+
   t "smoke: focus by name and slot"
   assert_match "$("$G" focus beta)" 'focused Beta (slot 2)'
   assert_eq "$(tm display -p -t =gensokyo:stage1 '#{pane_id}')" "$pane2"
@@ -492,9 +594,9 @@ smoke_tests() {
 }
 
 case $what in
-  unit) unit_tests; hook_tests; install_tests ;;
+  unit) unit_tests; hook_tests; telemetry_tests; install_tests ;;
   smoke) smoke_tests ;;
-  all) unit_tests; hook_tests; install_tests; smoke_tests ;;
+  all) unit_tests; hook_tests; telemetry_tests; install_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

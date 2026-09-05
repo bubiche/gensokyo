@@ -71,6 +71,7 @@ CFG_MOUSE=off
 CFG_NOTIFY_TOAST=on         # "needs you" channels: tmux message, desktop alert, terminal bell
 CFG_NOTIFY_DESKTOP=on
 CFG_NOTIFY_BELL=on
+CFG_STATUSLINE=own          # the line at the bottom of each pane: own (gensokyo's) or user (your Claude Code statusLine command)
 
 load_config() {
   local line key
@@ -146,6 +147,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/residents.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
+# shellcheck source=../lib/telemetry.sh
+. "$LIB/telemetry.sh" || exit 1
 
 # ---------------------------------------------------------------- doctor / help / version
 cmd_doctor() {
@@ -193,6 +196,14 @@ cmd_doctor() {
   say "  prefix     $CFG_PREFIX ($(prefix_label))"
   say "  needs you  toast=$CFG_NOTIFY_TOAST desktop=$CFG_NOTIFY_DESKTOP ($(desktop_notifier)) bell=$CFG_NOTIFY_BELL  (config: NOTIFY_TOAST/NOTIFY_DESKTOP/NOTIFY_BELL=off)"
   [ "$(desktop_notifier)" = osascript ] && say "             macOS asks once to allow notifications from your terminal application; say yes"
+  v=''; [ -n "$JQ_BIN" ] && v=$(settings_value "$PWD" '.statusLine.command')
+  if [ "$CFG_STATUSLINE" = user ] && [ -n "$v" ]; then
+    say "  status line  yours, run by gensokyo after it records the numbers: $v  (config: STATUSLINE=own for gensokyo's)"
+  elif [ "$CFG_STATUSLINE" = user ]; then
+    say "  status line  gensokyo's own (STATUSLINE=user set, but no statusLine command in your Claude Code settings)"
+  else
+    say "  status line  gensokyo's own in every pane${v:+  (config: STATUSLINE=user runs yours instead: $v)}"
+  fi
   if [ -n "$TMUX_BIN" ] && server_running; then
     say "  server     running (tmux -L $SOCKET), $(count_records) resident record(s)"
     v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
@@ -276,7 +287,7 @@ main() {
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     resume|broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish)
       shift; "cmd_$cmd" "$@" ;;
     _menu-recall|_menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

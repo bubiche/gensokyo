@@ -18,20 +18,28 @@ settings_value() {
   jq_ -r -s "[.[] | $expr | select(. != null)][0] // empty" "${files[@]}" 2>/dev/null
 }
 
-# launch_settings: the JSON passed as `claude --settings` to every resident. Hook entries merge
-# with the user's own hooks (Claude Code merges hooks across settings levels), so nothing of
-# theirs is lost. Every event runs `gensokyo _hook` with the payload on stdin. Only the events
-# the cockpit needs are wired: prompt typed, turn ended, permission and idle notifications,
-# and a question dialog opening and closing.
+# launch_settings <id> <cwd>: the JSON passed as `claude --settings` to every resident. Hook
+# entries merge with the user's own hooks (Claude Code merges hooks across settings levels),
+# so nothing of theirs is lost. Every event runs `gensokyo _hook` with the payload on stdin.
+# Only the events the cockpit needs are wired: prompt typed, turn ended, permission and idle
+# notifications, and a question dialog opening and closing. statusLine is a single key that
+# this replaces for the session, so it points at `gensokyo _statusline <id>`, which records
+# the JSON and then runs the user's own status line command (lib/telemetry.sh); their
+# padding setting is carried over.
 launch_settings() {
-  jq_ -n -c --arg self "$SELF" '
+  local id=${1:-} cwd=${2:-} pad
+  pad=$(settings_value "$cwd" '.statusLine.padding')
+  # shellcheck disable=SC2016
+  jq_ -n -c --arg self "$SELF" --arg id "$id" --arg pad "$pad" '
     {type: "command", command: (($self | @sh) + " _hook")} as $h
     | {hooks: {
         UserPromptSubmit: [{hooks: [$h]}],
         Stop:             [{hooks: [$h]}],
         Notification:     [{hooks: [$h]}],
         PreToolUse:       [{matcher: "AskUserQuestion", hooks: [$h]}],
-        PostToolUse:      [{matcher: "AskUserQuestion", hooks: [$h]}]}}'
+        PostToolUse:      [{matcher: "AskUserQuestion", hooks: [$h]}]},
+       statusLine: ({type: "command", command: (($self | @sh) + " _statusline " + ($id | @sh))}
+                    + (if $pad == "" then {} else {padding: ($pad | tonumber)} end))}'
 }
 
 # ---------------------------------------------------------------- status files

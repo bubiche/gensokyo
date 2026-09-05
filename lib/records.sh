@@ -35,7 +35,7 @@ rec_load() {
   load_kv "$1" R slot name cwd pane window launched args prompt mode departed exit resume
 }
 
-ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$CONFIG_DIR"; }
+ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$STATE_DIR/statusline" "$CONFIG_DIR"; }
 count_records() { find "$RES_DIR" -type f 2>/dev/null | wc -l | tr -d ' '; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # tilde <path> [max]: ~ for $HOME; longer than max characters -> "…" plus the tail.
@@ -81,7 +81,7 @@ archive_records() {
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
     mkdir -p "$STATE_DIR/departed" && mv "$f" "$STATE_DIR/departed/"
-    rm -f "$STATE_DIR/status/${f##*/}"
+    drop_side_files "${f##*/}"
   done
 }
 
@@ -102,7 +102,9 @@ prune_records() {
     fi
   done
 }
-drop_record() { rm -f "$1" "$STATE_DIR/status/${1##*/}"; }   # the record and its status file
+# drop_record <record>: the record and everything the hooks and status line kept for it.
+drop_record() { rm -f "$1"; drop_side_files "${1##*/}"; }
+drop_side_files() { rm -f "$STATE_DIR/status/$1" "$STATE_DIR/statusline/$1.json" "$STATE_DIR/statusline/$1.kv"; }
 
 pick_name() {
   local file=$SHARE/names.txt used='' f n free

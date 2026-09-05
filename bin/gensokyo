@@ -229,6 +229,12 @@ cmd_doctor() {
     say "  clients    $(client_summary)"
     [ "$(clients_in_mode cc)" -gt 0 ] && [ "$(clients_in_mode tty)" -gt 0 ] &&
       say "             both kinds at once: one status bar serves the whole server, so detach one of them"
+    v=$(clock_age)
+    if [ -n "$v" ] && [ "$v" -lt 30 ]; then
+      say "  clock      ticking (last tick ${v}s ago); it pushes the chips into iTerm2's status bar"
+    else
+      say "  clock      NOT ticking${v:+ (last tick ${v}s ago)}: the chips will not move; 'gensokyo' starts one"
+    fi
     v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
     if [ -n "$v" ]; then
       say "  env        WARNING: server environment carries $v(residents would hide from the registry)"
@@ -311,7 +317,7 @@ main() {
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_cycle|_layout|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
       shift; "cmd_$cmd" "$@" ;;
     _menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

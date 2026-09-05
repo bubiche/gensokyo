@@ -255,6 +255,21 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$("$root/bin/gensokyo" help)" '--tty: plain tmux client'
   assert_fails "$root/bin/gensokyo" --cc
   assert_match "$("$root/bin/gensokyo" --cc 2>&1)" 'unknown option: --cc'
+
+  t "bar_escape doubles the two characters tmux would eat before iTerm2 sees the text"
+  assert_eq "$(bar_escape '1 ✦ Reimu 42% | p#{x}')" '1 ✦ Reimu 42%% | p##{x}'
+  assert_eq "$(bar_escape '')" ''
+
+  t "the pushed bar is plain text; with nobody here it says so without naming a key"
+  fresh; rm -f "$REGISTRY"
+  assert_eq "$(cmd__bar 1 '' plain)" ' ⛩ gensokyo  no residents yet '
+  assert_match "$(cmd__bar 1 '')" 'then g n to summon'
+
+  t "clock_age is empty until the clock has ticked once"
+  rm -f "$STATE_DIR/clock"
+  assert_eq "$(clock_age)" ''
+  : > "$STATE_DIR/clock"
+  assert_re "$(clock_age)" '^[0-9]+$'
 }
 
 # The hooks Claude Code runs inside a resident: payloads piped to `gensokyo _hook`, no tmux
@@ -479,11 +494,13 @@ tm() { "$TMUX_BIN" -L "$GENSOKYO_SOCKET" "$@"; }
 # util-linux spellings); it lives until detach-client or kill-server. Its stdin is a pipe that
 # stays open for a minute: script forwards an EOF on stdin as Ctrl-D into the pty, and the
 # client would type that into the active pane (the stub exits on it, Claude Code asks twice).
+# The whole subshell is redirected, or that minute of `sleep` would hold this script's own
+# stdout open and anything piping the run (`tests/run.sh | tail`) would wait for it.
 attach_headless() {
   if script --version >/dev/null 2>&1; then
-    (sleep 60 | script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET attach -t =gensokyo" /dev/null >/dev/null 2>&1 &)
+    (sleep 60 | script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET attach -t =gensokyo" /dev/null >/dev/null 2>&1 &) >/dev/null 2>&1
   else
-    (sleep 60 | script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" attach -t =gensokyo >/dev/null 2>&1 &)
+    (sleep 60 | script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" attach -t =gensokyo >/dev/null 2>&1 &) >/dev/null 2>&1
   fi
   pause 1
 }
@@ -555,7 +572,11 @@ smoke_tests() {
   out=$("$G" _bar 1 "$pane1")
   assert_match "$out" "#[bg=$CFG_COLOR_AWAIT,fg=black] 2 ✦ Beta "
   assert_match "$out" '#[align=right]#[bg='"$CFG_COLOR_AWAIT"',fg=black] ✦ 1 '
-  rm -f "$STUB_STATE/$id2.status"
+
+  t "smoke: the same chips in plain text, where the one who needs you comes first instead"
+  assert_eq "$("$G" _bar 1 "$pane1" plain)" ' 2 ✦ Beta │ 1 ○ Alpha   ✦ 1 '
+  rm -f "$STUB_STATE/$id2.status"; rm -f "$REGISTRY"
+  assert_eq "$("$G" _bar 1 "$pane1" plain)" ' 1 ○ Alpha │ 2 ○ Beta '
   assert_match "$("$G" _border "$pane1" '✳ Alpha')" ' 1 Alpha · alpha '
 
   t "smoke: a Stop hook turns the chip gold, rings the bell and alerts the desktop; typing clears it"
@@ -611,6 +632,33 @@ null'
   out=$("$G" list)
   assert_match "$out" 'Sonnet 5→⚖ Opus · ctx 5% · medium · plan · ⚡93% (turn 99%) · $0.19 · ⎇ main · '
   assert_match "$out" '  usage  5h ▓▓▓░░░░░░░ 36% ↻2h11m   wk ▓▓▓▓░░░░░░ 49% ↻3d4h   ('
+
+  t "smoke: the clock pushes the chips into status-left, where iTerm2 reads them"
+  attach_headless
+  if [ "$(tm list-clients 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then skip "could not attach a headless client (script(1))"; else
+    out=''
+    for _ in 1 2 3 4 5 6 7 8; do
+      out=$(tm show -gv status-left)
+      case $out in *'1 ○ Alpha'*) break ;; esac
+      pause 0.5
+    done
+    assert_match "$out" ' 1 ○ Alpha Sonnet 5%% '   # the percent doubled, so tmux hands iTerm2 one
+    assert_nomatch "$out" '#['                     # one style would blank the whole bar
+    assert_match "$(tm show -gv status-right)" '36%% ↻'
+    assert_match "$("$G" doctor)" 'clock      ticking'
+
+    t "smoke: a hook moves the chip within a second, without waiting for the next tick"
+    payload "$id1" Stop ',"last_assistant_message":"ping"' | "$G" _hook
+    for _ in 1 2 3 4; do
+      out=$(tm show -gv status-left)
+      case $out in *'✦ Alpha'*) break ;; esac
+      pause 0.25
+    done
+    assert_match "$out" ' 1 ✦ Alpha'
+    assert_match "$out" '  ✦ 1 '
+    payload "$id1" UserPromptSubmit '' | "$G" _hook
+    tm detach-client; pause 0.3
+  fi
 
   t "smoke: focus by name and slot"
   assert_match "$("$G" focus beta)" 'focused Beta (slot 2)'

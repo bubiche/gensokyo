@@ -152,6 +152,7 @@ start_server() {
   apply_style
   apply_status tty   # cmd_home switches it when the attach is iTerm2's
   apply_user_conf
+  start_clock
   return 0
 }
 
@@ -160,6 +161,47 @@ start_server() {
 apply_user_conf() {
   [ -f "$CONFIG_DIR/tmux.conf" ] && tmux_ source-file "$CONFIG_DIR/tmux.conf"
   return 0
+}
+
+# ---------------------------------------------------------------- the clock
+# One loop per server, pushing the status bar (and, once rituals exist, firing them). It has
+# to be invisible: iTerm2 draws every tmux window as a native tab, so a window of ours would
+# be a tab in the user's face, whatever it was named. `run-shell -b` runs the loop as a child
+# of the tmux server instead - no window, no pane, nothing for a client to show - and tmux
+# kills it when the server exits, so the clock lives exactly as long as the cockpit. It has no
+# window to see it by, so it leaves a heartbeat (`state/clock`) that `doctor` reports and that
+# every attach checks.
+CLOCK_TICK=3
+start_clock() {
+  : > "$STATE_DIR/clock"   # count as a tick at once, so a second attach does not start a second loop
+  tmux_ run-shell -b "$(sq "$SELF") _tick >/dev/null 2>&1"
+}
+
+# clock_age: seconds since the last tick, or nothing when the clock has never run.
+clock_age() {
+  [ -f "$STATE_DIR/clock" ] || return 0
+  printf '%s\n' $(( $(date +%s) - $(mtime_of "$STATE_DIR/clock") ))
+}
+
+# A server that is already running was started by whatever version was installed then, and a
+# loop can die; without a clock the chips never move. Every attach checks the heartbeat.
+ensure_clock() {
+  local age
+  age=$(clock_age)
+  [ -n "$age" ] && [ "$age" -lt $((CLOCK_TICK * 3)) ] && return 0
+  start_clock
+  return 0
+}
+
+cmd__tick() {
+  while :; do
+    server_running || return 0
+    : > "$STATE_DIR/clock"   # the heartbeat doctor reads; its mtime is the time of this tick
+    # Nobody attached, nobody looking: skip the render, which would ask `claude agents --json`
+    # for a fresh registry every few seconds for as long as the server runs.
+    [ -n "$(tmux_ list-clients -F 1 2>/dev/null)" ] && push_bar
+    sleep "$CLOCK_TICK"
+  done
 }
 
 stage_of_slot() { printf 'stage%s\n' "$(( ($1 - 1) / ${CFG_STAGE_SIZE:-4} + 1 ))"; }

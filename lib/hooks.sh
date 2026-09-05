@@ -102,7 +102,14 @@ EOF
   esac
   status_load "$id"
   if [ -n "$S_pending" ] && [ "$S_pending" != "$old" ]; then notify "$R_name" "$R_pane" "$S_pending" "$S_detail"; fi
-  refresh_bar
+  # A hook that raises a flag must put the glyph on screen at once, which needs the registry as
+  # it is now: whether a chip is gold depends on the resident being idle there rather than busy.
+  # UserPromptSubmit only clears a flag, and it runs in front of the prompt the user just typed,
+  # so it pushes what the clock last fetched instead of paying for `claude agents --json` there.
+  case $event in
+    UserPromptSubmit) refresh_bar stale ;;
+    *) refresh_bar ;;
+  esac
   return 0
 }
 
@@ -163,10 +170,16 @@ desktop_notifier() {
   else printf none; fi
 }
 
-# refresh_bar: redraw every client's status line now (refresh-client -S re-runs the #()
-# commands) instead of waiting for status-interval.
-refresh_bar() {
-  local c
-  for c in $(tmux_ list-clients -F '#{client_name}' 2>/dev/null); do tmux_ refresh-client -S -t "$c"; done
+# refresh_bar: put the chips right now instead of waiting for the clock's next tick. The
+# plain tmux client redraws its own bar on `refresh-client -S` (which re-runs the #()
+# commands); iTerm2 reads the text gensokyo pushes, so that is rewritten too. With nobody
+# attached there is no bar to correct: the first tick after the next attach draws it.
+refresh_bar() {   # refresh_bar [stale registry ok]
+  local c n=0
+  for c in $(tmux_ list-clients -F '#{client_name}' 2>/dev/null); do
+    n=$((n + 1))
+    tmux_ refresh-client -S -t "$c"
+  done
+  [ "$n" -gt 0 ] && push_bar "${1:-}"
   return 0
 }

@@ -233,6 +233,28 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   out=$(PATH=/usr/bin:/bin cmd_doctor)
   assert_match "$out" "plugin     $root/share/plugin (handbook skill: gensokyo)"
   assert_match "$out" 'on PATH    no: run ./install.sh'
+
+  t "doctor reports iTerm2 and its profile from the environment, without launching anything"
+  out=$(TERM_PROGRAM=iTerm.app TERM_PROGRAM_VERSION=3.6.11 cmd_doctor)
+  assert_match "$out" 'iTerm2     3.6.11  this shell came from iTerm2'
+  assert_nomatch "$out" 'too old'
+  out=$(TERM_PROGRAM=iTerm.app TERM_PROGRAM_VERSION=3.4.9 cmd_doctor)
+  assert_match "$out" 'too old: need >= 3.5'
+  out=$(TERM_PROGRAM=Apple_Terminal cmd_doctor)
+  assert_match "$out" 'iTerm2     no (TERM_PROGRAM=Apple_Terminal)'
+  assert_match "$out" 'profile    '
+
+  t "home_mode: iTerm2 gets the native panes, --tty and --nested the plain tmux client"
+  assert_eq "$(TERM_PROGRAM=iTerm.app home_mode '' '')" cc
+  assert_eq "$(TERM_PROGRAM=iTerm.app home_mode 1 '')" tty
+  assert_eq "$(TERM_PROGRAM=iTerm.app home_mode '' 1)" tty
+  assert_eq "$(TERM_PROGRAM=Apple_Terminal home_mode '' '')" tty
+  assert_eq "$(TERM_PROGRAM='' home_mode '' '')" tty
+
+  t "the attach options are --tty, --detach and --nested; anything else is refused"
+  assert_match "$("$root/bin/gensokyo" help)" '--tty: plain tmux client'
+  assert_fails "$root/bin/gensokyo" --cc
+  assert_match "$("$root/bin/gensokyo" --cc 2>&1)" 'unknown option: --cc'
 }
 
 # The hooks Claude Code runs inside a resident: payloads piped to `gensokyo _hook`, no tmux
@@ -484,6 +506,16 @@ smoke_tests() {
   assert_match "$("$G" _bar 1 %0)" 'no residents yet'
   assert_match "$("$G" list)" 'nobody is here yet'
 
+  t "smoke: the status line is configured per client kind, at attach time"
+  apply_status cc                     # iTerm2 draws its own bar from status-left/status-right
+  assert_eq "$(tm show -gv status)" on
+  assert_nomatch "$(tm show -g status-format)" '_bar 1'
+  assert_match "$(tm show -g status-format)" 'status-left'   # tmux's own format, which draws what we push
+  assert_eq "$(tm show -gv status-left-length)" 200
+  apply_status tty                    # the plain client gets the two rows gensokyo draws
+  assert_eq "$(tm show -gv status)" 2
+  assert_match "$(tm show -g status-format)" '_bar 1'
+
   t "smoke: summon two residents; records, panes, launch flags"
   out=$("$G" new "$scratch/work/alpha" -n Alpha 2>&1)
   assert_match "$out" 'summoned Alpha (slot 1)'
@@ -544,6 +576,10 @@ smoke_tests() {
   tm select-window -t =gensokyo:stage1 \; select-pane -t "$pane1"
   attach_headless
   if [ "$(tm list-clients 2>/dev/null | wc -l | tr -d ' ')" != 1 ]; then skip "could not attach a headless client (script(1))"; else
+    t "smoke: an attached client is counted by its kind (a plain one here, not control mode)"
+    assert_eq "$(clients_in_mode tty)|$(clients_in_mode cc)" '1|0'
+    assert_match "$(client_summary)" '1 plain'
+    t "smoke: no desktop alert for the pane on screen in a client that was just used"
     : > "$scratch/notify.log"
     payload "$id1" Stop ',"permission_mode":"default","last_assistant_message":"seen"' | "$G" _hook
     assert_eq "$(notifications)" ''

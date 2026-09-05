@@ -187,6 +187,24 @@ cmd_doctor() {
   else
     say "  plugin     MISSING: $SHARE/plugin is incomplete; residents will not know the gensokyo commands"
   fi
+  # iTerm2 runs tmux in control mode and draws the session as native tabs and panes. Its
+  # version comes from the environment it exports (TERM_PROGRAM_VERSION, LC_TERMINAL_VERSION);
+  # asking the application over AppleScript would launch it and ask for permission, which a
+  # diagnostic must not do. Inside tmux both are inherited from whatever started the server,
+  # so this says where the shell came from, not what is drawing this window.
+  if [ "${TERM_PROGRAM:-}" = iTerm.app ]; then
+    v=${TERM_PROGRAM_VERSION:-${LC_TERMINAL_VERSION:-}}
+    w=; [ -z "$v" ] || ver_ge "$v" 3.5 || w="  (too old: need >= 3.5 for native panes)"
+    say "  iTerm2     ${v:-version unknown}  this shell came from iTerm2, so 'gensokyo' attaches with native panes$w"
+  else
+    say "  iTerm2     no (TERM_PROGRAM=${TERM_PROGRAM:-unset}): 'gensokyo' attaches the plain tmux client, $(prefix_label) then ? lists its keys"
+  fi
+  v="$HOME/Library/Application Support/iTerm2/DynamicProfiles/gensokyo.json"
+  if [ -f "$v" ]; then
+    say "  profile    installed: $(tilde "$v")"
+  else
+    say "  profile    not installed: iTerm2 needs the gensokyo profile to show the chips in its status bar and a title bar per pane"
+  fi
   v=$(command -v gensokyo 2>/dev/null) || v=
   if [ -z "$v" ]; then
     say "  on PATH    no: run ./install.sh to link ~/.local/bin/gensokyo (residents fall back to \$GENSOKYO_BIN)"
@@ -208,6 +226,9 @@ cmd_doctor() {
   fi
   if [ -n "$TMUX_BIN" ] && server_running; then
     say "  server     running (tmux -L $SOCKET), $(count_records) resident record(s)"
+    say "  clients    $(client_summary)"
+    [ "$(clients_in_mode cc)" -gt 0 ] && [ "$(clients_in_mode tty)" -gt 0 ] &&
+      say "             both kinds at once: one status bar serves the whole server, so detach one of them"
     v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
     if [ -n "$v" ]; then
       say "  env        WARNING: server environment carries $v(residents would hide from the registry)"
@@ -226,7 +247,7 @@ cmd_doctor() {
 # `help --json` is what the handbook skill reads, so it must not promise more than exists.
 command_table() {
   cat <<'EOF'
-|||start or attach the cockpit  (--detach: server only, --nested: inside another tmux)
+|||start or attach the cockpit  (--tty: plain tmux client, --detach: server only, --nested: inside another tmux)
 new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code session (a resident) in a pane
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled

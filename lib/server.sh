@@ -76,14 +76,61 @@ apply_style() {
   local s
   s=$(sq "$SELF")
   tmux_ set -g status-style "bg=$CFG_COLOR_BAR,fg=$CFG_COLOR_BAR_FG" \
-    \; set -g "status-format[0]" "#($s _bar 1 '#{pane_id}')" \
-    \; set -g "status-format[1]" "#[bg=$CFG_COLOR_ROW2,fg=$CFG_COLOR_ROW2_FG]#($s _bar 2)" \
     \; set -g pane-border-style "fg=$CFG_COLOR_BORDER" \
     \; set -g pane-active-border-style "fg=$CFG_COLOR_BAR,bold" \
     \; set -g pane-border-format "#($s _border '#{pane_id}' '#{pane_title}')" \
     \; set -g message-style "bg=$CFG_COLOR_AWAIT,fg=black" \
     \; set -g mode-style "bg=$CFG_COLOR_AWAIT,fg=black" \
     \; set -g mouse "$CFG_MOUSE"
+}
+
+# The status line is where the two clients disagree, so it is set at attach time rather than
+# once at startup. iTerm2 (control mode) draws its own bar from the `status-left` and
+# `status-right` strings, reads them when the client attaches, and shows nothing at all when a
+# `status-format` override is in place: one row, no override, and room for the text gensokyo
+# pushes into it. The plain client gets the two rows gensokyo draws itself. One server, one
+# set of options, so the last client to attach wins; `doctor` shows who is attached.
+apply_status() {
+  local s
+  case $1 in
+    cc)
+      tmux_ set -gu status-format \
+        \; set -g status on \
+        \; set -g status-left-length 200 \; set -g status-right-length 200
+      ;;
+    *)
+      s=$(sq "$SELF")
+      tmux_ set -g status 2 \
+        \; set -g "status-format[0]" "#($s _bar 1 '#{pane_id}')" \
+        \; set -g "status-format[1]" "#[bg=$CFG_COLOR_ROW2,fg=$CFG_COLOR_ROW2_FG]#($s _bar 2)"
+      ;;
+  esac
+}
+
+# How many clients of one kind are attached. tmux marks a control-mode client (iTerm2's) in
+# `client_flags`; everything else is a plain terminal client.
+clients_in_mode() {   # clients_in_mode cc|tty
+  local want=$1 flags n=0
+  # A client with no flags at all still prints the trailing comma, so an empty line here
+  # means "no clients", not "a client without flags".
+  while IFS= read -r flags; do
+    [ -n "$flags" ] || continue
+    case ",${flags%,}," in
+      *,control-mode,*) [ "$want" = cc ] && n=$((n + 1)) ;;
+      *) [ "$want" = tty ] && n=$((n + 1)) ;;
+    esac
+  done <<EOF
+$(tmux_ list-clients -F '#{client_flags},' 2>/dev/null)
+EOF
+  printf '%s\n' "$n"
+}
+
+client_summary() {
+  local cc tty out=''
+  cc=$(clients_in_mode cc); tty=$(clients_in_mode tty)
+  [ "$cc" -gt 0 ] && out="$cc in iTerm2 (control mode)"
+  [ "$tty" -gt 0 ] && out="${out:+$out, }$tty plain"
+  printf '%s\n' "${out:-none attached}"
 }
 
 start_server() {
@@ -103,6 +150,14 @@ start_server() {
     \; set-environment -g GENSOKYO_SOCKET "$SOCKET"
   apply_keys
   apply_style
+  apply_status tty   # cmd_home switches it when the attach is iTerm2's
+  apply_user_conf
+  return 0
+}
+
+# ~/.config/gensokyo/tmux.conf overrides everything gensokyo sets, so it is sourced last -
+# after the server starts and again after each attach restyles the status line.
+apply_user_conf() {
   [ -f "$CONFIG_DIR/tmux.conf" ] && tmux_ source-file "$CONFIG_DIR/tmux.conf"
   return 0
 }

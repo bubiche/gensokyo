@@ -17,8 +17,8 @@ set -u
 VERSION=0.1.0-dev
 
 # ---------------------------------------------------------------- where am I
-self_path() {
-  local src=${BASH_SOURCE[0]:-$0} dir   # BASH_SOURCE so tests can source this file
+real_path() {   # follow symlinks to the real file (readlink -f is not on macOS bash 3.2 systems)
+  local src=$1 dir
   while [ -L "$src" ]; do
     dir=$(cd "$(dirname "$src")" && pwd)
     src=$(readlink "$src")
@@ -26,7 +26,7 @@ self_path() {
   done
   printf '%s/%s\n' "$(cd "$(dirname "$src")" && pwd)" "$(basename "$src")"
 }
-SELF=$(self_path)
+SELF=$(real_path "${BASH_SOURCE[0]:-$0}")   # BASH_SOURCE so tests can source this file
 GENSOKYO_HOME=$(cd "$(dirname "$SELF")/.." && pwd)
 SHARE=$GENSOKYO_HOME/share
 
@@ -929,6 +929,19 @@ cmd_doctor() {
   fi
   say "  config     $CONFIG_DIR$([ -f "$CONFIG_DIR/config" ] || printf ' (defaults)')"
   say "  state      $STATE_DIR"
+  if [ -f "$SHARE/plugin/.claude-plugin/plugin.json" ] && [ -f "$SHARE/plugin/skills/gensokyo/SKILL.md" ]; then
+    say "  plugin     $SHARE/plugin (handbook skill: gensokyo)"
+  else
+    say "  plugin     MISSING: $SHARE/plugin is incomplete; residents will not know the gensokyo commands"
+  fi
+  v=$(command -v gensokyo 2>/dev/null) || v=
+  if [ -z "$v" ]; then
+    say "  on PATH    no: run ./install.sh to link ~/.local/bin/gensokyo (residents fall back to \$GENSOKYO_BIN)"
+  elif [ "$(real_path "$v")" = "$SELF" ]; then
+    say "  on PATH    $v -> this copy"
+  else
+    say "  on PATH    $v -> a different copy ($(real_path "$v")); residents launched from here use \$GENSOKYO_BIN"
+  fi
   say "  prefix     $CFG_PREFIX ($(prefix_label))"
   if [ -n "$TMUX_BIN" ] && server_running; then
     say "  server     running (tmux -L $SOCKET), $(count_records) resident record(s)"

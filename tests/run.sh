@@ -19,7 +19,7 @@ what=all
 for a in "$@"; do case $a in -v) verbose=1 ;; unit|smoke|all) what=$a ;; *) echo "usage: tests/run.sh [-v] [unit|smoke|all]" >&2; exit 2 ;; esac; done
 
 scratch=${TMPDIR:-/tmp}/gensokyo-tests.$$
-mkdir -p "$scratch"
+mkdir -p "$scratch"; scratch=$(cd "$scratch" && pwd)   # TMPDIR may end in a slash
 export GENSOKYO_STATE_DIR=$scratch/state GENSOKYO_CONFIG_DIR=$scratch/config
 export GENSOKYO_SOCKET=gtest$$ GENSOKYO_CLAUDE=$root/tests/stub-claude
 export STUB_STATE=$scratch/stub
@@ -175,6 +175,45 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   t "system_paragraph names the resident and the CLI"
   assert_match "$(system_paragraph Marisa)" 'resident name is Marisa'
   assert_match "$(system_paragraph Marisa)" 'GENSOKYO_BIN'
+
+  t "real_path follows a chain of relative and absolute symlinks"
+  mkdir -p "$scratch/rp/a" "$scratch/rp/b"; : > "$scratch/rp/b/target"
+  ln -s ../b/target "$scratch/rp/a/rel"; ln -s "$scratch/rp/a/rel" "$scratch/rp/abs"
+  assert_eq "$(real_path "$scratch/rp/abs")" "$scratch/rp/b/target"
+  assert_eq "$(real_path "$scratch/rp/b/target")" "$scratch/rp/b/target"
+
+  t "doctor reports the plugin and whether gensokyo is on PATH"
+  out=$(PATH=/usr/bin:/bin cmd_doctor)
+  assert_match "$out" "plugin     $root/share/plugin (handbook skill: gensokyo)"
+  assert_match "$out" 'on PATH    no: run ./install.sh'
+}
+
+# install.sh: POSIX sh, run from the checkout into a scratch bin dir; --no-fetch keeps it offline.
+install_tests() {
+  local out bin=$scratch/ibin
+  t "install.sh links bin/gensokyo into --bin-dir and the link resolves to this checkout"
+  if [ ! -x "$root/vendor/$PLATFORM/tmux" ] && ! command -v tmux >/dev/null 2>&1; then skip "no tmux for install.sh --no-fetch"; return; fi
+  out=$(cd "$scratch" && sh "$root/install.sh" --bin-dir "$bin" --no-fetch 2>&1)
+  assert_match "$out" "linked $bin/gensokyo -> $root/bin/gensokyo"
+  assert_match "$out" "tmux + jq: "
+  assert_eq "$(readlink "$bin/gensokyo")" "$root/bin/gensokyo"
+  assert_eq "$("$bin/gensokyo" version)" "gensokyo $VERSION"
+  out=$(PATH=$bin:/usr/bin:/bin "$bin/gensokyo" doctor)
+  assert_match "$out" "home       $root"
+  assert_match "$out" "on PATH    $bin/gensokyo -> this copy"
+
+  t "install.sh is idempotent, warns about PATH only when needed, and refuses to clobber a file"
+  out=$(sh "$root/install.sh" --bin-dir "$bin" --no-fetch 2>&1)
+  assert_match "$out" "linked $bin/gensokyo"
+  assert_match "$out" "$bin is not on your PATH"
+  out=$(PATH=$bin:$PATH sh "$root/install.sh" --bin-dir="$bin" --no-fetch 2>&1)
+  assert_nomatch "$out" 'not on your PATH'
+  mkdir -p "$scratch/ibin2"; : > "$scratch/ibin2/gensokyo"
+  if out=$(sh "$root/install.sh" --bin-dir "$scratch/ibin2" --no-fetch 2>&1); then bad "should refuse to clobber a file"; else assert_match "$out" 'is not a symlink'; fi
+  assert_fails sh "$root/install.sh" --bogus
+  assert_match "$(sh "$root/install.sh" --help)" 'install.sh --no-fetch'
+  cp "$root/install.sh" "$scratch/install.sh"
+  assert_fails sh "$scratch/install.sh" --no-fetch   # not next to bin/gensokyo
 }
 
 # ---------------------------------------------------------------- smoke
@@ -292,9 +331,9 @@ smoke_tests() {
 }
 
 case $what in
-  unit) unit_tests ;;
+  unit) unit_tests; install_tests ;;
   smoke) smoke_tests ;;
-  all) unit_tests; smoke_tests ;;
+  all) unit_tests; install_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

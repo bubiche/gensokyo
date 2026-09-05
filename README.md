@@ -16,7 +16,7 @@ macOS and Linux, arm64 and x86_64.
 
 | Tool | Why | Install |
 |---|---|---|
-| `shellcheck` | every checkpoint is shellcheck-clean (`shellcheck -s bash bin/gensokyo lib/*.sh`, `-s sh install.sh scripts/vendor.sh`) | `brew install shellcheck` |
+| `shellcheck` | every commit is shellcheck-clean (`shellcheck -s bash bin/gensokyo tests/run.sh`, `-s sh install.sh scripts/vendor.sh`) | `brew install shellcheck` |
 | `curl` | fetches the vendored binaries | preinstalled on macOS |
 | Docker (optional) | run the Linux vendor binaries in `debian:stable-slim` | https://docker.com |
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
@@ -37,7 +37,21 @@ bin/gensokyo new ~/dev/x -n Marisa   # a resident in a pane; close <name>, list,
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
 ```
 
-Run it from the checkout; `install.sh` (symlink into `~/.local/bin`) comes later. `bin/gensokyo`
+## Installing
+
+```sh
+./install.sh                    # links ~/.local/bin/gensokyo -> bin/gensokyo; fetches tmux + jq if needed
+./install.sh --bin-dir ~/bin    # another link directory (or GENSOKYO_BIN_DIR)
+./install.sh --no-fetch         # never download; needs vendored or system tmux >= 3.3 and jq >= 1.6
+gensokyo doctor                 # shows which copy is on PATH, the plugin dir and what resolved
+```
+
+`install.sh` is POSIX `sh`, writes nothing outside the checkout except that one symlink, and
+prints the `export PATH=…` line if the link directory is not on your PATH. Running from the
+checkout without installing also works (`bin/gensokyo`); residents then find the CLI through
+`$GENSOKYO_BIN`. Release tarballs and `curl | sh` come with the first release.
+
+`bin/gensokyo`
 reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its own tmux server
 (`tmux -L gensokyo`) with `share/tmux.conf`, and per-user tweaks go in `~/.config/gensokyo/`
 (`config` for KEY=value settings such as `PREFIX=C-Space`, `tmux.conf` sourced last).

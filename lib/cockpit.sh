@@ -54,17 +54,6 @@ cmd_home() {
   exec "$TMUX_BIN" -L "$SOCKET" attach-session -t "=$SESSION"
 }
 
-# The shrine has a window of its own - the first tab, and the one still there when the last
-# resident leaves: banner + legend. Residents never take it over.
-cmd__shrine() {
-  [ -n "${TMUX_PANE:-}" ] && tmux_ set -p -t "$TMUX_PANE" @shrine 1 2>/dev/null
-  printf '\033]2;gensokyo\007\033[2J\033[H'   # own pane title, clear screen
-  [ -f "$SHARE/banner.txt" ] && cat "$SHARE/banner.txt"
-  printf '\n  Nobody is here yet.\n\n  %s then  g n   summon a resident\n  %s then  ?     every key\n  %s then  d     detach (gensokyo keeps running)\n\n  From a shell:  gensokyo new [dir] [-n name]\n' \
-    "$(prefix_label)" "$(prefix_label)" "$(prefix_label)"
-  while :; do read -r -s -n 1 _ 2>/dev/null || sleep 3600; done
-}
-
 cmd__keys() {
   local table key label cmd
   printf '  %s is the prefix. Press it, release, then:\n\n' "$(prefix_label)"

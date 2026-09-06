@@ -1,4 +1,4 @@
-# lib/residents.sh - the resident commands (new, close, list, focus) and the wrapper
+# lib/residents.sh - the resident commands (new, close, list) and the wrapper
 # that runs inside a resident's pane. Sourced by bin/gensokyo; bash 3.2.
 # shellcheck shell=bash
 
@@ -168,16 +168,6 @@ EOF
 }
 
 # focus <name|slot>: bring that resident's window (its iTerm2 tab) to the front.
-cmd_focus() {
-  local f
-  [ -n "${1:-}" ] || die "usage: gensokyo focus <name|slot>"
-  f=$(find_resident "$1") || die "focus: no resident '$1' (gensokyo list)"
-  rec_load "$f"
-  [ -n "${R_window:-$R_pane}" ] || die "focus: $R_name has no window yet"
-  server_running || die "focus: the cockpit is not running"
-  focus_window "${R_window:-$R_pane}"
-  say "focused $R_name (slot $R_slot)"
-}
 
 # ---------------------------------------------------------------- resident pane
 # `gensokyo _run <session-id>` is what runs inside a resident's pane.
@@ -228,14 +218,43 @@ system_paragraph() {
   printf '%s' "You are running inside gensokyo, a tmux cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name. When the user talks about other sessions or residents, or wants to start, list, close, resume or focus one (also with the words summon, who, banish, recall), use the gensokyo skill and its CLI (\`gensokyo\`, or \$GENSOKYO_BIN when that is not on PATH); do not drive tmux yourself."
 }
 
+# What the resident's own tab shows once it has left: the same buttons the shrine draws, drawn by
+# the same walk and clicked the same way (lib/shrine.sh). Claude Code runs in the alternate screen,
+# so the pane is back to what it held before the resident started and there is nothing here to
+# keep. INT is already ignored, set before claude was started.
 departed_screen() {
-  local id=$1 name=$2 rc=$3 key
-  printf '\n\n  ⛩  %s has left the shrine. (exit %s)\n\n  [r] recall   [x] close this pane\n\n' "$name" "$rc"
+  local id=$1 name=$2 rc=$3 cols hit
+  cols=$(tmux_ display -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)
+  case $cols in ''|*[!0-9]*) cols=80 ;; esac
+  SHRINE_TEXT='' SHRINE_MAP='' SHRINE_ROW=0 SHRINE_COLS=$cols
+  shrine_line ''
+  shrine_line ''
+  shrine_line "  ⛩  $name has left the shrine. (exit $rc)"
+  shrine_line ''
+  shrine_draw_buttons departed_buttons
+  shrine_line ''
+  shrine_line '  click a button, or press its letter'
+  printf '\033[2J\033[?25l\033[?1000h\033[?1006h'
+  trap 'printf "\033[?1006l\033[?1000l\033[?25h"' EXIT
+  trap shrine_paint WINCH
+  shrine_paint
+  # Without a terminal there is nobody to read: wait to be closed rather than spinning on EOF.
+  [ -t 0 ] || while :; do sleep 3600; done
   while :; do
-    read -r -s -n 1 key 2>/dev/null || { sleep 3600; continue; }
-    case $key in
-      r|R) rec_set "$RES_DIR/$id" resume 1; exec "$SELF" _run "$id" ;;
-      x|X|q|Q) close_pane "$id" ;;
+    shrine_event
+    if [ -n "$SHRINE_CLICK" ]; then
+      hit=$(shrine_hit "${SHRINE_CLICK%% *}" "${SHRINE_CLICK##* }")
+      hit=${hit%%|*}
+    else
+      hit=''
+      case $SHRINE_KEY in r|R) hit=recall ;; x|X|q|Q) hit=close ;; esac
+    fi
+    case $hit in
+      recall)
+        rec_set "$RES_DIR/$id" resume 1
+        printf '\033[?1006l\033[?1000l\033[?25h'   # exec leaves no EXIT trap to do it
+        exec "$SELF" _run "$id" ;;
+      close) close_pane "$id" ;;
     esac
   done
 }

@@ -142,6 +142,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/server.sh" || exit 1
 # shellcheck source=../lib/cockpit.sh
 . "$LIB/cockpit.sh" || exit 1
+# shellcheck source=../lib/shrine.sh
+. "$LIB/shrine.sh" || exit 1
 # shellcheck source=../lib/residents.sh
 . "$LIB/residents.sh" || exit 1
 # shellcheck source=../lib/recall.sh
@@ -257,7 +259,6 @@ new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code 
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
-focus||<name or slot>|bring that resident's window to the front
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 version|||print the version
@@ -309,11 +310,10 @@ main() {
     new|summon) shift; cmd_new "$@" ;;
     close|banish) shift; cmd_close "$@" ;;
     list|who) shift; cmd_list "$@" ;;
-    focus) shift; cmd_focus "$@" ;;
     resume|recall) shift; cmd_resume "$@" ;;
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
-    broadcast|send|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    broadcast|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
     _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
       shift; "cmd_$cmd" "$@" ;;
     _menu-spell|_menu-message|_menu-timetable)

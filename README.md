@@ -18,8 +18,17 @@ to gensokyo. Anywhere else — another terminal, or `gensokyo --tty` in iTerm2 �
 client draws the cockpit itself, with its own status bar and the `Ctrl-Space` keys. One tmux
 server serves both, but its status line can only be set up one way at a time, so detach one
 kind of client before attaching the other. `gensokyo doctor` says which one you are about to
-get, who is attached, and whether iTerm2 has the gensokyo profile that carries the status bar
-and the per-pane title bars.
+get, who is attached, and whether iTerm2 has the gensokyo profile that carries the chips.
+
+`gensokyo iterm setup` is what puts that profile there: a *dynamic profile* named "gensokyo" in
+`~/Library/Application Support/iTerm2/DynamicProfiles/`, which iTerm2 picks up the moment it is
+written. It inherits everything — font, colours, keys — from your default profile and adds one
+thing to it, the status bar with the two components that show gensokyo's chips and your usage.
+Start the cockpit from a tab using that profile (Profiles menu, or set it as the default) and
+the chips appear. `gensokyo iterm remove` deletes the file again; both refuse to touch a
+`gensokyo.json` they did not write, and no other iTerm2 setting is ever written: where the
+status bar sits, and where iTerm2 opens tmux windows — "Open tmux windows in", which the
+cockpit wants set to *Tabs in the attaching window* — stay yours to set.
 
 **To develop** (not needed for the release):
 
@@ -57,6 +66,7 @@ tests/run.sh                         # unit tests + a headless smoke test with t
 ./install.sh --bin-dir ~/bin    # another link directory (or GENSOKYO_BIN_DIR)
 ./install.sh --no-fetch         # never download; needs vendored or system tmux >= 3.3 and jq >= 1.6
 gensokyo doctor                 # shows which copy is on PATH, the plugin dir and what resolved
+gensokyo iterm setup            # add the "gensokyo" iTerm2 profile (iterm remove takes it away)
 ```
 
 `install.sh` is POSIX `sh`, writes nothing outside the checkout except that one symlink, and
@@ -149,7 +159,8 @@ Numbers refresh only when Claude Code calls the API, so a resident idle for hour
 last values; the age tells. Sessions not started by gensokyo have no telemetry.
 
 Environment overrides for tests and CI: `GENSOKYO_TMUX`, `GENSOKYO_JQ`, `GENSOKYO_CLAUDE`
-(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`. `tests/stub-claude` stands in
+(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`, `GENSOKYO_ITERM_DIR`
+(where the dynamic profile is written). `tests/stub-claude` stands in
 for `claude` (registry, names, /rename, /exit) so the cockpit runs without Claude Code or a login:
 `GENSOKYO_CLAUDE=$PWD/tests/stub-claude GENSOKYO_SOCKET=t bin/gensokyo`. `tests/run.sh` does exactly
 that on its own socket and state dir, so it can run in CI.

@@ -1,0 +1,56 @@
+{
+  "Profiles": [
+    {
+      "Name": "gensokyo",
+      "Guid": "1AB52449-8D89-4E6A-97B2-800C66B98CF6",
+      "Dynamic Profile Parent Name": "PARENT_PLACEHOLDER",
+      "Show Status Bar": true,
+      "Status Bar Layout": {
+        "advanced configuration": {
+          "algorithm": 0,
+          "auto-rainbow style": 0,
+          "font": ".AppleSystemUIFont 12",
+          "remove empty components": false
+        },
+        "components": [
+          {
+            "class": "iTermStatusBarSwiftyStringComponent",
+            "configuration": {
+              "knobs": {
+                "base: compression resistance": 1,
+                "base: priority": 5.0,
+                "expression": "\\(session.tmuxStatusLeft)",
+                "maxwidth": 1000000000.0,
+                "minwidth": "0",
+                "shared font": ""
+              },
+              "layout advanced configuration dictionary value": {
+                "algorithm": 0,
+                "auto-rainbow style": 0,
+                "remove empty components": false
+              }
+            }
+          },
+          {
+            "class": "iTermStatusBarSwiftyStringComponent",
+            "configuration": {
+              "knobs": {
+                "base: compression resistance": 1,
+                "base: priority": 5.0,
+                "expression": "\\(session.tmuxStatusRight)",
+                "maxwidth": 1000000000.0,
+                "minwidth": "0",
+                "shared font": ""
+              },
+              "layout advanced configuration dictionary value": {
+                "algorithm": 0,
+                "auto-rainbow style": 0,
+                "remove empty components": false
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

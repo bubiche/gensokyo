@@ -33,6 +33,7 @@ SHARE=$GENSOKYO_HOME/share
 
 CONFIG_DIR=${GENSOKYO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gensokyo}
 STATE_DIR=${GENSOKYO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/gensokyo}
+ITERM_DIR=${GENSOKYO_ITERM_DIR:-$HOME/Library/Application Support/iTerm2/DynamicProfiles}
 RES_DIR=$STATE_DIR/residents
 SOCKET=${GENSOKYO_SOCKET:-gensokyo}   # tmux -L <socket>; tests use their own
 SESSION=gensokyo                       # the one tmux session on that socket
@@ -154,6 +155,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh
 . "$LIB/telemetry.sh" || exit 1
+# shellcheck source=../lib/iterm.sh
+. "$LIB/iterm.sh" || exit 1
 
 # ---------------------------------------------------------------- doctor / help / version
 cmd_doctor() {
@@ -202,11 +205,13 @@ cmd_doctor() {
   else
     say "  iTerm2     no (TERM_PROGRAM=${TERM_PROGRAM:-unset}): 'gensokyo' attaches the plain tmux client, $(prefix_label) then ? lists its keys"
   fi
-  v="$HOME/Library/Application Support/iTerm2/DynamicProfiles/gensokyo.json"
-  if [ -f "$v" ]; then
+  v="$ITERM_DIR/gensokyo.json"
+  if [ ! -f "$v" ]; then
+    say "  profile    not installed: 'gensokyo iterm setup' adds it, and iTerm2 then shows the chips in its status bar"
+  elif iterm_is_ours "$v"; then
     say "  profile    installed: $(tilde "$v")"
   else
-    say "  profile    not installed: iTerm2 needs the gensokyo profile to show the chips in its status bar and a title bar per pane"
+    say "  profile    $(tilde "$v") has another Guid: not gensokyo's, so 'gensokyo iterm' leaves it alone"
   fi
   v=$(command -v gensokyo 2>/dev/null) || v=
   if [ -z "$v" ]; then
@@ -266,6 +271,7 @@ list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds ot
 reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
+iterm||setup / remove|add or delete the "gensokyo" iTerm2 profile that carries the chips
 version|||print the version
 EOF
 }
@@ -307,6 +313,7 @@ main() {
     -V|--version|version) say "gensokyo $VERSION"; return 0 ;;
     -h|help) shift; cmd_help "$@"; return 0 ;;
     doctor) cmd_doctor; return 0 ;;
+    iterm) shift; cmd_iterm "$@"; return 0 ;;
   esac
   need_bins
   case $cmd in

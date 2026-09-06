@@ -40,6 +40,8 @@ SHRINE_NAME='⛩ gensokyo'              # the shrine window, so the first tab re
 
 # ---------------------------------------------------------------- output helpers
 say()  { printf '%s\n' "$*"; }
+# A fraction of a second, which `sleep` cannot be relied on to take; a whole one if perl is gone.
+nap()  { perl -e "select(undef, undef, undef, $1)" 2>/dev/null || sleep 1; }
 warn() { printf 'gensokyo: %s\n' "$*" >&2; }
 die()  { warn "$@"; exit 1; }
 
@@ -236,6 +238,8 @@ cmd_doctor() {
     else
       say "  clock      NOT ticking${v:+ (last tick ${v}s ago)}: the chips will not move; 'gensokyo' starts one"
     fi
+    [ -f "$STATE_DIR/clock.stray" ] &&
+      say "             a second clock is ticking as well, left by a cockpit started before 'gensokyo reload' existed: restart the cockpit once to be rid of it"
     v=$(tmux_ show-environment -g 2>/dev/null | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
     if [ -n "$v" ]; then
       say "  env        WARNING: server environment carries $v(residents would hide from the registry)"
@@ -259,6 +263,7 @@ new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code 
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
+reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 version|||print the version
@@ -311,10 +316,11 @@ main() {
     close|banish) shift; cmd_close "$@" ;;
     list|who) shift; cmd_list "$@" ;;
     resume|recall) shift; cmd_resume "$@" ;;
+    reload) shift; cmd_reload "$@" ;;
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     broadcast|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
       shift; "cmd_$cmd" "$@" ;;
     _menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

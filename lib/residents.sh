@@ -96,6 +96,14 @@ pane_settled() {
   return 0
 }
 
+# The two halves of asking a resident to leave, in the order they have to happen: Ctrl-C clears
+# a half-typed prompt (or interrupts the running turn) so that /exit lands on an empty line,
+# pane_settled waits for that to arrive, and `send-keys -l` then Enter submits reliably. Two
+# functions rather than one because `close` asks one resident and `quit` asks everybody: there
+# the interrupts all go out first, so that nobody waits for the resident before it.
+ask_interrupt() { tmux_ send-keys -t "$1" C-c; }
+ask_exit()      { tmux_ send-keys -t "$1" -l '/exit' \; send-keys -t "$1" Enter; }
+
 cmd_close() {
   local f id
   [ -n "${1:-}" ] || die "usage: gensokyo close <name|slot>"
@@ -108,11 +116,9 @@ cmd_close() {
     rm -f "$f"; tmux_ kill-pane -t "$R_pane"
     say "closed $R_name's dead pane"
   else
-    # Ctrl-C first: it clears a half-typed prompt (or interrupts the running turn) so that
-    # /exit lands on an empty line. `send-keys -l` then `send-keys Enter` submits reliably.
-    tmux_ send-keys -t "$R_pane" C-c
+    ask_interrupt "$R_pane"
     pane_settled "$R_pane"
-    tmux_ send-keys -t "$R_pane" -l '/exit' \; send-keys -t "$R_pane" Enter
+    ask_exit "$R_pane"
     say "asked $R_name to leave (/exit); the pane shows the departed screen once claude exits"
   fi
 }

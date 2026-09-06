@@ -308,6 +308,16 @@ cmd__popup-summon() {
   if ! "$SELF" new "$@"; then printf '\n  any key to close '; read -r -s -n 1 _ 2>/dev/null; fi
 }
 
+# The one action that ends everything, so it asks first - a menu rather than confirm-before, for
+# the reason in _menu-banish below. The quit itself is handed to the server: this process is a
+# child of it, and it is about to be killed halfway through its own work.
+cmd__menu-quit() {
+  local client=$1
+  tmux_ display-menu -c "$client" -T " close gensokyo? " -x C -y C \
+    "yes, everyone /exits and the cockpit closes" y "run-shell -b '$(sq "$SELF") quit >/dev/null 2>&1'" \
+    "no" n ""
+}
+
 cmd__menu-banish() {
   local client=$1 pane=$2 f
   f=$(record_by_pane "$pane")

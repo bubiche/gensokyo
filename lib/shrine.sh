@@ -35,6 +35,7 @@ recall|r|[ recall r ]|bring a departed resident back, with its name and transcri
 cast|s|[ cast s ]|send one prompt to every resident at once
 timetable|t|[ timetable t ]|the rituals: prompts on a schedule
 reload|l|[ reload l ]|run gensokyo's own code again after you change it on disk
+quit|q|[ quit q ]|close gensokyo: everyone /exits and the tmux server stops
 help|?|[ ? ]|this screen
 EOF
 }
@@ -45,6 +46,12 @@ shrine_confirm_buttons() {
   cat <<'EOF'
 banish-yes|y|[ yes y ]|go ahead
 cancel|n|[ no n ]|leave it alone
+EOF
+}
+shrine_quit_buttons() {
+  cat <<'EOF'
+quit-yes|y|[ yes y ]|close gensokyo
+cancel|n|[ no n ]|leave it running
 EOF
 }
 # The departed screen's, drawn by lib/residents.sh through the same walk in its own pane.
@@ -71,6 +78,7 @@ shrine_render() {
     recall)  shrine_view_pick "$rows" 'recall which resident?' pick-recall shrine_gone_rows \
                'it comes back with its name and its transcript' ;;
     confirm) shrine_view_confirm ;;
+    quit)    shrine_view_quit ;;
     help)    shrine_view_help ;;
     *)       shrine_view_main "$rows" ;;
   esac
@@ -276,6 +284,21 @@ shrine_view_confirm() {
   return 0
 }
 
+# The other one, and the only screen that can end the whole cockpit. Its keys are y and n, never
+# q: q is what closes a picker, and a stray second q must land on a question, not on the quit.
+shrine_view_quit() {
+  shrine_line ''
+  shrine_line '  close gensokyo?'
+  shrine_line ''
+  shrine_line '  Everyone here is asked to /exit, and once they have gone the tmux server'
+  shrine_line '  stops: the shrine, the clock and every tab go with it. Nobody is lost -'
+  shrine_line '  the next gensokyo offers them all back under recall.'
+  shrine_line ''
+  shrine_draw_buttons shrine_quit_buttons
+  shrine_line '  click, or press y or n'
+  return 0
+}
+
 shrine_view_help() {
   local action letter text what
   shrine_line ''
@@ -406,6 +429,7 @@ shrine_view_table() {
   case $SHRINE_VIEW in
     main)    shrine_buttons ;;
     confirm) shrine_confirm_buttons ;;
+    quit)    shrine_quit_buttons ;;
     *)       shrine_cancel_buttons ;;
   esac
 }
@@ -501,7 +525,7 @@ shrine_do() {
       rec_load "$f"
       [ -n "${R_window:-$R_pane}" ] || { SHRINE_SAID="$R_name is still starting"; return 0; }
       focus_window "${R_window:-$R_pane}" ;;
-    summon|banish|recall|help) SHRINE_VIEW=$action ;;
+    summon|banish|recall|help|quit) SHRINE_VIEW=$action ;;
     cast)      SHRINE_SAID='casting a spell card is not available yet' ;;
     # Handed to the tmux server rather than run here: a reload respawns this pane, and this
     # process is a child of it - it would be killed halfway through its own work.
@@ -510,6 +534,11 @@ shrine_do() {
     cancel)    SHRINE_VIEW=main; SHRINE_ARG='' ;;
     pick-dir)     shrine_summon "$arg" ;;
     pick-banish)  SHRINE_VIEW=confirm; SHRINE_ARG=$arg ;;
+    # Handed over for the same reason as a reload, and more so: the quit kills the server this
+    # pane belongs to, and it has residents to ask and to wait for before it gets there.
+    quit-yes)
+      tmux_ run-shell -b "$(sq "$SELF") quit >/dev/null 2>&1"
+      SHRINE_SAID='closing gensokyo'; SHRINE_VIEW=main ;;
     banish-yes)
       SHRINE_SAID=$(shrine_run close "$SHRINE_ARG")
       SHRINE_VIEW=main; SHRINE_ARG='' ;;

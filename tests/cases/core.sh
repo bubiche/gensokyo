@@ -5,7 +5,7 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 core_tests() {
-  local out f
+  local out f qw
 
   t "ver_ge compares dotted versions, letters ignored"
   assert_ok ver_ge 3.7c 3.3
@@ -151,6 +151,23 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   for f in $(printf '%s' "$out" | jq_ -r '.commands[] | .name, .alias | select(. != "" and . != "gensokyo")'); do
     case $("$root/bin/gensokyo" "$f" /nonexistent-dir-for-this-test 2>&1) in *"unknown command"*) bad "$f is listed but unknown" ;; *) ok ;; esac
   done
+
+  t "quit: a command of its own, a key in the gensokyo table, and no arguments"
+  assert_match "$("$root/bin/gensokyo" help)" 'gensokyo quit'
+  assert_eq "$(key_table | grep -c '^gensokyo|q|')" 1
+  assert_match "$(key_table | grep '^gensokyo|q|')" '_menu-quit'
+  assert_match "$("$root/bin/gensokyo" quit please 2>&1)" 'quit takes no arguments'
+  assert_match "$("$root/bin/gensokyo" quit 2>&1)" 'gensokyo is not running'
+
+  t "quit waits for every resident to report departed, and gives up rather than hanging"
+  fresh
+  rec 33333333-dddd-4000-8000-000000000003 slot=1 name=Suika cwd=/tmp window=@1 pane=%1
+  qw=$QUIT_WAIT; QUIT_WAIT=1
+  assert_eq "$(quit_wait 33333333-dddd-4000-8000-000000000003)" 1
+  rec_set "$RES_DIR/33333333-dddd-4000-8000-000000000003" departed "$(date +%s)"
+  assert_eq "$(quit_wait 33333333-dddd-4000-8000-000000000003)" 0
+  assert_eq "$(quit_wait 44444444-eeee-4000-8000-000000000004)" 0   # a record already gone counts as left
+  QUIT_WAIT=$qw
 
   t "the handbook skill and plugin manifest exist and the skill names only real commands"
   assert_ok test -f "$root/share/plugin/.claude-plugin/plugin.json"

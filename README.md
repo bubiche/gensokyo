@@ -55,6 +55,7 @@ bin/gensokyo help          # command list; --json is what the resident skill rea
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
 bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: run the new code (Ctrl-Space l)
+bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
                                      # the harness lives there, the tests in tests/cases/*.sh
 ```
@@ -118,6 +119,13 @@ directory's `departed/` when the tmux server restarts); `--json` gives the same 
 `Ctrl-Space g r` is the menu of the same list. A recalled resident keeps its session id, name
 and transcript, gets the same launch flags as at summon time, and the hooks and status line
 again; the first prompt given at summon is not replayed.
+
+`gensokyo quit` closes the whole cockpit: everyone still here is asked to `/exit`, and once they
+have gone - or twenty seconds later, whichever comes first - the tmux server stops, which takes
+the shrine, the clock and every tab with it; in iTerm2 that is the tmux tabs, and the window
+they were in stays. The `quit` button on the shrine tab and `Ctrl-Space g q` do the same and
+both ask before they do it. Nothing is lost by it: the next `gensokyo` finds the records of
+everyone who was here and offers them under `resume`, transcripts and all.
 
 Claude Code asks its workspace trust question the first time it runs in a directory. That
 dialog appears inside the pane like any other prompt; the hooks do not fire before it is

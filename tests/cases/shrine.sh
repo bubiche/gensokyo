@@ -11,7 +11,7 @@ shrine_tests() {
   shrine_render 80 24
   assert_match "$SHRINE_TEXT" 'Nobody is here yet.'
   assert_match "$SHRINE_TEXT" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]'
-  assert_match "$SHRINE_TEXT" '[ reload l ]  [ ? ]'   # 80 columns is one button short of a single row
+  assert_match "$SHRINE_TEXT" '[ reload l ]  [ quit q ]  [ ? ]'   # 80 columns is short of a single row
   assert_nomatch "$SHRINE_MAP" '|focus|'
 
   t "shrine: a line-block per resident, with its directory, branch and telemetry"
@@ -37,7 +37,7 @@ shrine_tests() {
   assert_eq "$(shrine_at "$(shrine_map_find summon)")" '[ summon n ]'
   assert_eq "$(shrine_at "$(shrine_map_find timetable)")" '[ timetable t ]'
   assert_eq "$(shrine_at "$(shrine_map_find help)")" '[ ? ]'
-  assert_eq "$(shrine_buttons | cut -d'|' -f2 | tr -d '\n')" 'nxrstl?'
+  assert_eq "$(shrine_buttons | cut -d'|' -f2 | tr -d '\n')" 'nxrstlq?'
 
   t "shrine: every button still has its own columns when the pane is too narrow for one row"
   shrine_render 44 24
@@ -138,6 +138,21 @@ shrine_tests() {
   shrine_render 80 24
   assert_match "$SHRINE_TEXT" '  banish Marisa?'
   assert_eq "$(shrine_at "$(shrine_map_find banish-yes)")" '[ yes y ]'
+  shrine_do cancel
+  assert_eq "$SHRINE_VIEW|$SHRINE_ARG" 'main|'
+
+  t "shrine: quit asks before it closes anything, and its keys are y and n, not q"
+  SHRINE_VIEW=main
+  assert_eq "$(shrine_letter q)" quit
+  shrine_do quit
+  assert_eq "$SHRINE_VIEW" quit
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  close gensokyo?'
+  assert_match "$SHRINE_TEXT" 'the next gensokyo offers them all back under recall'
+  assert_eq "$(shrine_at "$(shrine_map_find quit-yes)")" '[ yes y ]'
+  assert_eq "$(shrine_letter y)" quit-yes
+  assert_eq "$(shrine_letter n)" cancel
+  assert_eq "$(shrine_letter q)" ''            # a second q lands on the question, not on the quit
   shrine_do cancel
   assert_eq "$SHRINE_VIEW|$SHRINE_ARG" 'main|'
 

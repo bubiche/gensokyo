@@ -40,6 +40,7 @@ gensokyo|s|cast a spell card (broadcast a prompt)|run-shell "$s _menu-spell '#{c
 gensokyo|m|message a resident|run-shell "$s _menu-message '#{client_name}'"
 gensokyo|w|who is around|display-popup -E -w 90% -h 70% "$s who --wait"
 gensokyo|t|timetable of rituals|run-shell "$s _menu-timetable '#{client_name}'"
+gensokyo|q|close gensokyo: everyone /exits, then the server stops|run-shell "$s _menu-quit '#{client_name}'"
 gensokyo|g|menu of every action|run-shell "$s _menu-shrine '#{client_name}'"
 gensokyo|?|list every key|display-popup -E -w 66 -h 30 "$s _keys"
 EOF
@@ -206,6 +207,79 @@ EOF
   [ "$n" -gt 0 ] || warn "no shrine pane found: its tab still runs the code it started with"
   say "reloaded the options, keys, style, clock and shrine; residents keep running."
   return 0
+}
+
+# ---------------------------------------------------------------- quit
+# cmd_quit: close the cockpit. Everyone still here is asked to /exit first, so that Claude Code
+# writes its transcript out and shuts down the way it would from the prompt, and only then is the
+# tmux server killed - which takes the shrine, the clock and every tab with it. In iTerm2 that is
+# the tmux tabs only: the window they were in stays. Nobody is lost:
+# the records left behind are archived by the next start_server, so the next cockpit lists
+# everyone under `resume`.
+QUIT_WAIT=20   # seconds the residents get between them, not each
+
+cmd_quit() {
+  local f id pane ids=() left
+  [ $# -eq 0 ] || die "quit takes no arguments"
+  server_running || die "gensokyo is not running ('gensokyo' starts it)"
+  # A resident running this is running it in its own pane, and the first pass sends that pane a
+  # Ctrl-C: the interrupt would kill the quit before it reached anybody else. Hand it to the tmux
+  # server instead, which runs it with the server's environment - GENSOKYO_RESIDENT is not in it
+  # (a run-shell child does not inherit the caller's), so it cannot come straight back here.
+  if [ -n "${GENSOKYO_RESIDENT:-}" ]; then
+    tmux_ run-shell -b "$(sq "$SELF") quit >/dev/null 2>&1"
+    say "closing gensokyo: everyone here is being asked to /exit, and you are one of them."
+    return 0
+  fi
+  # Records whose pane went away behind gensokyo's back first: one of those would be asked to
+  # leave, would never answer, and would hold the quit for the whole of QUIT_WAIT.
+  prune_records
+  # Three passes rather than one loop per resident: every interrupt goes out first, then every
+  # /exit, then one wait they all share. A resident that has already departed, or whose pane
+  # died under it, has nothing to answer with and is left to the kill.
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    rec_load "$f"
+    [ -n "$R_pane" ] && [ -z "$R_departed" ] || continue
+    [ "$(tmux_ display -p -t "$R_pane" '#{pane_dead}' 2>/dev/null)" = 1 ] && continue
+    ask_interrupt "$R_pane"
+    ids[${#ids[@]}]=${f##*/}
+  done
+  if [ "${#ids[@]}" -gt 0 ]; then
+    say "asking ${#ids[@]} resident(s) to leave (/exit)"
+    for id in ${ids[@]+"${ids[@]}"}; do
+      pane=$(rec_get "$RES_DIR/$id" pane)
+      pane_settled "$pane"
+      ask_exit "$pane"
+    done
+    left=$(quit_wait ${ids[@]+"${ids[@]}"})
+    [ "$left" -gt 0 ] &&
+      warn "$left did not answer in ${QUIT_WAIT}s; closing anyway (recall them next time: gensokyo resume)"
+  fi
+  say "closing gensokyo: the shrine, the clock and every tab go with the tmux server."
+  # The last line there is: the button and the key run this as a child of the server, so the kill
+  # takes this process too, and a broken pipe on the way down is not a failure worth reporting.
+  tmux_ kill-server 2>/dev/null
+  return 0
+}
+
+# quit_wait <session-id...>: up to QUIT_WAIT seconds for all of them to write `departed` into
+# their records, which is the wrapper in the pane saying claude has exited. Prints how many
+# never did - a resident that is mid-tool-call can take a while, and one that is wedged would
+# otherwise hold the cockpit open for as long as it liked.
+quit_wait() {
+  local id n limit
+  limit=$(( $(date +%s) + QUIT_WAIT ))
+  while :; do
+    n=0
+    for id in "$@"; do
+      [ -f "$RES_DIR/$id" ] || continue
+      [ -n "$(rec_get "$RES_DIR/$id" departed)" ] || n=$((n + 1))
+    done
+    { [ "$n" -eq 0 ] || [ "$(date +%s)" -ge "$limit" ]; } && break
+    nap 0.3
+  done
+  printf '%s\n' "$n"
 }
 
 # ---------------------------------------------------------------- the clock

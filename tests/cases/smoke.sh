@@ -95,7 +95,7 @@ cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scrat
 trap cleanup EXIT
 
 smoke_tests() {
-  local out pane1 pane2 pane id1 id2 id3 id4 name3 args cirno row col gen spane spid
+  local out pane1 pane2 pane id1 id2 id3 id4 id5 name3 args cirno row col gen spane spid
   t "smoke: prerequisites"
   if [ -z "$TMUX_BIN" ] || [ -z "$JQ_BIN" ]; then skip "no tmux/jq (run scripts/vendor.sh)"; return; fi
   ok
@@ -160,7 +160,7 @@ smoke_tests() {
   out=$(shrine_shows '2 ○ Beta')
   assert_re "$out" '^  1 ○ Alpha +alpha'
   assert_re "$out" '^  2 ○ Beta +beta'
-  assert_match "$out" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ reload l ]  [ ? ]'
+  assert_match "$out" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ reload l ]  [ quit q ]  [ ? ]'
   assert_match "$out" 'click a resident above to open its tab'
   assert_nomatch "$out" 'Nobody is here yet'
 
@@ -502,5 +502,36 @@ null'
   out=$(shrine_shows 'Nobody is here yet')
   assert_match "$out" 'Nobody is here yet'
   assert_match "$out" '[ summon n ]'
-  tm kill-server
+
+  t "smoke: the quit button asks first, and yes takes the whole cockpit down"
+  # The button is the surface that matters in iTerm2, where no key of gensokyo's is bound at all.
+  shrine_key q
+  assert_match "$(shrine_shows 'close gensokyo?')" 'close gensokyo?'
+  shrine_click '[ no n ]'
+  assert_match "$(shrine_shows '[ summon n ]')" '[ summon n ]'
+  assert_nomatch "$(shrine_capture)" 'close gensokyo?'
+  shrine_key q; shrine_shows 'close gensokyo?' >/dev/null
+  shrine_key y
+  assert_ok wait_for 15 '! tm has-session -t "=$SESSION"'
+
+  t "smoke: quit asks everyone to leave, waits for them, and takes the server with it"
+  "$G" new "$scratch/work/alpha" -n Suika >/dev/null
+  id5=$(grep -l '^name=Suika$' "$RES_DIR"/* | head -n 1); id5=${id5##*/}
+  wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'
+  out=$("$G" quit 2>&1)
+  assert_match "$out" 'asking 1 resident(s) to leave (/exit)'
+  assert_nomatch "$out" 'did not answer'
+  assert_match "$out" 'closing gensokyo'
+  assert_ok test -n "$(rec_get "$RES_DIR/$id5" departed)"
+  assert_fails tm has-session -t '=gensokyo'
+  # The record is still there and unarchived, which is what makes the next cockpit offer it back.
+  assert_ok test -f "$RES_DIR/$id5"
+  assert_match "$("$G" quit 2>&1)" 'gensokyo is not running'
+
+  t "smoke: a resident asking for the quit hands it to the server, so its own Ctrl-C cannot stop it"
+  "$G" --detach >/dev/null
+  out=$(GENSOKYO_RESIDENT=$id5 "$G" quit 2>&1)
+  assert_match "$out" 'you are one of them'
+  assert_nomatch "$out" 'asking'
+  assert_ok wait_for 10 '! tm has-session -t "=$SESSION"'
 }

@@ -269,6 +269,7 @@ close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
 reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
+quit|||ask every resident to /exit, then stop the cockpit: the shrine, the clock and the tabs go
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 iterm||setup / remove|add or delete the "gensokyo" iTerm2 profile that carries the chips
@@ -324,10 +325,11 @@ main() {
     list|who) shift; cmd_list "$@" ;;
     resume|recall) shift; cmd_resume "$@" ;;
     reload) shift; cmd_reload "$@" ;;
+    quit) shift; cmd_quit "$@" ;;
     spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
     broadcast|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit)
       shift; "cmd_$cmd" "$@" ;;
     _menu-spell|_menu-message|_menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;

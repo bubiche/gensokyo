@@ -86,9 +86,12 @@ the resident waits for and turns its chip gold: `✦` for a permission prompt or
 nobody has looked at yet, `✧` for a question it asked. The first transition into a waiting
 state also shows a tmux message on every attached client, a desktop notification (`osascript`
 on macOS, `notify-send` on Linux when present) and a terminal bell, so iTerm2 bounces the Dock
-icon when the window is in the background. Desktop alert and bell are skipped when that pane is
-on screen in a client you touched in the last ten seconds, and nothing repeats while the resident
-keeps waiting. Typing in the resident clears the flag. `~/.config/gensokyo/config` can set
+icon when the window is in the background. Desktop alert and bell are skipped when you are
+already watching that resident: in iTerm2, when it is the application in front and the tab you
+are looking at is that resident's - not merely the last cockpit tab you visited, since an
+ordinary iTerm2 tab beside the cockpit counts as looking away; with the plain client, when its
+pane is on screen in a client you touched in the last ten seconds. Nothing repeats while the
+resident keeps waiting, and typing in the resident clears the flag. `~/.config/gensokyo/config` can set
 `NOTIFY_TOAST`, `NOTIFY_DESKTOP` or `NOTIFY_BELL` to `off`. macOS asks once whether your terminal
 application may show notifications; `gensokyo doctor` reminds you.
 

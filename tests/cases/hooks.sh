@@ -81,5 +81,23 @@ AskUserQuestion'
   assert_eq "$(rec_get "$st" pending)" stopped
   assert_eq "$(notifications)" ''
   rm -f "$CONFIG_DIR/config"
+
+  t "the two suppression rules, decided without a client attached"
+  assert_ok    watched_cc yes %3 %3 '✳ Reimu' '✳ Reimu'    # in front, that tab, that pane
+  assert_fails watched_cc no  %3 %3 '✳ Reimu' '✳ Reimu'    # iTerm2 is behind another application
+  assert_fails watched_cc yes %4 %3 '✳ Reimu' '✳ Reimu'    # in front, but on another resident
+  assert_fails watched_cc yes %3 %3 '◑ notes.md' '✳ Reimu' # an iTerm2 tab that is not the cockpit
+  assert_fails watched_cc yes %3 %3 '' '✳ Reimu'           # iTerm2 would not say which tab
+  assert_fails watched_cc yes %3 %3 '✳ Reimu' ''           # the pane has no title to match
+  assert_fails watched_cc yes '' '' '✳ Reimu' '✳ Reimu'    # no pane to be on
+  assert_ok    watched_tty 1000 1005
+  assert_ok    watched_tty 1000 1010
+  assert_fails watched_tty 1000 1011    # touched too long ago
+  assert_fails watched_tty '' 1000      # a client that never reported
+  assert_fails watched_tty 1005 1000    # the arguments the wrong way round, not "always watched"
+
+  t "iterm_frontmost: yes or no and nothing else, whatever the machine answers"
+  assert_re "$(iterm_frontmost)" '^(yes|no)$'
+
   fresh; rm -rf "$STATE_DIR/status"
 }

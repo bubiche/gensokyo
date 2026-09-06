@@ -138,7 +138,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="close") | .alias')" banish
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="list") | .alias')" who
   # Focusing a resident is a click on its tab or its line in the shrine, so there is no command
-  # for it any more and the handbook skill must not promise one.
+  # for it any more, and nothing may promise one.
   assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("focus") != null')" false
   assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("send") != null')" false
   assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("stage") != null')" false
@@ -169,21 +169,22 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(quit_wait 44444444-eeee-4000-8000-000000000004)" 0   # a record already gone counts as left
   QUIT_WAIT=$qw
 
-  t "the handbook skill and plugin manifest exist and the skill names only real commands"
+  t "the plugin manifest is valid and ships no skill: a click needs no words spent on it"
   assert_ok test -f "$root/share/plugin/.claude-plugin/plugin.json"
   assert_ok jq_ -e '.name == "gensokyo"' "$root/share/plugin/.claude-plugin/plugin.json"
-  assert_ok test -f "$root/share/plugin/skills/gensokyo/SKILL.md"
-  assert_match "$(sed -n '2,/^---$/p' "$root/share/plugin/skills/gensokyo/SKILL.md")" 'description:'
-  for f in $(grep -o 'gensokyo [a-z]*' "$root/share/plugin/skills/gensokyo/SKILL.md" | awk '{print $2}' | sort -u); do
-    case $f in handbook|help|skill|is|CLI) continue ;; esac
-    if printf '%s' "$out" | jq_ -e --arg c "$f" '[.commands[] | .name, .alias] | index($c) != null' >/dev/null; then ok
-    elif grep -q "gensokyo $f\` is not available yet" "$root/share/plugin/skills/gensokyo/SKILL.md"; then ok
-    else bad "SKILL.md mentions 'gensokyo $f', which help --json does not list"; fi
-  done
+  assert_eq "$(find "$root/share/plugin" -name 'SKILL.md' | wc -l | tr -d ' ')" 0
 
-  t "system_paragraph names the resident and the CLI"
-  assert_match "$(system_paragraph Marisa)" 'resident name is Marisa'
-  assert_match "$(system_paragraph Marisa)" 'GENSOKYO_BIN'
+  t "system_paragraph says three things and teaches nothing a button already does"
+  out=$(system_paragraph Marisa)
+  assert_match "$out" 'resident name is Marisa'
+  assert_match "$out" 'SendMessage'
+  assert_match "$out" 'gensokyo-ritual'
+  assert_match "$out" 'never the built-in'
+  assert_match "$out" 'not built yet'
+  for f in summon banish recall 'gensokyo new' 'gensokyo close' 'gensokyo list' focus tmux; do
+    assert_nomatch "$out" "$f"
+  done
+  out=$("$root/bin/gensokyo" help --json)   # the later tests read this again
 
   t "real_path follows a chain of relative and absolute symlinks"
   mkdir -p "$scratch/rp/a" "$scratch/rp/b"; : > "$scratch/rp/b/target"
@@ -193,7 +194,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
 
   t "doctor reports the plugin and whether gensokyo is on PATH"
   out=$(PATH=/usr/bin:/bin cmd_doctor)
-  assert_match "$out" "plugin     $root/share/plugin (handbook skill: gensokyo)"
+  assert_match "$out" "plugin     $root/share/plugin (loaded into every resident; no skill in it yet)"
   assert_match "$out" 'on PATH    no: run ./install.sh'
 
   t "doctor reports iTerm2 and its profile from the environment, without launching anything"
@@ -206,7 +207,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'iTerm2     no (TERM_PROGRAM=Apple_Terminal)'
   assert_match "$out" 'profile    '
 
-  t "home_mode: iTerm2 gets the native panes, --tty and --nested the plain tmux client"
+  t "home_mode: iTerm2 gets the native tabs, --tty and --nested the plain tmux client"
   assert_eq "$(TERM_PROGRAM=iTerm.app home_mode '' '')" cc
   assert_eq "$(TERM_PROGRAM=iTerm.app home_mode 1 '')" tty
   assert_eq "$(TERM_PROGRAM=iTerm.app home_mode '' 1)" tty

@@ -1,6 +1,6 @@
 {
   "name": "gensokyo",
   "version": "0.1.0",
-  "description": "Teaches a Claude Code session running inside the gensokyo cockpit how to start, list, close, resume and focus the other sessions (residents) through the gensokyo CLI.",
+  "description": "Loaded into every session gensokyo runs. It carries no skill yet: everything the cockpit does is a click, and only work a click cannot express earns a resident's context.",
   "author": { "name": "gensokyo" }
 }

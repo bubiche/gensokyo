@@ -3,14 +3,40 @@
 # picks up a new file at once, without a restart and without touching the preferences plist,
 # so an additive profile is the only way to set anything up for the user that they would
 # otherwise have to click through Settings for. Nothing else in iTerm2 is ever written: the
-# application's own defaults (where tmux windows open, where the status bar sits) stay the
-# user's, and `doctor` only reports them.
+# application's own defaults (how a tmux session comes back on attach, where the status bar
+# sits) stay the user's, and `doctor` only reports them.
 
 # The profile's identity, the same on every machine, so that installing over an older copy
 # keeps the profile a window or a session may already be pointing at. It doubles as the mark
 # of gensokyo's own file: a gensokyo.json whose Guid is not this one was written by someone
 # else and is never overwritten or deleted.
 ITERM_GUID=1AB52449-8D89-4E6A-97B2-800C66B98CF6
+
+# ---------------------------------------------------------------- what iTerm2 is set to
+# iTerm2's own defaults are the user's, and gensokyo only ever reads them. This one decides
+# whether the cockpit is a cockpit at all: Settings > General > tmux > "When attaching, restore
+# window as" is stored as `OpenTmuxWindowsIn`, and only its "Tabs in the attaching window" (2)
+# gives one window with a tab per resident. At the shipped default the key is absent and iTerm2
+# opens every tmux window as a macOS window of its own, which leaves nothing to click along a
+# tab bar and turns the shrine's `select-window` into "open yet another window" instead of
+# "raise that tab". Empty covers both the shipped default and a machine with no `defaults`
+# command, which is why iterm_tabs_line reads it as "not set" rather than as an error.
+iterm_tmux_windows() {
+  command -v defaults >/dev/null 2>&1 || return 0
+  defaults read com.googlecode.iterm2 OpenTmuxWindowsIn 2>/dev/null
+}
+
+# iterm_tabs_line <value>: doctor's report on it, kept apart from the reading so that every
+# answer can be tested without depending on the settings of the machine the tests run on.
+iterm_tabs_line() {
+  case ${1:-} in
+    2)  say "  tmux tabs  iTerm2 opens the cockpit as tabs in one window (OpenTmuxWindowsIn=2), which is what it wants" ;;
+    '') say "  tmux tabs  not set: iTerm2 gives every resident a macOS window of its own. Set Settings >"
+        say "             General > tmux > \"When attaching, restore window as\" to \"Tabs in the attaching window\"" ;;
+    *)  say "  tmux tabs  OpenTmuxWindowsIn=$1: the residents come back in a window of their own. Settings >"
+        say "             General > tmux > \"When attaching, restore window as\" > \"Tabs in the attaching window\"" ;;
+  esac
+}
 
 cmd_iterm() {
   case ${1:-} in

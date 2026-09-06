@@ -118,7 +118,7 @@ EOF
 # and a terminal bell unless the owner is already watching that pane (pane_watched). One
 # notification per waiting period: _hook calls this only when pending changes.
 notify() {
-  local name=$1 pane=$2 kind=$3 detail=$4 text glyph c tty
+  local name=$1 pane=$2 kind=$3 detail=$4 text glyph flags c tty
   case $kind in
     question) text="$name asks: $detail" ;;
     awaits)   text="$name needs your permission${detail:+ (${detail#permission: })}" ;;
@@ -126,9 +126,13 @@ notify() {
   esac
   glyph=$(glyph_for "$kind")
   if [ "$CFG_NOTIFY_TOAST" = on ]; then
-    for c in $(tmux_ list-clients -F '#{client_name}' 2>/dev/null); do
+    while IFS='|' read -r flags c; do
+      [ -n "$c" ] || continue
+      toast_wants "$flags" || continue
       tmux_ display-message -c "$c" -d 4000 "$glyph ${text//\#/##}"   # a bare # would start a tmux format
-    done
+    done <<EOF
+$(tmux_ list-clients -F '#{client_flags},|#{client_name}' 2>/dev/null)
+EOF
   fi
   pane_watched "$pane" && return 0
   [ "$CFG_NOTIFY_DESKTOP" = on ] && desktop_notify "$name" "$text"
@@ -137,6 +141,15 @@ notify() {
   fi
   return 0
 }
+
+# toast_wants <that client's flags>: a tmux message is worth sending to a plain client and to
+# nowhere else. A control-mode client speaks tmux's protocol instead of drawing a terminal, so
+# `display-message` has nothing to draw on and the toast was never seen under iTerm2 at all -
+# there the gold chip and the tab title carry the news. Asked per client rather than of the
+# server, because a plain client attached beside iTerm2's still wants its message. A client with
+# no flags prints the trailing comma alone, which is why the pattern is built the same way as in
+# `clients_in_mode`.
+toast_wants() { case ",${1%,}," in *,control-mode,*) return 1 ;; *) return 0 ;; esac; }
 
 # pane_watched <pane>: is the owner looking at that pane right now? Then the desktop alert and
 # the bell would interrupt the very thing they are reading, and the toast and the gold chip say

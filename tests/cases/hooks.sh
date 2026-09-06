@@ -99,5 +99,12 @@ AskUserQuestion'
   t "iterm_frontmost: yes or no and nothing else, whatever the machine answers"
   assert_re "$(iterm_frontmost)" '^(yes|no)$'
 
+  t "the toast goes to a plain client and never to iTerm2's, which cannot draw one"
+  assert_fails toast_wants 'control-mode,'
+  assert_fails toast_wants 'attached,control-mode,focused,'
+  assert_ok    toast_wants 'attached,'
+  assert_ok    toast_wants ','                      # a client with no flags at all
+  assert_ok    toast_wants 'attached,control-modest,'   # not the flag, however it starts
+
   fresh; rm -rf "$STATE_DIR/status"
 }

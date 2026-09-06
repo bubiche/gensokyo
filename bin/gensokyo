@@ -51,7 +51,8 @@ die()  { warn "$@"; exit 1; }
 # CLAUDE_CODE_MESSAGING_SOCKET/TOKEN, CLAUDE_PID, CLAUDE_EFFORT, CLAUDE_CODE_ENTRYPOINT,
 # CLAUDE_CODE_EXECPATH, ... A `claude` started with those inherited treats itself as a child
 # session: transcript saving off and absent from `claude agents --json`. gensokyo is often
-# run from inside a resident (the handbook skill does that), so scrub them unconditionally
+# run from inside a resident (a resident's own shell, or the shrine acting for one), so scrub
+# them unconditionally
 # before starting the tmux server or a resident. CLAUDE_CONFIG_DIR is the user's own choice
 # of where Claude Code keeps its settings, not a session marker, and stays.
 scrub_env() {
@@ -188,10 +189,10 @@ cmd_doctor() {
   fi
   say "  config     $CONFIG_DIR$([ -f "$CONFIG_DIR/config" ] || printf ' (defaults)')"
   say "  state      $STATE_DIR"
-  if [ -f "$SHARE/plugin/.claude-plugin/plugin.json" ] && [ -f "$SHARE/plugin/skills/gensokyo/SKILL.md" ]; then
-    say "  plugin     $SHARE/plugin (handbook skill: gensokyo)"
+  if [ -f "$SHARE/plugin/.claude-plugin/plugin.json" ]; then
+    say "  plugin     $SHARE/plugin (loaded into every resident; no skill in it yet)"
   else
-    say "  plugin     MISSING: $SHARE/plugin is incomplete; residents will not know the gensokyo commands"
+    say "  plugin     MISSING: no $SHARE/plugin/.claude-plugin/plugin.json; residents will not start"
   fi
   # iTerm2 runs tmux in control mode and draws the session as native tabs and panes. Its
   # version comes from the environment it exports (TERM_PROGRAM_VERSION, LC_TERMINAL_VERSION);
@@ -200,11 +201,12 @@ cmd_doctor() {
   # so this says where the shell came from, not what is drawing this window.
   if [ "${TERM_PROGRAM:-}" = iTerm.app ]; then
     v=${TERM_PROGRAM_VERSION:-${LC_TERMINAL_VERSION:-}}
-    w=; [ -z "$v" ] || ver_ge "$v" 3.5 || w="  (too old: need >= 3.5 for native panes)"
-    say "  iTerm2     ${v:-version unknown}  this shell came from iTerm2, so 'gensokyo' attaches with native panes$w"
+    w=; [ -z "$v" ] || ver_ge "$v" 3.5 || w="  (too old: need >= 3.5 for native tabs)"
+    say "  iTerm2     ${v:-version unknown}  this shell came from iTerm2, so 'gensokyo' attaches with a native tab per resident$w"
   else
     say "  iTerm2     no (TERM_PROGRAM=${TERM_PROGRAM:-unset}): 'gensokyo' attaches the plain tmux client, $(prefix_label) then ? lists its keys"
   fi
+  iterm_tabs_line "$(iterm_tmux_windows)"
   v="$ITERM_DIR/gensokyo.json"
   if [ ! -f "$v" ]; then
     say "  profile    not installed: 'gensokyo iterm setup' adds it, and iTerm2 then shows the chips in its status bar"
@@ -260,7 +262,7 @@ cmd_doctor() {
 }
 
 # Command table: name|alias|arguments|summary. Only shipped commands are listed;
-# `help --json` is what the handbook skill reads, so it must not promise more than exists.
+# `help --json` is the machine-readable list, so it must not promise more than exists.
 command_table() {
   cat <<'EOF'
 |||start or attach the cockpit  (--tty: plain tmux client, --detach: server only, --nested: inside another tmux)

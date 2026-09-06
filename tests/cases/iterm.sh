@@ -59,4 +59,15 @@ iterm_tests() {
   if out=$(cmd_iterm 2>&1); then bad "iterm alone should refuse"; else assert_match "$out" "usage: gensokyo iterm"; fi
   if out=$(cmd_iterm frobnicate 2>&1); then bad "an unknown subcommand should refuse"; else assert_match "$out" "usage: gensokyo iterm"; fi
   assert_match "$(cmd_help)" "gensokyo iterm"
+
+  t "doctor reports iTerm2's tmux window setting without ever writing it"
+  assert_match "$(iterm_tabs_line 2)" 'tabs in one window'
+  assert_nomatch "$(iterm_tabs_line 2)" 'Settings >'
+  assert_match "$(iterm_tabs_line '')" 'not set: iTerm2 gives every resident a macOS window of its own'
+  assert_match "$(iterm_tabs_line '')" 'When attaching, restore window as'
+  assert_match "$(iterm_tabs_line 1)" 'OpenTmuxWindowsIn=1'
+  assert_match "$(iterm_tabs_line 1)" 'When attaching, restore window as'
+  assert_re "$(cmd_doctor)" 'tmux tabs'
+  # Whatever this machine is set to, reading it says one line and changes nothing.
+  assert_re "$(iterm_tmux_windows)" '^[0-9]*$'
 }

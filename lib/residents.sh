@@ -209,15 +209,18 @@ cmd__run() {
   rm -f "$STATE_DIR/status/$id"   # a fresh launch waits for nothing yet
   cd "$cwd" || die "cannot cd to $cwd"
   scrub_env
-  # The handbook skill runs the CLI; from a checkout `gensokyo` is not on PATH, so pass it.
+  # Nothing in the resident reads GENSOKYO_BIN today - the hooks and the status line are given
+  # absolute paths in --settings - but the ritual skill will run the CLI, and from a checkout
+  # `gensokyo` is not on PATH. GENSOKYO_RESIDENT is what tells the CLI it is being run from
+  # inside a pane it owns.
   export GENSOKYO_BIN=$SELF GENSOKYO_RESIDENT=$id
   # Ctrl-C in the pane must reach claude (it clears the input) without killing this wrapper.
   # A trap with a command is reset to the default in the child, so claude sees nothing special.
   trap : INT
   eval "set -- $args"
   # Every resident, recalled or new, gets the hooks and status line wrapper (lib/hooks.sh,
-  # lib/telemetry.sh), the plugin (handbook skill) and the short paragraph that makes Claude
-  # reach for the skill instead of guessing; all are per-session flags, nothing in ~/.claude
+  # lib/telemetry.sh), the plugin - which carries no skill until there is one worth a resident's
+  # context - and the three-sentence paragraph; all are per-session flags, nothing in ~/.claude
   # changes.
   set -- --settings "$(launch_settings "$id" "$cwd")" --plugin-dir "$SHARE/plugin" \
     --append-system-prompt "$(system_paragraph "$name")" "$@"
@@ -237,10 +240,17 @@ cmd__run() {
   departed_screen "$id" "$name" "$rc"
 }
 
-# One paragraph appended to Claude Code's system prompt. Kept short: everything else lives in
-# share/plugin/skills/gensokyo/SKILL.md, which Claude loads when a request matches it.
+# One paragraph appended to Claude Code's system prompt, and three sentences is all of it. A
+# resident's context window is the user's budget, so nothing is said here that a click already
+# does: starting, closing, recalling and switching between residents are buttons and tabs, and a
+# resident that never hears of them cannot spend a turn on them. What is left is what no button
+# can reach - the resident's own name, that the others can be written to, and where a standing
+# schedule goes. The last sentence is the one that has to be here: without it a request like
+# "every weekday at 9..." goes to Claude Code's own scheduling, which gensokyo can neither see
+# nor stop. The skill it names does not ship yet, so the sentence says so rather than sending
+# the resident after something that is not there.
 system_paragraph() {
-  printf '%s' "You are running inside gensokyo, a tmux cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name. When the user talks about other sessions or residents, or wants to start, list, close, resume or focus one (also with the words summon, who, banish, recall), use the gensokyo skill and its CLI (\`gensokyo\`, or \$GENSOKYO_BIN when that is not on PATH); do not drive tmux yourself."
+  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks; that skill is not built yet, so until it is, tell the user that gensokyo cannot schedule anything for them."
 }
 
 # What the resident's own tab shows once it has left: the same buttons the shrine draws, drawn by

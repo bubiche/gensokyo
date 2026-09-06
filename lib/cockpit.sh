@@ -263,6 +263,18 @@ cmd__focus() {
   focus_window "${R_window:-$R_pane}"
 }
 
+# The key and the shrine's button both come here, because `reload` respawns the shrine's pane and
+# would otherwise be killing the very process that asked for it. This one runs as a child of the
+# tmux server (run-shell), where nothing it does can cut its own ground away.
+cmd__reload() {
+  local client=${1:-} out
+  out=$("$SELF" reload 2>&1)
+  out=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)
+  if [ -n "$client" ]; then tmux_ display-message -c "$client" "${out//\#/##}"
+  else tmux_ display-message "${out//\#/##}"; fi
+  return 0
+}
+
 cmd__menu-summon() {
   local client=$1 s d i=0 args=() label
   s=$(sq "$SELF")

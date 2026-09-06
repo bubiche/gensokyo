@@ -20,6 +20,18 @@ attach_headless() {
   fi
   pause 1
 }
+# attach_cc: the same pty trick in control mode - iTerm2's kind of client, which -CC will not
+# give to a process with no terminal at all. Its bar is tmux's own status-left/right rather than
+# the rows gensokyo draws, which is the half of a reload that the plain client cannot exercise.
+attach_cc() {
+  if script --version >/dev/null 2>&1; then
+    (sleep 60 | script -q -c "$TMUX_BIN -L $GENSOKYO_SOCKET -CC attach -t =gensokyo" /dev/null >/dev/null 2>&1 &) >/dev/null 2>&1
+  else
+    (sleep 60 | script -q /dev/null "$TMUX_BIN" -L "$GENSOKYO_SOCKET" -CC attach -t =gensokyo >/dev/null 2>&1 &) >/dev/null 2>&1
+  fi
+  pause 1.5
+}
+cc_client() { tm list-clients -F '#{client_name} #{client_flags}' 2>/dev/null | awk '/control-mode/ { print $1; exit }'; }
 # The shrine's pane, found the way gensokyo finds it: the loop marks it with @shrine. Its
 # window is not the session's current one once a resident has been focused.
 shrine_pane() { tm list-panes -s -t =gensokyo -F '#{pane_id} #{@shrine}' 2>/dev/null | awk '$2 == 1 { print $1 }'; }
@@ -28,13 +40,15 @@ shrine_pane() { tm list-panes -s -t =gensokyo -F '#{pane_id} #{@shrine}' 2>/dev/
 shrine_capture() { local p; p=$(shrine_pane); [ -n "$p" ] && tm capture-pane -p -t "$p" 2>/dev/null; return 0; }
 # pane_shows <pane> <text>: what the pane holds, once it holds that text. A pane is driven by
 # keystrokes and by a stub that has to start, so a fixed pause is a race that a busy machine
-# loses; this waits for the state the assertion is about and then reads it once.
+# loses; this waits for the state the assertion is about and then reads it once. The budget is
+# generous because it costs nothing when the pane is ready - and a budget that is merely enough
+# is the shape of every flake this suite has had.
 pane_shows() {
-  local out i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  local out n=0
+  while [ "$n" -lt 40 ]; do
     out=$(tm capture-pane -p -t "$1" 2>/dev/null)
     case $out in *"$2"*) break ;; esac
-    pause 0.3
+    pause 0.3; n=$((n + 1))
   done
   printf '%s' "$out"
 }
@@ -61,7 +75,7 @@ pane_current() { tm display -p -t '=gensokyo:' '#{pane_id}' 2>/dev/null; }
 # terminal and a loop that is not necessarily reading at that moment, so this waits for it.
 pane_fronts() {
   local i=0
-  while [ "$i" -lt 20 ]; do
+  while [ "$i" -lt 50 ]; do
     [ "$(pane_current)" = "$1" ] && break
     i=$((i + 1)); pause 0.2
   done
@@ -69,11 +83,11 @@ pane_fronts() {
 }
 # shrine_shows <text>: the shrine redraws on its own clock, so give it a tick to catch up.
 shrine_shows() {
-  local out i
-  for i in 1 2 3 4 5 6 7 8 9; do
+  local out n=0
+  while [ "$n" -lt 24 ]; do
     out=$(shrine_capture)
     case $out in *"$1"*) break ;; esac
-    pause 0.5
+    pause 0.5; n=$((n + 1))
   done
   printf '%s' "$out"
 }
@@ -81,7 +95,7 @@ cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scrat
 trap cleanup EXIT
 
 smoke_tests() {
-  local out pane1 pane2 pane id1 id2 id3 id4 name3 args cirno row col
+  local out pane1 pane2 pane id1 id2 id3 id4 name3 args cirno row col gen spane spid
   t "smoke: prerequisites"
   if [ -z "$TMUX_BIN" ] || [ -z "$JQ_BIN" ]; then skip "no tmux/jq (run scripts/vendor.sh)"; return; fi
   ok
@@ -146,7 +160,7 @@ smoke_tests() {
   out=$(shrine_shows '2 ○ Beta')
   assert_re "$out" '^  1 ○ Alpha +alpha'
   assert_re "$out" '^  2 ○ Beta +beta'
-  assert_match "$out" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ ? ]'
+  assert_match "$out" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ reload l ]  [ ? ]'
   assert_match "$out" 'click a resident above to open its tab'
   assert_nomatch "$out" 'Nobody is here yet'
 
@@ -270,6 +284,64 @@ null'
     tm detach-client; pause 0.3
   fi
 
+  t "smoke: reload runs the code on disk again - the keys, the clock and the shrine loop, not the residents"
+  gen=$(cat "$STATE_DIR/clock.gen")
+  spane=$(shrine_pane); spid=$(tm display -p -t "$spane" '#{pane_pid}')
+  tm unbind -T gensokyo n              # a key lost by hand: reload builds the table again
+  assert_nomatch "$(tm list-keys -T gensokyo)" '_menu-summon'
+  out=$("$G" reload)
+  assert_match "$out" 'reloaded'
+  assert_re "$(tm list-keys -T gensokyo)" '-T gensokyo +n +run-shell .*_menu-summon'
+  assert_re "$(tm list-keys -T prefix)" '-T prefix +l +run-shell .*_reload'
+  # The shrine keeps its pane and its window - that tab must never move - and runs a new process
+  # in it, which draws the same frame again.
+  assert_eq "$(shrine_pane)" "$spane"
+  assert_ok test "$(tm display -p -t "$spane" '#{pane_pid}')" != "$spid"
+  assert_match "$(shrine_shows '1 ○ Alpha')" '[ summon n ]'
+  # A clock of the new code took over, and the loop of the old one stopped: the beat carries the
+  # generation of whoever wrote it, so a beat that stays behind the current generation is a loop
+  # that outlived its reload.
+  assert_ok test "$(cat "$STATE_DIR/clock.gen")" != "$gen"
+  wait_for 8 '[ "$(cat "$STATE_DIR/clock")" = "$(cat "$STATE_DIR/clock.gen")" ]'
+  assert_eq "$(cat "$STATE_DIR/clock")" "$(cat "$STATE_DIR/clock.gen")"
+  assert_match "$("$G" doctor)" 'clock      ticking'
+  # A beat from anywhere else is a second loop writing it, which is what a cockpit older than the
+  # generations leaves behind: nothing can wave that one off, so it is said out loud instead.
+  printf 'older\n' > "$STATE_DIR/clock"
+  wait_for 10 '[ -f "$STATE_DIR/clock.stray" ]'
+  assert_match "$("$G" doctor)" 'a second clock is ticking as well'
+  rm -f "$STATE_DIR/clock.stray"
+  # share/tmux.conf blanks status-left on its way through a reload, so push_bar has to come after
+  # it: otherwise the bar stays empty until somebody attaches again.
+  assert_ok test -n "$(tm show -gv status-left)"
+  assert_eq "$(tm show -gv status)" 2   # the plain client's two rows
+
+  t "smoke: and with iTerm2's kind of client attached it sets that bar up instead, and fills it"
+  attach_cc
+  if [ -z "$(cc_client)" ]; then skip "could not attach a control-mode client (script(1))"; else
+    out=$("$G" reload); assert_match "$out" 'reloaded'
+    assert_eq "$(tm show -gv status)" on
+    assert_nomatch "$(tm show -g status-format)" '_bar 1'   # iTerm2 shows nothing under an override
+    assert_ok test -n "$(tm show -gv status-left)"
+    tm detach-client -t "$(cc_client)"
+    wait_for 5 '[ -z "$(cc_client)" ]'
+    out=$("$G" reload)                  # back to the two rows the tests after this one read
+    assert_eq "$(tm show -gv status)" 2
+  fi
+
+  t "smoke: reload leaves the residents and the shrine's own pane where they were"
+  # Nobody was disturbed: the same residents, the same panes, the same windows.
+  assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 3
+  assert_match "$(tm capture-pane -p -t "$pane1")" 'env CLAUDE*: 0'
+  assert_eq "$(rec_get "$RES_DIR/$id1" pane)" "$pane1"
+
+  t "smoke: and the shrine's own reload button, which has to survive respawning the pane it is in"
+  spid=$(tm display -p -t "$spane" '#{pane_pid}')
+  assert_ok shrine_click '[ reload l ]'
+  wait_for 10 '[ "$(tm display -p -t "$spane" "#{pane_pid}")" != "$spid" ]'
+  assert_ok test "$(tm display -p -t "$spane" '#{pane_pid}')" != "$spid"
+  assert_match "$(shrine_shows '1 ○ Alpha')" '[ reload l ]'
+
   t "smoke: clicking a resident's line in the shrine brings its window to the front"
   assert_match "$(shrine_shows '2 ○ Beta')" '2 ○ Beta'
   shrine_click '2 ○ Beta' 3
@@ -318,13 +390,13 @@ null'
   row=$(tm capture-pane -p -t "$out" | grep -n -F '[ close x ]' | head -n 1 | cut -d: -f1)
   col=$(tm capture-pane -p -t "$out" | sed -n "${row}p" | awk '{ print index($0, "[ close x ]") + 1 }')
   tm send-keys -t "$out" -l "$(printf '\033[<0;%s;%sM\033[<0;%s;%sm' "$col" "$row" "$col" "$row")"
-  pause 1
+  wait_for 10 '[ ! -f "$RES_DIR/$cirno" ]'
   assert_ok test ! -f "$RES_DIR/$cirno"
   assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 3   # Alpha, Beta, the shrine
 
   t "smoke: /rename inside a resident reaches list and close"
   tm send-keys -t "$pane2" -l '/rename Gamma' \; send-keys -t "$pane2" Enter
-  pause 0.5; rm -f "$REGISTRY"
+  wait_for 10 '[ "$(rec_get "$RES_DIR/$id2" name)" = Gamma ]'; rm -f "$REGISTRY"
   assert_match "$("$G" list)" 'Gamma'
   assert_eq "$(rec_get "$RES_DIR/$id2" name)" Gamma
 
@@ -419,8 +491,12 @@ null'
   assert_match "$out" 'no transcript'
 
   t "smoke: the last resident leaving leaves the shrine window, and the server, alone"
-  "$G" close 1 >/dev/null 2>&1; pause 1.2
-  "$G" close 1 >/dev/null 2>&1; pause 0.5
+  # Two closes, each waited out rather than timed: the first asks for /exit and is done when the
+  # record says departed, the second is the departed screen's x and is done when the record is gone.
+  "$G" close 1 >/dev/null 2>&1
+  wait_for 10 '[ -n "$(grep -l "^departed=" "$RES_DIR"/* 2>/dev/null)" ]'
+  "$G" close 1 >/dev/null 2>&1
+  wait_for 10 '[ -z "$(ls "$RES_DIR" 2>/dev/null)" ]'
   assert_ok tm has-session -t =gensokyo
   assert_eq "$(tm list-windows -t =gensokyo -F '#{window_name}')" '⛩ gensokyo'
   out=$(shrine_shows 'Nobody is here yet')

@@ -34,6 +34,7 @@ banish|x|[ banish x ]|ask a resident to /exit; its tab then shows the departed s
 recall|r|[ recall r ]|bring a departed resident back, with its name and transcript
 cast|s|[ cast s ]|send one prompt to every resident at once
 timetable|t|[ timetable t ]|the rituals: prompts on a schedule
+reload|l|[ reload l ]|run gensokyo's own code again after you change it on disk
 help|?|[ ? ]|this screen
 EOF
 }
@@ -502,6 +503,9 @@ shrine_do() {
       focus_window "${R_window:-$R_pane}" ;;
     summon|banish|recall|help) SHRINE_VIEW=$action ;;
     cast)      SHRINE_SAID='casting a spell card is not available yet' ;;
+    # Handed to the tmux server rather than run here: a reload respawns this pane, and this
+    # process is a child of it - it would be killed halfway through its own work.
+    reload)    tmux_ run-shell -b "$(sq "$SELF") _reload"; SHRINE_SAID='reloading' ;;
     timetable) SHRINE_SAID='the timetable is not available yet' ;;
     cancel)    SHRINE_VIEW=main; SHRINE_ARG='' ;;
     pick-dir)     shrine_summon "$arg" ;;
@@ -655,14 +659,26 @@ shrine_press() {
   return 0
 }
 
-# shrine_signal: put a hook's news on the shrine now instead of at its next tick. The loop
-# marks its own pane with @shrine, and a pane's #{pane_pid} is the process running in it.
-shrine_signal() {
-  local pid mark
-  while read -r pid mark; do
-    [ "$mark" = 1 ] && [ -n "$pid" ] && kill -USR1 "$pid" 2>/dev/null
+# shrine_panes: "<pid> <pane>" for each pane running the shrine loop. The loop marks its own
+# pane with @shrine, and a pane's #{pane_pid} is the process running in it. There is one shrine
+# and it keeps its window, but a walk costs nothing and cannot be surprised by a second one.
+shrine_panes() {
+  local pid pane mark
+  while read -r pid pane mark; do
+    [ "$mark" = 1 ] && [ -n "$pid" ] && printf '%s %s\n' "$pid" "$pane"
   done <<EOF
-$(tmux_ list-panes -s -t "=$SESSION" -F '#{pane_pid} #{@shrine}' 2>/dev/null)
+$(tmux_ list-panes -s -t "=$SESSION" -F '#{pane_pid} #{pane_id} #{@shrine}' 2>/dev/null)
+EOF
+  return 0
+}
+
+# shrine_signal: put a hook's news on the shrine now instead of at its next tick.
+shrine_signal() {
+  local pid pane
+  while read -r pid pane; do
+    kill -USR1 "$pid" 2>/dev/null
+  done <<EOF
+$(shrine_panes)
 EOF
   return 0
 }

@@ -77,6 +77,25 @@ open_pane() {
   printf '%s\n' "$win"
 }
 
+# pane_settled <pane>: wait for the Ctrl-C cmd_close just sent to land, then for the pane to
+# stop moving.
+# How long a resident takes to come back to an empty prompt is its own business, and a fixed wait
+# is a race: too short and the interrupt eats the first characters of what is typed next, which
+# leaves a resident that was asked to leave and never heard it. A spinner, a redraw or an
+# interrupt being handled all read as the pane changing; a pane waiting for input does not.
+pane_settled() {
+  local a b n=0
+  nap 0.3
+  a=$(tmux_ capture-pane -p -t "$1" 2>/dev/null)
+  while [ "$n" -lt 12 ]; do
+    nap 0.15
+    b=$(tmux_ capture-pane -p -t "$1" 2>/dev/null)
+    [ "$a" = "$b" ] && return 0
+    a=$b; n=$((n + 1))
+  done
+  return 0
+}
+
 cmd_close() {
   local f id
   [ -n "${1:-}" ] || die "usage: gensokyo close <name|slot>"
@@ -92,7 +111,7 @@ cmd_close() {
     # Ctrl-C first: it clears a half-typed prompt (or interrupts the running turn) so that
     # /exit lands on an empty line. `send-keys -l` then `send-keys Enter` submits reliably.
     tmux_ send-keys -t "$R_pane" C-c
-    perl -e 'select(undef, undef, undef, 0.3)' 2>/dev/null || sleep 1
+    pane_settled "$R_pane"
     tmux_ send-keys -t "$R_pane" -l '/exit' \; send-keys -t "$R_pane" Enter
     say "asked $R_name to leave (/exit); the pane shows the departed screen once claude exits"
   fi

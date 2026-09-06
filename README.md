@@ -45,6 +45,7 @@ bin/gensokyo               # attach the cockpit (--tty for the plain tmux client
 bin/gensokyo help          # command list; --json is what the resident skill reads
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
+bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: run the new code (Ctrl-Space l)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
                                      # the harness lives there, the tests in tests/cases/*.sh
 ```
@@ -67,6 +68,15 @@ checkout without installing also works (`bin/gensokyo`); residents then find the
 reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its own tmux server
 (`tmux -L gensokyo`) with `share/tmux.conf`, and per-user tweaks go in `~/.config/gensokyo/`
 (`config` for KEY=value settings such as `PREFIX=C-Space`, `tmux.conf` sourced last).
+
+`gensokyo reload` (`Ctrl-Space l`, or the `reload` button on the shrine tab) runs the code that
+is on disk now: the tmux options, the key bindings, the bar style, the pinned binaries, and the
+two processes gensokyo runs of its own - the shrine's loop and the clock behind the status bar -
+without touching a single resident. Editing `lib/*.sh` does not reach anything already running,
+so this is what to press after a change; two things it cannot reach are the settings a resident
+was launched with (a change to the hooks needs that resident recalled) and the environment the
+tmux server itself inherited, such as `PATH` or a newly vendored tmux, which needs the cockpit
+restarted.
 
 ## When a resident needs you
 

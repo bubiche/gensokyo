@@ -10,7 +10,8 @@ shrine_tests() {
   fresh; rm -f "$REGISTRY"
   shrine_render 80 24
   assert_match "$SHRINE_TEXT" 'Nobody is here yet.'
-  assert_match "$SHRINE_TEXT" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ ? ]'
+  assert_match "$SHRINE_TEXT" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]'
+  assert_match "$SHRINE_TEXT" '[ reload l ]  [ ? ]'   # 80 columns is one button short of a single row
   assert_nomatch "$SHRINE_MAP" '|focus|'
 
   t "shrine: a line-block per resident, with its directory, branch and telemetry"
@@ -36,7 +37,7 @@ shrine_tests() {
   assert_eq "$(shrine_at "$(shrine_map_find summon)")" '[ summon n ]'
   assert_eq "$(shrine_at "$(shrine_map_find timetable)")" '[ timetable t ]'
   assert_eq "$(shrine_at "$(shrine_map_find help)")" '[ ? ]'
-  assert_eq "$(shrine_buttons | cut -d'|' -f2 | tr -d '\n')" 'nxrst?'
+  assert_eq "$(shrine_buttons | cut -d'|' -f2 | tr -d '\n')" 'nxrstl?'
 
   t "shrine: every button still has its own columns when the pane is too narrow for one row"
   shrine_render 44 24
@@ -49,7 +50,7 @@ shrine_tests() {
   for f in 1 2 3 4 5 6 7; do rec "0000000$f-cccc-4000-8000-00000000000$f" "slot=$f" "name=R$f" cwd=/tmp window="@$f" "pane=%$f"; done
   shrine_render 80 14
   assert_eq "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" 14
-  assert_match "$SHRINE_TEXT" '  … 2 more (gensokyo list)'
+  assert_match "$SHRINE_TEXT" '  … 3 more (gensokyo list)'
   assert_match "$SHRINE_TEXT" '[ summon n ]'
   assert_eq "$(shrine_map_find focus 6)" ''
   shrine_render 80 24                       # room for everyone: nothing is given up

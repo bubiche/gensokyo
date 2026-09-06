@@ -25,7 +25,7 @@ and the per-pane title bars.
 
 | Tool | Why | Install |
 |---|---|---|
-| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh scripts/vendor.sh`; `-x` follows the `lib/*.sh` sources) | `brew install shellcheck` |
+| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh scripts/vendor.sh`; `-x` follows the `lib/*.sh` and `tests/cases/*.sh` sources) | `brew install shellcheck` |
 | `curl` | fetches the vendored binaries | preinstalled on macOS |
 | Docker (optional) | run the Linux vendor binaries in `debian:stable-slim` | https://docker.com |
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
@@ -46,6 +46,7 @@ bin/gensokyo help          # command list; --json is what the resident skill rea
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
+                                     # the harness lives there, the tests in tests/cases/*.sh
 ```
 
 ## Installing

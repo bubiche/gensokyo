@@ -180,6 +180,6 @@ refresh_bar() {   # refresh_bar [stale registry ok]
     n=$((n + 1))
     tmux_ refresh-client -S -t "$c"
   done
-  [ "$n" -gt 0 ] && push_bar "${1:-}"
+  [ "$n" -gt 0 ] && { push_bar "${1:-}"; shrine_signal; }
   return 0
 }

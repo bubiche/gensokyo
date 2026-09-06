@@ -17,8 +17,8 @@ outcome, and whether the resident asked before a destructive action.
 | 4 | who is waiting on me? | `gensokyo list --json`, answers with the waiting ones | ✓ `list --json`; "nobody is waiting", named the idle and departed ones |
 | 5 | close the Sakuya session | asks first, then `gensokyo close Sakuya` | ✓ asked first (AskUserQuestion dialog with Yes/No), then `close Sakuya` |
 | 6 | stop session 2 | asks first, then `gensokyo close 2` | not run (same shape as 5) |
-| 7 | zoom on Marisa | `gensokyo focus Marisa` | ✓ `focus Cirno` (selects the pane; the tmux zoom stays a key) |
-| 8 | show all panes again | `gensokyo stage tiled` | ✓ `stage tiled` |
+| 7 | zoom on Marisa | no command: says to click Marisa's tab, or her line in the shrine tab | to run again (the answer changed: focusing is the user's click now) |
+| 8 | show all panes again | no command: every resident already fills its own tab | to run again (the answer changed with the tabs) |
 | 9 | tell Marisa to run the tests | SendMessage to Marisa, no gensokyo command | not run here (SendMessage between sessions verified separately) |
 | 10 | resume the session that departed | `gensokyo resume --json` or `gensokyo resume <name>`; recalls it | not yet run with the command in place (before it existed: read `help --json`, said so, pointed at `r` in the departed pane) |
 | 11 | what can gensokyo do? | reads `gensokyo help --json`, lists the commands | ✓ listed every command from `help --json`, noted resume is missing and that messaging is SendMessage |

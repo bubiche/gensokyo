@@ -43,7 +43,7 @@ scripts/vendor.sh --status
 bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
 bin/gensokyo               # attach the cockpit (--tty for the plain tmux client, --detach for the server alone)
 bin/gensokyo help          # command list; --json is what the resident skill reads
-bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; close <name>, list, focus <name>
+bin/gensokyo new ~/dev/x -n Marisa   # a resident in a window of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
 ```
@@ -112,6 +112,11 @@ report per resident under its state directory and shows it everywhere:
 - **Usage**: the account-wide numbers from the newest report,
   `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts), at the
   right of iTerm2's status bar, or of row 2 under `--tty`.
+- **The shrine tab**: gensokyo's own first tab draws a line per resident - slot, state, name,
+  directory, branch, the same telemetry as the border, and what a resident who needs you is
+  waiting for. It redraws every three seconds and the moment a hook has news. Click a resident
+  to bring its tab to the front, and the buttons under them to summon, banish or recall one;
+  every button carries the letter that does the same thing, and `?` lists them.
 - **Pane border**: `1 Reimu · gensokyo ⎇ main · Sonnet 5→⚖ Opus · high · plan · ⚡91% · $0.42`:
   directory and branch (read from `.git/HEAD`, no git needed), model and advisor model (from
   the resident's settings chain), effort, permission mode (from the hooks: known after the first

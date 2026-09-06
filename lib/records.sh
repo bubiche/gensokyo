@@ -95,6 +95,11 @@ prune_records() {
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
     rec_load "$f"
+    # A record that read back as nothing is not a record that says nothing: `read` gives up when
+    # a signal lands in the middle of it, and the shrine's loop is signalled by every hook. The
+    # cost of skipping a record here is one more tick before a dead pane is noticed; the cost of
+    # trusting the empty read is deleting a resident who is sitting right there.
+    [ -n "$R_slot" ] || continue
     if [ -n "$R_pane" ]; then
       case $live in *$'\n'"$R_pane"$'\n'*) ;; *) drop_record "$f" ;; esac
     elif [ $((now - ${R_launched:-0})) -gt 30 ]; then

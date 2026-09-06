@@ -51,6 +51,30 @@ assert_fails() { if "$@" >/dev/null 2>&1; then bad "command should fail: $*"; el
 
 pause() { perl -e "select(undef,undef,undef,$1)" 2>/dev/null || sleep 1; }
 
+# The shrine frame is read the way a click reads it: shrine_map_find gives the map entry for an
+# action (and argument), shrine_at cuts the columns that entry names out of the row it names.
+shrine_map_find() { printf '%s' "$SHRINE_MAP" | awk -F'|' -v a="$1" -v g="${2:-}" '$4 == a && $5 == g { print; exit }'; }
+# The widest row of the frame, in columns - which is what a pane is measured in, and neither what
+# awk counts (the bytes of ⛩) nor what ${#line} counts (幻 想 郷 as one each).
+shrine_widest() {
+  local line n max=0
+  while IFS= read -r line; do n=$(shrine_text_width "$line"); [ "$n" -gt "$max" ] && max=$n; done <<EOF
+$SHRINE_TEXT
+EOF
+  printf '%s' "$max"
+}
+# shrine_event reads the terminal; give it one written down instead.
+shrine_typed() { printf '%s' "$1" > "$scratch/typed"; shrine_event < "$scratch/typed"; }
+shrine_at() {
+  local row c1 c2 line
+  [ -n "$1" ] || return 0
+  IFS='|' read -r row c1 c2 _ _ <<EOF
+$1
+EOF
+  line=$(printf '%s\n' "$SHRINE_TEXT" | sed -n "${row}p")
+  printf '%s' "${line:$((c1 - 1)):$((c2 - c1 + 1))}"
+}
+
 # ---------------------------------------------------------------- unit
 # shellcheck source=../bin/gensokyo
 # shellcheck disable=SC1091
@@ -193,9 +217,13 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="new") | .alias')" summon
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="close") | .alias')" banish
   assert_eq "$(printf '%s' "$out" | jq_ -r '.commands[] | select(.name=="list") | .alias')" who
-  assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("focus") != null')" true
+  # Focusing a resident is a click on its tab or its line in the shrine, so there is no command
+  # for it any more and the handbook skill must not promise one.
+  assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("focus") != null')" false
+  assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("send") != null')" false
+  assert_eq "$(printf '%s' "$out" | jq_ -r '[.commands[].name] | index("stage") != null')" false
   assert_eq "$(printf '%s' "$out" | jq_ -r '.prefix')" C-Space
-  for f in new close list focus resume help doctor; do
+  for f in new close list resume help doctor; do
     assert_match "$("$root/bin/gensokyo" help)" "gensokyo $f"
   done
 
@@ -261,6 +289,176 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   fresh; rm -f "$REGISTRY"
   assert_eq "$(cmd__bar 1 '' plain)" ' ⛩ gensokyo  no residents yet '
   assert_match "$(cmd__bar 1 '')" 'then g n to summon'
+
+  t "shrine: with nobody here the frame is the banner and the buttons, and nothing to focus"
+  fresh; rm -f "$REGISTRY"
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" 'Nobody is here yet.'
+  assert_match "$SHRINE_TEXT" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ ? ]'
+  assert_nomatch "$SHRINE_MAP" '|focus|'
+
+  t "shrine: a line-block per resident, with its directory, branch and telemetry"
+  fresh; rm -f "$REGISTRY"
+  rec 11111111-aaaa-4000-8000-000000000001 slot=1 name=Reimu "cwd=$scratch/work/alpha" window=@1 pane=%1 mode=acceptEdits
+  rec 22222222-bbbb-4000-8000-000000000002 slot=2 name=Marisa cwd=/tmp/mozart window=@2 pane=%2 departed=1
+  mkdir -p "$scratch/work/alpha/.git"; echo 'ref: refs/heads/main' > "$scratch/work/alpha/.git/HEAD"
+  printf 'model=Opus 5\nctx=42\neffort=high\ncache=88\ncost=0.42\nadvisor=opus\nat=%s\n' "$(date +%s)" \
+    > "$TELE_DIR/11111111-aaaa-4000-8000-000000000001.kv"
+  shrine_render 100 24
+  assert_re "$SHRINE_TEXT" '^  1 ○ Reimu +alpha +⎇ main · Opus 5→⚖ Opus · high · accept-edits · ⚡88% · \$0\.42$'
+  assert_re "$SHRINE_TEXT" '^  2 · Marisa +mozart +departed$'
+  assert_match "$SHRINE_TEXT" "  $SHRINE_NAME"
+  assert_match "$SHRINE_TEXT" '  ⏲ no rituals yet'
+  assert_match "$SHRINE_TEXT" '  click a resident above to open its tab'
+
+  t "shrine: the row map points at the line each resident was drawn on"
+  assert_match "$(shrine_at "$(shrine_map_find focus 1)")" '1 ○ Reimu'
+  assert_match "$(shrine_at "$(shrine_map_find focus 2)")" '2 · Marisa'
+  assert_eq "$(shrine_map_find focus 7)" ''
+
+  t "shrine: and at the columns each button covers, so a click on one is not a click on its neighbour"
+  assert_eq "$(shrine_at "$(shrine_map_find summon)")" '[ summon n ]'
+  assert_eq "$(shrine_at "$(shrine_map_find timetable)")" '[ timetable t ]'
+  assert_eq "$(shrine_at "$(shrine_map_find help)")" '[ ? ]'
+  assert_eq "$(shrine_buttons | cut -d'|' -f2 | tr -d '\n')" 'nxrst?'
+
+  t "shrine: every button still has its own columns when the pane is too narrow for one row"
+  shrine_render 44 24
+  assert_eq "$(shrine_at "$(shrine_map_find summon)")" '[ summon n ]'
+  assert_eq "$(shrine_at "$(shrine_map_find help)")" '[ ? ]'
+  assert_ok test "$(shrine_map_find summon | cut -d'|' -f1)" -lt "$(shrine_map_find help | cut -d'|' -f1)"
+
+  t "shrine: the frame never outgrows the pane; residents that do not fit are counted"
+  fresh; rm -f "$REGISTRY"
+  for f in 1 2 3 4 5 6 7; do rec "0000000$f-cccc-4000-8000-00000000000$f" "slot=$f" "name=R$f" cwd=/tmp window="@$f" "pane=%$f"; done
+  shrine_render 80 14
+  assert_eq "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" 14
+  assert_match "$SHRINE_TEXT" '  … 2 more (gensokyo list)'
+  assert_match "$SHRINE_TEXT" '[ summon n ]'
+  assert_eq "$(shrine_map_find focus 6)" ''
+  shrine_render 80 24                       # room for everyone: nothing is given up
+  assert_nomatch "$SHRINE_TEXT" ' more (gensokyo list)'
+  assert_match "$(shrine_at "$(shrine_map_find focus 7)")" '7 ○ R7'
+
+  t "shrine: a pane too narrow for one buttons row does not push the frame past its height"
+  shrine_render 60 14
+  assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 14
+  assert_eq "$(shrine_at "$(shrine_map_find summon)")" '[ summon n ]'
+  assert_match "$(shrine_at "$(shrine_map_find focus 1)")" '1 ○ R1'
+
+  t "shrine: lines are cut to the width, or every row below a wrapped one is out of step"
+  shrine_render 30 24
+  assert_eq "$(shrine_widest)" 30
+  assert_ok test "$(shrine_widest)" -le 30
+
+  t "shrine: a wide character counts as the two columns it takes, not as one"
+  assert_eq "$(shrine_text_width 'ab')" 2
+  assert_eq "$(shrine_text_width '幻 想 郷')" 8
+  assert_eq "$(shrine_text_width '  ⛩ gensokyo')" 13
+  assert_eq "$(shrine_text_width '⎇ main · ○')" 10
+
+  t "shrine: the torii is drawn whole or not at all; a pane too small for it keeps the buttons"
+  fresh; rm -f "$REGISTRY"
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '幻 想 郷'
+  shrine_render 40 24                       # too narrow for the gate
+  assert_nomatch "$SHRINE_TEXT" '幻 想 郷'
+  assert_match "$SHRINE_TEXT" 'Nobody is here yet.'
+  assert_match "$SHRINE_TEXT" '[ summon n ]'
+  assert_ok test "$(shrine_widest)" -le 40
+  shrine_render 80 12                       # too short for it
+  assert_nomatch "$SHRINE_TEXT" '幻 想 郷'
+  assert_match "$SHRINE_TEXT" '[ summon n ]'
+  assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 12
+
+  t "shrine: a mouse report becomes a row and a column; anything else on that stream is dropped"
+  shrine_typed 'q';                  assert_eq "$SHRINE_KEY|$SHRINE_CLICK" 'q|'
+  shrine_typed $'\033';              assert_eq "$SHRINE_KEY|$SHRINE_CLICK" 'esc|'
+  shrine_typed $'\033[I';            assert_eq "$SHRINE_KEY|$SHRINE_CLICK" '|'        # the pane got the focus
+  shrine_typed $'\033[<0;59;8M';     assert_eq "$SHRINE_KEY|$SHRINE_CLICK" '|'        # the press: not ours to act on
+  shrine_typed $'\033[<0;59;8m';     assert_eq "$SHRINE_KEY|$SHRINE_CLICK" '|8 59'    # the release is
+  shrine_typed $'\033[<65;59;8m';    assert_eq "$SHRINE_KEY|$SHRINE_CLICK" '|'        # a scroll wheel
+
+  t "shrine: a click is answered by what was drawn where it landed, and nowhere else"
+  fresh; rm -f "$REGISTRY"
+  rec 11111111-aaaa-4000-8000-000000000001 slot=1 name=Reimu cwd=/tmp/alpha window=@1 pane=%1
+  rec 22222222-bbbb-4000-8000-000000000002 slot=4 name=Marisa cwd=/tmp/mozart window=@2 pane=%2
+  SHRINE_VIEW=main; shrine_render 80 24
+  assert_eq "$(shrine_hit "$(shrine_map_find focus 4 | cut -d'|' -f1)" 3)" 'focus|4'
+  assert_eq "$(shrine_hit "$(shrine_map_find summon | cut -d'|' -f1)" "$(shrine_map_find summon | cut -d'|' -f2)")" 'summon|'
+  assert_eq "$(shrine_hit 1 1)" ''            # the blank line above the first block
+  assert_eq "$(shrine_hit 99 1)" ''           # below everything drawn
+
+  t "shrine: a letter runs the button that carries it, and only on the screen that shows it"
+  assert_eq "$(shrine_letter n)" summon
+  assert_eq "$(shrine_letter '?')" help
+  assert_eq "$(shrine_letter z)" ''
+  SHRINE_VIEW=banish
+  assert_eq "$(shrine_letter n)" ''           # not a summon behind the picker
+  assert_eq "$(shrine_letter q)" cancel
+  SHRINE_VIEW=confirm
+  assert_eq "$(shrine_letter y)" banish-yes
+  assert_eq "$(shrine_letter n)" cancel
+
+  t "shrine: the summon picker offers the directories gensokyo has been used in, and another"
+  SHRINE_VIEW=summon
+  printf '%s\n/tmp\n' "$scratch/work/alpha" > "$STATE_DIR/recent-dirs"
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  summon a resident into'
+  assert_match "$(shrine_at "$(shrine_map_find pick-dir "$scratch/work/alpha")")" '1  '
+  assert_match "$(shrine_at "$(shrine_map_find pick-dir /tmp)")" '2  /tmp'
+  assert_match "$(shrine_at "$(shrine_map_find pick-dir '')")" '3  other directory…'
+  assert_eq "$(shrine_digit 2)" 'pick-dir|/tmp'
+  assert_eq "$(shrine_at "$(shrine_map_find cancel)")" '[ cancel q ]'
+
+  t "shrine: the banish picker lists who is here, and picking one asks before it does anything"
+  SHRINE_VIEW=banish; shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  banish which resident?'
+  assert_match "$(shrine_at "$(shrine_map_find pick-banish 11111111-aaaa-4000-8000-000000000001)")" 'Reimu'
+  assert_eq "$(shrine_digit 2)" 'pick-banish|22222222-bbbb-4000-8000-000000000002'
+  shrine_do pick-banish 22222222-bbbb-4000-8000-000000000002
+  assert_eq "$SHRINE_VIEW" confirm
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  banish Marisa?'
+  assert_eq "$(shrine_at "$(shrine_map_find banish-yes)")" '[ yes y ]'
+  shrine_do cancel
+  assert_eq "$SHRINE_VIEW|$SHRINE_ARG" 'main|'
+
+  t "shrine: the recall picker lists who has departed, newest first"
+  rec_set "$RES_DIR/11111111-aaaa-4000-8000-000000000001" departed 1700000000
+  SHRINE_VIEW=recall; shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  recall which resident?'
+  assert_match "$(shrine_at "$(shrine_map_find pick-recall 11111111-aaaa-4000-8000-000000000001)")" 'Reimu'
+  assert_eq "$(shrine_digit 1)" 'pick-recall|11111111-aaaa-4000-8000-000000000001'
+
+  t "shrine: a picker does not outgrow its pane either, and never numbers past nine"
+  SHRINE_VIEW=summon
+  : > "$STATE_DIR/recent-dirs"
+  for f in 1 2 3 4 5 6 7 8 9; do mkdir -p "$scratch/d$f"; printf '%s\n' "$scratch/d$f" >> "$STATE_DIR/recent-dirs"; done
+  shrine_render 80 10
+  assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 10
+  assert_match "$SHRINE_TEXT" ' more'
+  assert_eq "$(shrine_at "$(shrine_map_find cancel)")" '[ cancel q ]'
+  shrine_render 80 24
+  assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 24
+  assert_eq "$(shrine_digit 9)" 'pick-dir|'   # eight directories at most, then the way to name another
+  assert_match "$(shrine_at "$(shrine_map_find pick-dir '')")" 'other directory…'
+  SHRINE_VIEW=main
+
+  t "shrine: the help screen says what every letter does, from the table the buttons come from"
+  SHRINE_VIEW=help; shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  n   start a resident in a directory of your choosing'
+  assert_match "$SHRINE_TEXT" '  ?   this screen'
+  assert_eq "$(shrine_at "$(shrine_map_find cancel)")" '[ cancel q ]'
+  assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 24
+  SHRINE_VIEW=main
+
+  t "shrine: what is not built yet says so instead of doing nothing"
+  shrine_do cast
+  assert_match "$SHRINE_SAID" 'not available yet'
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" 'not available yet'
+  shrine_do cancel; SHRINE_SAID=''
 
   t "clock_age is empty until the clock has ticked once"
   rm -f "$STATE_DIR/clock"
@@ -501,11 +699,68 @@ attach_headless() {
   fi
   pause 1
 }
+# The shrine's pane, found the way gensokyo finds it: the loop marks it with @shrine. Its
+# window is not the session's current one once a resident has been focused.
+shrine_pane() { tm list-panes -s -t =gensokyo -F '#{pane_id} #{@shrine}' 2>/dev/null | awk '$2 == 1 { print $1 }'; }
+# capture it by that pane id only: an empty -t would read whichever pane is current instead,
+# and report a resident's screen as the shrine's.
+shrine_capture() { local p; p=$(shrine_pane); [ -n "$p" ] && tm capture-pane -p -t "$p" 2>/dev/null; return 0; }
+# pane_shows <pane> <text>: what the pane holds, once it holds that text. A pane is driven by
+# keystrokes and by a stub that has to start, so a fixed pause is a race that a busy machine
+# loses; this waits for the state the assertion is about and then reads it once.
+pane_shows() {
+  local out i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    out=$(tm capture-pane -p -t "$1" 2>/dev/null)
+    case $out in *"$2"*) break ;; esac
+    pause 0.3
+  done
+  printf '%s' "$out"
+}
+# shrine_click <text> [column]: click the shrine line that holds that text, the way a mouse does -
+# the SGR release report the shrine acts on, at that row and column. Column 3 is inside every
+# list line, whose whole width is one target; a button wants the column its text starts at.
+shrine_click() {
+  local p out row line col
+  p=$(shrine_pane); [ -n "$p" ] || { warn "no shrine pane"; return 1; }
+  out=$(shrine_capture)
+  row=$(printf '%s\n' "$out" | grep -n -F -- "$1" | head -n 1 | cut -d: -f1)
+  [ -n "$row" ] || { warn "the shrine has no line holding: $1"; return 1; }
+  line=$(printf '%s\n' "$out" | sed -n "${row}p")
+  col=${2:-$(awk -v l="$line" -v s="$1" 'BEGIN { print index(l, s) + 1 }')}
+  tm send-keys -t "$p" -l "$(printf '\033[<0;%s;%sM\033[<0;%s;%sm' "$col" "$row" "$col" "$row")"
+}
+# shrine_key <character>: the letter or digit that does the same as clicking.
+shrine_key() { local p; p=$(shrine_pane); [ -n "$p" ] && tm send-keys -t "$p" -l "$1"; }
+# shrine_type <text>: an answer to the question the shrine is holding.
+shrine_type() { local p; p=$(shrine_pane); tm send-keys -t "$p" -l "$1" \; send-keys -t "$p" Enter; }
+# Which tab is at the front: with one pane per window, the pane the session is showing.
+pane_current() { tm display -p -t '=gensokyo:' '#{pane_id}' 2>/dev/null; }
+# pane_fronts <pane>: that pane, once the session is showing it. A click travels through the
+# terminal and a loop that is not necessarily reading at that moment, so this waits for it.
+pane_fronts() {
+  local i=0
+  while [ "$i" -lt 20 ]; do
+    [ "$(pane_current)" = "$1" ] && break
+    i=$((i + 1)); pause 0.2
+  done
+  pane_current
+}
+# shrine_shows <text>: the shrine redraws on its own clock, so give it a tick to catch up.
+shrine_shows() {
+  local out i
+  for i in 1 2 3 4 5 6 7 8 9; do
+    out=$(shrine_capture)
+    case $out in *"$1"*) break ;; esac
+    pause 0.5
+  done
+  printf '%s' "$out"
+}
 cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scratch"; }
 trap cleanup EXIT
 
 smoke_tests() {
-  local out pane1 pane2 pane id1 id2 id3 id4 name3 args
+  local out pane1 pane2 pane id1 id2 id3 id4 name3 args cirno row col
   t "smoke: prerequisites"
   if [ -z "$TMUX_BIN" ] || [ -z "$JQ_BIN" ]; then skip "no tmux/jq (run scripts/vendor.sh)"; return; fi
   ok
@@ -564,6 +819,15 @@ smoke_tests() {
   assert_eq "$(rec_get "$RES_DIR/$id2" mode)" plan
   assert_nomatch "$(cat "$STUB_STATE/$id1.args")" '--model'
   assert_match "$(tm capture-pane -p -t "$pane1")" 'env CLAUDE*: 0'
+
+  t "smoke: the shrine tab draws a block per resident and the buttons under them"
+  assert_re "$(shrine_pane)" '^%[0-9]+$'
+  out=$(shrine_shows '2 ○ Beta')
+  assert_re "$out" '^  1 ○ Alpha +alpha'
+  assert_re "$out" '^  2 ○ Beta +beta'
+  assert_match "$out" '[ summon n ]  [ banish x ]  [ recall r ]  [ cast s ]  [ timetable t ]  [ ? ]'
+  assert_match "$out" 'click a resident above to open its tab'
+  assert_nomatch "$out" 'Nobody is here yet'
 
   t "smoke: list and list --json see both, idle"
   rm -f "$REGISTRY"
@@ -676,17 +940,66 @@ null'
       pause 0.25
     done
     assert_eq "$out" '1 ○ Alpha'
+
+    t "smoke: a hook wakes the shrine too, so its blocks do not wait for the next tick"
+    payload "$id1" Stop ',"last_assistant_message":"ping"' | "$G" _hook
+    pause 0.4
+    assert_match "$(shrine_capture)" '  1 ✦ Alpha'
+    payload "$id1" UserPromptSubmit '' | "$G" _hook
     tm detach-client; pause 0.3
   fi
 
-  t "smoke: focus by name and slot brings that resident's window to the front"
-  assert_match "$("$G" focus beta)" 'focused Beta (slot 2)'
-  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane2"
-  assert_match "$("$G" focus 1)" 'focused Alpha'
-  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane1"
-  "$G" _focus 2 "$(tm list-clients -F '#{client_name}' | head -n 1)" >/dev/null 2>&1   # the prefix-2 key
-  assert_eq "$(tm display -p -t '=gensokyo:' '#{pane_id}')" "$pane2"
-  assert_fails "$G" focus 7
+  t "smoke: clicking a resident's line in the shrine brings its window to the front"
+  assert_match "$(shrine_shows '2 ○ Beta')" '2 ○ Beta'
+  shrine_click '2 ○ Beta' 3
+  assert_eq "$(pane_fronts "$pane2")" "$pane2"
+  shrine_click '1 ○ Alpha' 3
+  assert_eq "$(pane_fronts "$pane1")" "$pane1"
+
+  t "smoke: so does the slot number the line carries, and a click on a blank row does nothing"
+  shrine_key 2
+  assert_eq "$(pane_fronts "$pane2")" "$pane2"
+  shrine_click '⏲ no rituals yet' 3          # a row with nothing on it to click
+  pause 0.6
+  assert_eq "$(pane_current)" "$pane2"
+  "$G" _focus 1 "$(tm list-clients -F '#{client_name}' | head -n 1)" >/dev/null 2>&1   # the prefix-1 key
+  assert_eq "$(pane_fronts "$pane1")" "$pane1"
+
+  t "smoke: the summon button opens the picker; a click there and a name bring a resident in"
+  shrine_key n
+  assert_match "$(shrine_shows 'summon a resident into')" 'summon a resident into'
+  assert_match "$(shrine_capture)" '[ cancel q ]'
+  shrine_click 'work/alpha' 3
+  assert_match "$(shrine_shows 'name (Enter for a random one')" 'name (Enter for a random one'
+  shrine_type Cirno
+  assert_match "$(shrine_shows 'summoned Cirno')" 'summoned Cirno'
+  assert_ok test -n "$(find_resident Cirno)"
+  assert_re "$("$G" list)" 'Cirno'
+
+  t "smoke: the banish button asks before it does anything, and yes sends that resident away"
+  shrine_key x
+  assert_match "$(shrine_shows 'banish which resident?')" 'banish which resident?'
+  shrine_click 'Cirno' 3
+  assert_match "$(shrine_shows 'banish Cirno?')" 'banish Cirno?'
+  shrine_click '[ no n ]'
+  assert_match "$(shrine_shows 'Nobody is here yet|click a resident above')" 'click a resident above'
+  assert_nomatch "$(shrine_capture)" 'banish Cirno?'
+  shrine_key x; shrine_shows 'banish which resident?' >/dev/null
+  shrine_key 3                                # the number the line carries, not the slot
+  assert_match "$(shrine_shows 'banish Cirno?')" 'banish Cirno?'
+  shrine_key y
+  cirno=$(find_resident Cirno); cirno=${cirno##*/}
+  assert_match "$(pane_shows "$(rec_get "$RES_DIR/$cirno" pane)" 'Cirno has left the shrine')" 'Cirno has left the shrine'
+
+  t "smoke: the departed screen is clicked the same way, and closing it takes its tab"
+  assert_match "$(pane_shows "$(rec_get "$RES_DIR/$cirno" pane)" '[ close x ]')" '[ recall r ]'
+  out=$(rec_get "$RES_DIR/$cirno" pane)
+  row=$(tm capture-pane -p -t "$out" | grep -n -F '[ close x ]' | head -n 1 | cut -d: -f1)
+  col=$(tm capture-pane -p -t "$out" | sed -n "${row}p" | awk '{ print index($0, "[ close x ]") + 1 }')
+  tm send-keys -t "$out" -l "$(printf '\033[<0;%s;%sM\033[<0;%s;%sm' "$col" "$row" "$col" "$row")"
+  pause 1
+  assert_ok test ! -f "$RES_DIR/$cirno"
+  assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 3   # Alpha, Beta, the shrine
 
   t "smoke: /rename inside a resident reaches list and close"
   tm send-keys -t "$pane2" -l '/rename Gamma' \; send-keys -t "$pane2" Enter
@@ -697,8 +1010,7 @@ null'
   t "smoke: close asks for /exit; the pane shows the departed screen; the chip dims"
   out=$("$G" close gamma 2>&1)
   assert_match "$out" 'Gamma'
-  pause 1.2
-  assert_match "$(tm capture-pane -p -t "$pane2")" 'Gamma has left the shrine'
+  assert_match "$(pane_shows "$pane2" 'Gamma has left the shrine')" 'Gamma has left the shrine'
   assert_ok test -n "$(rec_get "$RES_DIR/$id2" departed)"
   rm -f "$REGISTRY"
   assert_match "$("$G" _bar 1 "$pane1")" '#[dim] 2 · Gamma '
@@ -709,8 +1021,7 @@ null'
   t "smoke: resume recalls a departed pane in place with --resume and the summon flags; the name stays"
   out=$("$G" resume gamma 2>&1)
   assert_match "$out" 'recalled Gamma into its pane (slot 2)'
-  pause 1.2
-  assert_match "$(tm capture-pane -p -t "$pane2")" "stub-claude Gamma ($id2) resumed"
+  assert_match "$(pane_shows "$pane2" "stub-claude Gamma ($id2) resumed")" "stub-claude Gamma ($id2) resumed"
   args=$(cat "$STUB_STATE/$id2.args")
   assert_match "$args" "--resume $id2"
   assert_nomatch "$args" '--session-id'
@@ -720,8 +1031,8 @@ null'
   assert_match "$("$G" resume gamma 2>&1)" 'Gamma is still here (slot 2)'
   rm -f "$REGISTRY"
   assert_re "$("$G" list)" '^  2   ○  Gamma .*idle$'
-  "$G" close gamma >/dev/null 2>&1; pause 1.2
-  assert_match "$(tm capture-pane -p -t "$pane2")" 'Gamma has left the shrine'
+  "$G" close gamma >/dev/null 2>&1
+  assert_match "$(pane_shows "$pane2" 'Gamma has left the shrine')" 'Gamma has left the shrine'
 
   t "smoke: closing the departed pane takes its window with it and frees the slot"
   "$G" close 2 >/dev/null 2>&1; pause 0.5
@@ -764,7 +1075,7 @@ null'
   assert_ok test ! -f "$STATE_DIR/departed/$id3"
   assert_eq "$(rec_get "$RES_DIR/$id3" slot)|$(rec_get "$RES_DIR/$id3" window)|$(rec_get "$RES_DIR/$id3" resume)|$(rec_get "$RES_DIR/$id3" launched)" "1|$(rec_get "$RES_DIR/$id3" window)|1|$(rec_get "$RES_DIR/$id3" launched)"
   pane=$(rec_get "$RES_DIR/$id3" pane)
-  assert_match "$(tm capture-pane -p -t "$pane")" "($id3) resumed"
+  assert_match "$(pane_shows "$pane" "($id3) resumed")" "($id3) resumed"
   assert_match "$(cat "$STUB_STATE/$id3.args")" "--resume $id3"
   assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 2   # its own window, next to the shrine's
   assert_eq "$(tm display -p -t "$pane" '#{window_name}')" "1 ○ $name3"
@@ -789,7 +1100,9 @@ null'
   "$G" close 1 >/dev/null 2>&1; pause 0.5
   assert_ok tm has-session -t =gensokyo
   assert_eq "$(tm list-windows -t =gensokyo -F '#{window_name}')" '⛩ gensokyo'
-  assert_match "$(tm capture-pane -p -t '=gensokyo:')" 'Nobody is here yet'
+  out=$(shrine_shows 'Nobody is here yet')
+  assert_match "$out" 'Nobody is here yet'
+  assert_match "$out" '[ summon n ]'
   tm kill-server
 }
 

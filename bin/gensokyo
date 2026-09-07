@@ -43,6 +43,9 @@ SHRINE_NAME='⛩ gensokyo'              # the shrine window, so the first tab re
 say()  { printf '%s\n' "$*"; }
 # A fraction of a second, which `sleep` cannot be relied on to take; a whole one if perl is gone.
 nap()  { perl -e "select(undef, undef, undef, $1)" 2>/dev/null || sleep 1; }
+# The time everything that cares about the time asks for, so that a test can hand the clock and
+# the schedules a fixed minute (GENSOKYO_NOW) instead of waiting for one to come round.
+now_epoch() { printf '%s\n' "${GENSOKYO_NOW:-$(date +%s)}"; }
 warn() { printf 'gensokyo: %s\n' "$*" >&2; }
 die()  { warn "$@"; exit 1; }
 
@@ -154,6 +157,10 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/recall.sh" || exit 1
 # shellcheck source=../lib/spellcards.sh
 . "$LIB/spellcards.sh" || exit 1
+# shellcheck source=../lib/cron.sh
+. "$LIB/cron.sh" || exit 1
+# shellcheck source=../lib/rituals.sh
+. "$LIB/rituals.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh

@@ -9,11 +9,10 @@
 # nothing registers it and no resident is taught anything about it.
 CARD_title='' CARD_summary='' CARD_peer='' CARD_body='' CARD_slug=''
 
-# A card is addressed by its slug (its filename without .md) from the CLI and from a tmux menu,
-# where it travels through a run-shell command string; anything outside these characters would
-# have to survive two layers of quoting to get there, so such a file is left out and named by
-# `gensokyo broadcast` instead of being cast with a mangled name.
-card_name_ok() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9._-]*) return 1 ;; esac ;; *) return 1 ;; esac; return 0; }
+# A card is addressed by its slug (its filename without .md) from the CLI and from a tmux
+# menu; slug_ok is the rule, and a file that breaks it is named by `gensokyo broadcast`
+# instead of being cast with a mangled name.
+card_name_ok() { slug_ok "$1"; }
 
 # card_files: every usable card file, the user's before the shipped ones so the first hit for a
 # given filename wins.

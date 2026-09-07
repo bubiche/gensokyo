@@ -38,6 +38,11 @@ rec_load() {
 ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$STATE_DIR/statusline" "$CONFIG_DIR"; }
 count_records() { find "$RES_DIR" -type f 2>/dev/null | wc -l | tr -d ' '; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# slug_ok <name>: a name that survives being a file name and being a tmux menu argument,
+# where it travels through a run-shell command string. Anything outside these characters would
+# have to come back out of two layers of quoting intact, so a file named that way is left out
+# and named separately (card_unusable, ritual_unusable) rather than mangled.
+slug_ok() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9._-]*) return 1 ;; esac ;; *) return 1 ;; esac; return 0; }
 # tilde <path> [max]: ~ for $HOME; longer than max characters -> "…" plus the tail.
 tilde() {
   local p=$1 max=${2:-0}

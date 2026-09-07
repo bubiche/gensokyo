@@ -51,26 +51,31 @@ cmd_new() {
   say "summoned $name (slot $slot) in $dir"
 }
 
-# open_pane <session-id> <title> [focus]: a window of its own, one pane, running
-# `_run <session-id>`; prints the window id. One resident per window is the whole layout -
+# open_pane <session-id> <title> [focus|back]: a window of its own, one pane, running
+# `_run <session-id>`; prints the window id. `focus` is 1 to go to it, `back` to come back from
+# it whoever asked (what a ritual firing wants). One resident per window is the whole layout -
 # gensokyo never splits, tiles or zooms, because every tmux window is an iTerm2 tab and the
 # tab bar is the sidebar. No `-t <index>`: iTerm2 rewrites window indexes to match the tab
 # bar as soon as the user drags a tab, so the index is the user's and the id is ours.
 open_pane() {
   local id=$1 title=$2 focus=${3:-} cmd win here
   cmd="$(sq "$SELF") _run $id"
-  here=$(tmux_ display -p '#{window_id}' 2>/dev/null)
+  # A named target: the clock fires rituals from a `run-shell -b` job, which has no window of
+  # its own for an untargeted `display -p` to mean.
+  here=$(tmux_ display -p -t "=$SESSION:" '#{window_id}' 2>/dev/null)
   win=$(tmux_ new-window -d -P -F '#{window_id}' -n "$title" "$cmd") || return 1
-  if [ -n "$focus" ]; then
+  if [ "$focus" = 1 ]; then
     focus_window "$win"
-  elif [ -n "$here" ] && [ "$here" != "$win" ] && inside_own_server && [ "$(clients_in_mode cc)" -gt 0 ]; then
+  elif [ -n "$here" ] && [ "$here" != "$win" ] \
+       && { [ "$focus" = back ] || inside_own_server; } && [ "$(clients_in_mode cc)" -gt 0 ]; then
     # iTerm2 opens the tab and moves to it even for a detached `new-window -d`. That is a
     # rude interruption when the summon came from inside the cockpit - a resident asking for
     # a helper should not rip the user out of the tab they were reading - so focus goes back
     # to where it was. Selecting back at once loses the race with the tab opening; a moment's
     # wait wins it, at the price of a visible flick. A summon typed in a shell outside the
     # cockpit is the other way round: the user asked for that resident and wants to be in it,
-    # so the steal is left alone.
+    # so the steal is left alone. A ritual asks for `back` either way: it fires on its own
+    # schedule, into whatever the owner was doing, and never gets to take the keyboard for it.
     sleep 1.5
     focus_window "$here"
   fi
@@ -254,10 +259,13 @@ EOF
 # ---------------------------------------------------------------- resident pane
 # `gensokyo _run <session-id>` is what runs inside a resident's pane.
 cmd__run() {
-  local id=$1 rec=$RES_DIR/$1 cwd name args prompt rc resume
+  local id=$1 rec=$RES_DIR/$1 cwd name args prompt rc resume pfile
   [ -f "$rec" ] || die "no resident record for $id"
   cwd=$(rec_get "$rec" cwd); name=$(rec_get "$rec" name)
   args=$(rec_get "$rec" args); prompt=$(rec_get "$rec" prompt); resume=$(rec_get "$rec" resume)
+  # A ritual's prompt is a file: it runs to several lines, and a record key holds one.
+  pfile=$(rec_get "$rec" prompt_file)
+  [ -n "$prompt" ] || [ -z "$pfile" ] || prompt=$(cat "$pfile" 2>/dev/null)
   # The only writer of `pane` and `window`: this runs inside them, and it runs again when a
   # departed resident is recalled in place, so both follow the resident wherever it lands.
   rec_set "$rec" pane "${TMUX_PANE:-}"

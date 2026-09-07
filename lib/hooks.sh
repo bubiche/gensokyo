@@ -101,7 +101,7 @@ EOF
     PostToolUse) [ "$tool" = AskUserQuestion ] && [ "$old" = question ] && status_write "$id" '' '' ;;
   esac
   status_load "$id"
-  if [ -n "$S_pending" ] && [ "$S_pending" != "$old" ]; then notify "$R_name" "$R_pane" "$S_pending" "$S_detail"; fi
+  if [ -n "$S_pending" ] && [ "$S_pending" != "$old" ]; then notify "$R_name" "$R_pane" "$S_pending" "$S_detail" "$R_ritual"; fi
   # A hook that raises a flag must put the glyph on screen at once, which needs the registry as
   # it is now: whether a chip is gold depends on the resident being idle there rather than busy.
   # UserPromptSubmit only clears a flag, and it runs in front of the prompt the user just typed,
@@ -114,31 +114,51 @@ EOF
 }
 
 # ---------------------------------------------------------------- notifications
-# notify <name> <pane> <kind> <detail>: a toast on every attached client, then a desktop alert
-# and a terminal bell unless the owner is already watching that pane (pane_watched). One
-# notification per waiting period: _hook calls this only when pending changes.
+# notify <name> <pane> <kind> <detail> [ritual]: a toast on every attached client, then a
+# desktop alert and a terminal bell unless the owner is already watching that pane
+# (pane_watched). One notification per waiting period: _hook calls this only when pending
+# changes. A resident that is a ritual's run is news about the ritual rather than about a
+# resident nobody asked for by name, so it says which one - and carries the ⏲ in the text,
+# because the desktop alert has no glyph of its own.
 notify() {
-  local name=$1 pane=$2 kind=$3 detail=$4 text glyph flags c tty
-  case $kind in
-    question) text="$name asks: $detail" ;;
-    awaits)   text="$name needs your permission${detail:+ (${detail#permission: })}" ;;
-    *)        text="$name is done${detail:+: $detail}" ;;
-  esac
-  glyph=$(glyph_for "$kind")
-  if [ "$CFG_NOTIFY_TOAST" = on ]; then
-    while IFS='|' read -r flags c; do
-      [ -n "$c" ] || continue
-      toast_wants "$flags" || continue
-      tmux_ display-message -c "$c" -d 4000 "$glyph ${text//\#/##}"   # a bare # would start a tmux format
-    done <<EOF
-$(tmux_ list-clients -F '#{client_flags},|#{client_name}' 2>/dev/null)
-EOF
+  local name=$1 pane=$2 kind=$3 detail=$4 ritual=${5:-} text glyph tty
+  if [ -n "$ritual" ]; then
+    case $kind in
+      question) text="⏲ $ritual asks: $detail" ;;
+      awaits)   text="⏲ $ritual: needs your permission${detail:+ (${detail#permission: })}" ;;
+      *)        text="⏲ $ritual: done${detail:+: $detail}" ;;
+    esac
+    glyph=''
+  else
+    case $kind in
+      question) text="$name asks: $detail" ;;
+      awaits)   text="$name needs your permission${detail:+ (${detail#permission: })}" ;;
+      *)        text="$name is done${detail:+: $detail}" ;;
+    esac
+    glyph=$(glyph_for "$kind")
   fi
+  toast "$glyph" "$text"
   pane_watched "$pane" && return 0
   [ "$CFG_NOTIFY_DESKTOP" = on ] && desktop_notify "$name" "$text"
   if [ "$CFG_NOTIFY_BELL" = on ] && [ -n "$pane" ]; then
     tty=$(tmux_ display -p -t "$pane" '#{pane_tty}' 2>/dev/null) && [ -w "$tty" ] && printf '\a' > "$tty"
   fi
+  return 0
+}
+
+# toast <glyph> <text>: the tmux message half of a notification, on every attached client that
+# can draw one. Its own function because a ritual's news has no resident's kind to take a glyph
+# from and skips the bell, but wants the same toast.
+toast() {
+  local glyph=$1 text=$2 flags c
+  [ "$CFG_NOTIFY_TOAST" = on ] || return 0
+  while IFS='|' read -r flags c; do
+    [ -n "$c" ] || continue
+    toast_wants "$flags" || continue
+    tmux_ display-message -c "$c" -d 4000 "${glyph:+$glyph }${text//\#/##}"   # a bare # would start a tmux format
+  done <<EOF
+$(tmux_ list-clients -F '#{client_flags},|#{client_name}' 2>/dev/null)
+EOF
   return 0
 }
 

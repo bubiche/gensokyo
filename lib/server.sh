@@ -304,7 +304,7 @@ quit_wait() {
 }
 
 # ---------------------------------------------------------------- the clock
-# One loop per server, pushing the status bar (and, once rituals exist, firing them). It has
+# One loop per server, pushing the status bar and firing the rituals whose minute has come. It has
 # to be invisible: iTerm2 draws every tmux window as a native tab, so a window of ours would
 # be a tab in the user's face, whatever it was named. `run-shell -b` runs the loop as a child
 # of the tmux server instead - no window, no pane, nothing for a client to show - and tmux
@@ -312,6 +312,10 @@ quit_wait() {
 # window to see it by, so it leaves a heartbeat (`state/clock`) that `doctor` reports and that
 # every attach checks.
 CLOCK_TICK=3
+# The bar has to keep up with a resident's spinner; a schedule is written in minutes and needs
+# nothing like that. The sweep is therefore its own, slower beat inside the same loop - one
+# process for the whole server, and one that dies with it.
+RITUAL_SWEEP=20
 # A loop with no window and no pane is also a loop with nothing to signal it by, and a pid file
 # would outlive a crash, so the clock is displaced rather than killed: every start writes a
 # generation into state/clock.gen and hands the same one to the loop, and a loop whose generation
@@ -343,7 +347,7 @@ ensure_clock() {
 }
 
 cmd__tick() {
-  local gen=${1:-}
+  local gen=${1:-} swept=0 now catch
   while :; do
     server_running || return 0
     # A newer clock has taken over (an attach that found no heartbeat, or a reload): stop, and
@@ -358,6 +362,19 @@ cmd__tick() {
     # Nobody attached, nobody looking: skip the render, which would ask `claude agents --json`
     # for a fresh registry every few seconds for as long as the server runs.
     [ -n "$(tmux_ list-clients -F 1 2>/dev/null)" ] && push_bar
+    # Rituals fire whether or not anyone is watching - `gensokyo --detach` is the whole point of
+    # a cockpit that runs schedules - so the sweep is outside that guard.
+    now=$(date +%s)
+    [ "$now" -lt "$swept" ] && swept=$now   # a clock put back: wait the interval out, once
+    if [ $((now - swept)) -ge "$RITUAL_SWEEP" ]; then
+      # A fire missed while nothing was running is looked for at the first sweep of this clock -
+      # a cockpit that was down - and after a gap in our own ticking, which is the machine having
+      # slept through it. Every other sweep only asks what has come round since.
+      catch=''
+      { [ "$swept" -eq 0 ] || [ $((now - swept)) -gt $((RITUAL_SWEEP * 4)) ]; } && catch=1
+      swept=$now
+      ritual_sweep "$catch"
+    fi
     sleep "$CLOCK_TICK"
   done
 }

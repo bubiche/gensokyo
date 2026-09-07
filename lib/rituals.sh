@@ -199,6 +199,13 @@ ritual_problem() {
     *) say "target: $RIT_target is not wired up yet; new starts a fresh resident per run"; return 0 ;;
   esac
   [ -n "$RIT_cwd" ] || { say 'cwd: missing (the directory the run works in)'; return 0; }
+  # Nothing a ritual is read from has a directory of its own: the clock runs from wherever the
+  # tmux server was started, so a relative path would mean one thing to the check and another
+  # to the run. Refused rather than resolved against a directory nobody chose.
+  case $RIT_cwd in
+    /*) ;;
+    *) say "cwd: $RIT_cwd is not a full path (a run starts from the clock, which is in no directory of yours: ~/... or /...)"; return 0 ;;
+  esac
   [ -d "$RIT_cwd" ] || { say "cwd: $(tilde "$RIT_cwd") is not a directory"; return 0; }
   case $RIT_overlap in
     skip) ;;
@@ -212,6 +219,7 @@ ritual_problem() {
   esac
   rit_bool_word "$RIT_enabled"  || { say "enabled: $RIT_enabled is neither true nor false"; return 0; }
   rit_bool_word "$RIT_headless" || { say "headless: $RIT_headless is neither true nor false"; return 0; }
+  rit_bool "$RIT_headless" && { say 'headless: true is not wired up yet; every run gets a pane you can watch'; return 0; }
   rit_bool_word "$RIT_catch_up" || { say "catch_up: $RIT_catch_up is neither true nor false"; return 0; }
   [ -z "$RIT_unknown" ] || { say "not a ritual setting: $RIT_unknown"; return 0; }
   return 0

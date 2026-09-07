@@ -161,6 +161,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/cron.sh" || exit 1
 # shellcheck source=../lib/rituals.sh
 . "$LIB/rituals.sh" || exit 1
+# shellcheck source=../lib/ritualrun.sh
+. "$LIB/ritualrun.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh

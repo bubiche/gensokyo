@@ -499,33 +499,37 @@ null'
   pause 0.5
 
   t "smoke: a /exit the resident never hears is asked again, and close reports what happened"
+  # Every name typed with -n here is one share/names.txt does not hold. A placeholder is drawn at
+  # random from that list, so a hard-coded name that is also in it collides with whatever an
+  # earlier unnamed summon happened to draw - `new: X is already here`, and a dozen record
+  # counts wrong after it. Measured 2026-09-07, after two full runs failed that way.
   # The lost keystroke that cost this suite 22 tests, on demand: the stub drops the first /exit
   # one character short, exactly as the flake did. `close` used to send it, say it had asked and
   # return, leaving a resident nothing could shift and every later test failing instead.
-  out=$("$G" new "$scratch/work/alpha" -n Nitori 2>&1)
-  assert_match "$out" 'summoned Nitori'
-  id5=$(basename "$(find_resident Nitori)")
+  out=$("$G" new "$scratch/work/alpha" -n Kasen 2>&1)
+  assert_match "$out" 'summoned Kasen'
+  id5=$(basename "$(find_resident Kasen)")
   wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
-  assert_match "$(pane_shows "$pane" "stub-claude Nitori")" 'stub-claude Nitori'
+  assert_match "$(pane_shows "$pane" "stub-claude Kasen")" 'stub-claude Kasen'
   printf '1\n' > "$STUB_STATE/$id5.eat-exit"
-  out=$("$G" close Nitori 2>&1)
-  assert_match "$out" 'Nitori has left (/exit)'
+  out=$("$G" close Kasen 2>&1)
+  assert_match "$out" 'Kasen has left (/exit)'
   assert_nomatch "$out" 'did not answer'
   assert_ok test -n "$(rec_get "$RES_DIR/$id5" departed)"
   assert_eq "$(cat "$STUB_STATE/$id5.eat-exit")" 0     # the first one really was eaten
   # And one that is never heard at all is said so, not reported as a departure.
-  out=$("$G" close Nitori 2>&1); assert_match "$out" "closed Nitori's pane"   # the departed pane
-  out=$("$G" new "$scratch/work/alpha" -n Momiji 2>&1)
-  id5=$(basename "$(find_resident Momiji)")
+  out=$("$G" close Kasen 2>&1); assert_match "$out" "closed Kasen's pane"   # the departed pane
+  out=$("$G" new "$scratch/work/alpha" -n Hatate 2>&1)
+  id5=$(basename "$(find_resident Hatate)")
   wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
-  assert_match "$(pane_shows "$pane" "stub-claude Momiji")" 'stub-claude Momiji'
+  assert_match "$(pane_shows "$pane" "stub-claude Hatate")" 'stub-claude Hatate'
   printf '9\n' > "$STUB_STATE/$id5.eat-exit"
-  out=$("$G" close Momiji 2>&1)
-  assert_match "$out" 'Momiji did not answer /exit'
+  out=$("$G" close Hatate 2>&1)
+  assert_match "$out" 'Hatate did not answer /exit'
   assert_eq "$(rec_get "$RES_DIR/$id5" departed)" ''
   rm -f "$STUB_STATE/$id5.eat-exit"
-  out=$("$G" close Momiji 2>&1); assert_match "$out" 'Momiji has left (/exit)'
-  "$G" close Momiji >/dev/null 2>&1                    # its pane, so the counts below still hold
+  out=$("$G" close Hatate 2>&1); assert_match "$out" 'Hatate has left (/exit)'
+  "$G" close Hatate >/dev/null 2>&1                    # its pane, so the counts below still hold
   wait_for 5 '[ ! -f "$RES_DIR/$id5" ]'
   assert_ok test ! -f "$RES_DIR/$id5"
 
@@ -534,18 +538,18 @@ null'
   # The `x` in `/exit` used to close the pane and delete the record - the resident gone from
   # `resume` altogether. `quit` asks a second time when a /exit goes unheard, so a resident that
   # leaves in that instant reads the retry at this screen; typing /exit twice does it by hand.
-  out=$("$G" new "$scratch/work/alpha" -n Kogasa 2>&1)
-  id5=$(basename "$(find_resident Kogasa)")
+  out=$("$G" new "$scratch/work/alpha" -n Yamame 2>&1)
+  id5=$(basename "$(find_resident Yamame)")
   wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
-  assert_match "$(pane_shows "$pane" "stub-claude Kogasa")" 'stub-claude Kogasa'
-  "$G" close Kogasa >/dev/null 2>&1
-  assert_match "$(pane_shows "$pane" 'Kogasa has left the shrine')" 'Kogasa has left the shrine'
+  assert_match "$(pane_shows "$pane" "stub-claude Yamame")" 'stub-claude Yamame'
+  "$G" close Yamame >/dev/null 2>&1
+  assert_match "$(pane_shows "$pane" 'Yamame has left the shrine')" 'Yamame has left the shrine'
   tm send-keys -t "$pane" -l '/exit' \; send-keys -t "$pane" Enter
   pause 1
   assert_ok test -f "$RES_DIR/$id5"                    # still recallable
   assert_ok tm has-session -t '=gensokyo'
   assert_eq "$(tm display -p -t "$pane" '#{pane_id}' 2>/dev/null)" "$pane"
-  "$G" close Kogasa >/dev/null 2>&1                    # its pane, so the counts below still hold
+  "$G" close Yamame >/dev/null 2>&1                    # its pane, so the counts below still hold
   wait_for 5 '[ ! -f "$RES_DIR/$id5" ]'
   assert_ok test ! -f "$RES_DIR/$id5"
 
@@ -628,8 +632,8 @@ null'
   assert_ok wait_for 15 '! tm has-session -t "=$SESSION"'
 
   t "smoke: quit asks everyone to leave, waits for them, and takes the server with it"
-  "$G" new "$scratch/work/alpha" -n Suika >/dev/null
-  id5=$(grep -l '^name=Suika$' "$RES_DIR"/* | head -n 1); id5=${id5##*/}
+  "$G" new "$scratch/work/alpha" -n Kisume >/dev/null
+  id5=$(grep -l '^name=Kisume$' "$RES_DIR"/* | head -n 1); id5=${id5##*/}
   wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'
   out=$("$G" quit 2>&1)
   assert_match "$out" 'asking 1 resident(s) to leave (/exit)'
@@ -643,7 +647,7 @@ null'
   # `resume` offers has to say earlier run - not "still in its pane", which invites a recall
   # into nothing.
   out=$("$G" resume 2>&1)
-  assert_match "$out" Suika
+  assert_match "$out" Kisume
   assert_nomatch "$out" 'still in its pane'
   assert_match "$("$G" quit 2>&1)" 'gensokyo is not running'
 
@@ -653,4 +657,46 @@ null'
   assert_match "$out" 'you are one of them'
   assert_nomatch "$out" 'asking'
   assert_ok wait_for 10 '! tm has-session -t "=$SESSION"'
+
+  t "smoke: the clock fires a ritual into a resident of its own, with its flags and its prompt"
+  local ritid ritpane front
+  fresh; rm -rf "$STATE_DIR/rituals"
+  mkdir -p "$CONFIG_DIR/rituals" "$scratch/work/ritual"
+  # Every minute, and the clock left to say which one: GENSOKYO_NOW is not injected here. A
+  # record is written with the time its run started, and prune_records drops a paneless record
+  # thirty seconds later - so a fire told the minute is 09:05 hands the shrine's next sweep a
+  # record that is hours old and loses the race to it. What a fixed minute is for is the unit
+  # tests; what this is for is a real launch on the real clock.
+  {
+    printf -- '---\nschedule: "* * * * *"\ncwd: %s/work/ritual\nmodel: haiku\n' "$scratch"
+    printf 'allowed_tools: ["Read", "Bash(npm run test:*)"]\n---\ncheck the thing\n'
+  } > "$CONFIG_DIR/rituals/nightly-checks.md"
+  "$G" --detach >/dev/null
+  front=$(pane_current)
+  # The sweep the clock runs every 20 s, asked once rather than waited for: the clock is this
+  # same call on a timer.
+  ritual_sweep 1
+  # By the field, not by being the only record: the run is found the way the cockpit finds it.
+  ritid=$(grep -l '^ritual=nightly-checks$' "$RES_DIR"/* 2>/dev/null | head -n 1); ritid=${ritid##*/}
+  assert_eq "$(rec_get "$RES_DIR/$ritid" ritual)" nightly-checks
+  assert_ok wait_for 10 '[ -n "$(rec_get "$RES_DIR/$ritid" pane)" ]'
+  ritpane=$(rec_get "$RES_DIR/$ritid" pane)
+  # The prompt is the file's body with the memory file named after it, and it arrives as one
+  # prompt however many lines it has.
+  out=$(pane_shows "$ritpane" 'memory.md')
+  assert_match "$out" '> check the thing'
+  assert_match "$out" "Your notes from previous runs are at \`$STATE_DIR/rituals/nightly-checks/memory.md\`."
+  # The flags the file asked for reached claude, and the tool pattern arrived as one argument -
+  # --allowedTools is variadic, so the prompt is behind a `--` and the pattern is not three tools.
+  assert_match "$(cat "$STUB_STATE/$ritid.args")" '--model haiku'
+  assert_match "$(cat "$STUB_STATE/$ritid.args")" '--allowedTools Read Bash(npm run test:*) --'
+  # Its own name on its own tab, and the front tab is left where the owner had it: a ritual
+  # fires into whatever they were doing. (What iTerm2 does with the new tab only a screenshot
+  # shows; the tmux half is this.)
+  assert_match "$(tm list-windows -t =gensokyo -F '#{window_name}')" 'nightly-checks'
+  assert_eq "$(pane_current)" "$front"
+  assert_match "$(cat "$STATE_DIR/rituals/nightly-checks/log")" \
+    "ran (due $(ritual_when "$(ritual_stamp nightly-checks)"))"
+  rm -f "$CONFIG_DIR/rituals/nightly-checks.md"
+  tm kill-server 2>/dev/null
 }

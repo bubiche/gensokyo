@@ -5,7 +5,8 @@
 # ---------------------------------------------------------------- resident records
 # state/residents/<session-id> holds KEY=value lines: slot, name, cwd, pane (%N), window,
 # launched (epoch), args (shell-quoted launch flags), prompt, mode (the --permission-mode
-# passed at launch, if any), departed (epoch), exit, resume.
+# passed at launch, if any), departed (epoch), exit, resume, and for a ritual's run: ritual
+# (whose run this is) and prompt_file (a ritual prompt is many lines; a record key is one).
 rec_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
 rec_set() {
   local tmp=$1.tmp.$$
@@ -31,8 +32,8 @@ load_kv() {
 # rec_load <file>: every record key into R_<key>.
 rec_load() {
   # shellcheck disable=SC2034  # every key is loaded; not every caller reads all of them
-  R_slot='' R_name='' R_cwd='' R_pane='' R_window='' R_launched='' R_args='' R_prompt='' R_mode='' R_departed='' R_exit='' R_resume=''
-  load_kv "$1" R slot name cwd pane window launched args prompt mode departed exit resume
+  R_slot='' R_name='' R_cwd='' R_pane='' R_window='' R_launched='' R_args='' R_prompt='' R_mode='' R_departed='' R_exit='' R_resume='' R_ritual='' R_prompt_file=''
+  load_kv "$1" R slot name cwd pane window launched args prompt mode departed exit resume ritual prompt_file
 }
 
 ensure_dirs() { mkdir -p "$RES_DIR" "$STATE_DIR/status" "$STATE_DIR/statusline" "$CONFIG_DIR"; }

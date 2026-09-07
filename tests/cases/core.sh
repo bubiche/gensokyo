@@ -43,6 +43,22 @@ core_tests() {
   rec_load "$RES_DIR/r1"
   assert_eq "$R_slot|$R_name|$R_cwd|$R_pane" '1|Marisa|/tmp/a|'
 
+  t "a temp file left by a killed writer is swept, and one being written now is not"
+  fresh
+  : > "$STATE_DIR/registry.json.tmp.4242"          # yesterday's, from a process that was killed
+  touch -t "$(date -v-2d +%Y%m%d%H%M)" "$STATE_DIR/registry.json.tmp.4242"
+  : > "$STATE_DIR/registry.json.tmp.4243"          # a write happening right now
+  : > "$STATE_DIR/registry.json"                   # not a temp file at all
+  mkdir -p "$STATE_DIR/statusline"
+  : > "$STATE_DIR/statusline/abc.json.tmp.99"      # the same shape, one directory down
+  touch -t "$(date -v-2d +%Y%m%d%H%M)" "$STATE_DIR/statusline/abc.json.tmp.99"
+  sweep_stale_temps
+  assert_ok   test ! -e "$STATE_DIR/registry.json.tmp.4242"
+  assert_ok   test ! -e "$STATE_DIR/statusline/abc.json.tmp.99"
+  assert_ok   test -e "$STATE_DIR/registry.json.tmp.4243"
+  assert_ok   test -e "$STATE_DIR/registry.json"
+  rm -f "$STATE_DIR/registry.json.tmp.4243" "$STATE_DIR/registry.json"
+
   t "next_slot is the smallest free number"
   fresh; rec a slot=1; rec b slot=2; rec c slot=4
   assert_eq "$(next_slot)" 3

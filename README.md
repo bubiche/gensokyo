@@ -40,7 +40,6 @@ the chips appear. `gensokyo iterm remove` deletes the file again; both refuse to
 |---|---|---|
 | `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh scripts/vendor.sh`; `-x` follows the `lib/*.sh` and `tests/cases/*.sh` sources) | `brew install shellcheck` |
 | `curl` | fetches the vendored binaries | preinstalled on macOS |
-| Docker (optional) | run the Linux vendor binaries in `debian:stable-slim` | https://docker.com |
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
 
 `/bin/bash` 3.2 is the target for `bin/gensokyo` and the `lib/*.sh` files it sources

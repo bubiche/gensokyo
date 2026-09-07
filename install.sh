@@ -34,7 +34,7 @@ done
 
 # ---------------------------------------------------------------- platform
 os=$(uname -s) arch=$(uname -m)
-case $os in Darwin) os=macos ;; Linux) os=linux ;; *) die "unsupported OS: $os (macOS and Linux only)" ;; esac
+case $os in Darwin) os=macos ;; *) die "unsupported OS: $os (gensokyo is macOS only)" ;; esac
 case $arch in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x86_64 ;; *) die "unsupported architecture: $arch (arm64 and x86_64 only)" ;; esac
 platform="$os-$arch"
 

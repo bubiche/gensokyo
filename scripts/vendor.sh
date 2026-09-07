@@ -18,7 +18,7 @@ JQ_VERSION="1.8.2"
 TMUX_BASE="https://github.com/tmux/tmux-builds/releases/download/v${TMUX_VERSION}"
 JQ_BASE="https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}"
 JQ_LICENSE_URL="https://raw.githubusercontent.com/jqlang/jq/jq-${JQ_VERSION}/COPYING"
-PLATFORMS="macos-arm64 macos-x86_64 linux-arm64 linux-x86_64"
+PLATFORMS="macos-arm64 macos-x86_64"   # gensokyo is macOS only
 
 set -eu
 
@@ -34,8 +34,7 @@ detect_platform() {
   os=$(uname -s) arch=$(uname -m)
   case $os in
     Darwin) os=macos ;;
-    Linux)  os=linux ;;
-    *) die "unsupported OS: $os (gensokyo supports macOS and Linux)" ;;
+    *) die "unsupported OS: $os (gensokyo is macOS only)" ;;
   esac
   case $arch in
     arm64|aarch64) arch=arm64 ;;

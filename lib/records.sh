@@ -85,6 +85,16 @@ archive_records() {
   done
 }
 
+# Every writer here renames a `<file>.tmp.<pid>` into place, which is atomic and leaves nothing
+# behind - unless the process is killed between the write and the rename, and then that temp
+# file stays for good because nothing ever looks at it again. Swept on a fresh server for the
+# same reason records are archived there: it is the one moment no gensokyo process is midway
+# through a write. Only files a day old go, so a write happening right now is never touched.
+sweep_stale_temps() {
+  find "$STATE_DIR" -type f -name '*.tmp.[0-9]*' -mtime +0 -exec rm -f {} + 2>/dev/null
+  return 0
+}
+
 # prune_records: drop records whose pane was killed behind our back (tmux kill-pane, a
 # closed window). A record without a pane yet is a summon in progress; keep it for 30 s.
 prune_records() {

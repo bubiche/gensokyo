@@ -135,6 +135,7 @@ start_server() {
   server_running && return 0
   ensure_dirs
   archive_records
+  sweep_stale_temps
   scrub_env
   # The shrine gets the first window, and keeps it for as long as the cockpit runs: every
   # tmux window is an iTerm2 tab, so this is the tab the user lands on and the one that is

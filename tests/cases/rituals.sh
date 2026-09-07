@@ -228,6 +228,25 @@ mcp__claude_ai_Slack__*'
   assert_match "$(probe_with 'schedule: "@daily"' 'cwd: /no/such/place')" 'is not a directory'
   assert_match "$(probe_with 'schedule: "@daily"' 'cwd: dev/mozart')" 'is not a full path'
   assert_eq "$(probe_with 'schedule: "@daily"' 'cwd: ~')" ''      # a ~ is a full path once expanded
+  # The trust dialog: a directory nobody has answered for is a run that stops and waits, so it
+  # is refused with the answer. No .claude.json at all is the case above, and says nothing.
+  mkdir -p "$scratch/kid" "$scratch/kid2"
+  printf '{"projects":{"%s":{"hasTrustDialogAccepted":true},"%s":{},"%s":{"hasTrustDialogAccepted":false}}}\n' \
+    "$scratch" "$scratch/kid" "$scratch/kid2" > "$CLAUDE_JSON"
+  assert_ok    dir_trusted "$scratch"
+  # Asked of the directory itself and of nothing above it. A trusted parent is deliberately not
+  # a yes for what is under it: whether Claude Code would ask again in a subdirectory is not
+  # something the file says, and of the two ways to be wrong, a ritual refused with an answer
+  # beats a ritual that stalls at a dialog every morning and reports nothing.
+  assert_fails dir_trusted "$scratch/kid"    # a record with the flag missing is not a yes
+  assert_fails dir_trusted "$scratch/kid2"   # nor is a no
+  assert_fails dir_trusted /no/such/place    # no record at all
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch")" ''
+  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid")" "trust prompt for $(tilde "$scratch/kid")"
+  printf 'not json at all\n' > "$CLAUDE_JSON"
+  assert_ok dir_trusted "$scratch/kid"       # unanswerable, and never the thing that stops a run
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid")" ''
+  rm -f "$CLAUDE_JSON"; rmdir "$scratch/kid" "$scratch/kid2"
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: persistent')" 'target: persistent is not wired up yet'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: queue')" 'overlap: queue is not wired up yet'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: sideways')" 'not a thing to do about a run'

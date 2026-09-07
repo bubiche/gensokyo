@@ -4,6 +4,7 @@
 # shellcheck shell=bash
 
 CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}   # Claude Code's settings.json and projects/
+CLAUDE_JSON=${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json   # its per-directory state, trust among it
 
 # ---------------------------------------------------------------- settings chain
 # Claude Code reads settings from (highest precedence first) <cwd>/.claude/settings.local.json,
@@ -16,6 +17,29 @@ settings_value() {
   done
   [ "${#files[@]}" -gt 0 ] || return 0
   jq_ -r -s "[.[] | $expr | select(. != null)][0] // empty" "${files[@]}" 2>/dev/null
+}
+
+# dir_trusted <directory>: whether "do you trust the files in this folder?" has been answered
+# yes for it. A session in a directory nobody has answered for stops at that dialog and waits,
+# which is a thing a person at the keyboard deals with in a second and a ritual firing at 09:05
+# cannot deal with at all - so ritual_problem asks this, and gensokyo never answers the dialog
+# on the user's behalf by writing the flag itself.
+#
+# The answer is kept per exact directory, not inherited: measured on a live ~/.claude.json where
+# both ~ and ~/dev are recorded without it while directories under them have it, so there is no
+# parent to walk up to. A record can also exist with the flag absent (a dialog declined, or a
+# directory only ever used by `claude -p`, which never asks), so it is the flag that is read and
+# not the entry. No file and nothing jq can parse both count as trusted: a check that cannot
+# reach its answer must not be the thing that stops a run.
+dir_trusted() {
+  local ans
+  [ -n "$1" ] || return 0
+  [ -f "$CLAUDE_JSON" ] || return 0
+  # `// false` so that a directory with no record of its own answers the question rather than
+  # returning nothing, which is what a file gensokyo cannot read looks like. Only jq failing
+  # - no file it can parse - leaves the question unanswered, and that counts as trusted.
+  ans=$(jq_ -r --arg d "$1" '.projects[$d].hasTrustDialogAccepted // false' "$CLAUDE_JSON" 2>/dev/null) || return 0
+  [ "$ans" = true ]
 }
 
 # launch_settings <id> <cwd>: the JSON passed as `claude --settings` to every resident. Hook

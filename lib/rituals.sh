@@ -207,6 +207,11 @@ ritual_problem() {
     *) say "cwd: $RIT_cwd is not a full path (a run starts from the clock, which is in no directory of yours: ~/... or /...)"; return 0 ;;
   esac
   [ -d "$RIT_cwd" ] || { say "cwd: $(tilde "$RIT_cwd") is not a directory"; return 0; }
+  # A directory Claude Code has not been trusted in stops the run at its trust dialog, and a
+  # stalled run is worse than a refused one: it is alive, so `overlap: skip` counts it as still
+  # going and every later fire is skipped without a word. Said here instead, with the answer.
+  dir_trusted "$RIT_cwd" || {
+    say "cwd: nothing has answered Claude Code's trust prompt for $(tilde "$RIT_cwd") (open it once and accept, or the run stops at that dialog with nobody there to answer)"; return 0; }
   case $RIT_overlap in
     skip) ;;
     queue|parallel) say "overlap: $RIT_overlap is not wired up yet; skip leaves the running one alone"; return 0 ;;

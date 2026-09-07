@@ -689,6 +689,10 @@ null'
   # The flags the file asked for reached claude, and the tool pattern arrived as one argument -
   # --allowedTools is variadic, so the prompt is behind a `--` and the pattern is not three tools.
   assert_match "$(cat "$STUB_STATE/$ritid.args")" '--model haiku'
+  # The whole way through: the record is written by the sweep, taken apart again by `_run` inside
+  # the pane, and this is what claude was actually called with - so the memory file's directory
+  # reached the command line rather than only the record.
+  assert_match "$(cat "$STUB_STATE/$ritid.args")" "--add-dir $STATE_DIR/rituals/nightly-checks"
   assert_match "$(cat "$STUB_STATE/$ritid.args")" '--allowedTools Read Bash(npm run test:*) --'
   # Its own name on its own tab, and the front tab is left where the owner had it: a ritual
   # fires into whatever they were doing. (What iTerm2 does with the new tab only a screenshot

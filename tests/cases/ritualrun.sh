@@ -105,12 +105,24 @@ ritual_run_tests() {
   assert_match "$out" "--mcp-config $HOME/mcp.json"
   # What the pane does with the string: --allowedTools is variadic and comes last, and the
   # pattern has to arrive as one word (`_run` puts the prompt behind a `--`).
-  assert_eq "$(rr_argc "$out")" 11
-  assert_eq "$(rr_argv 11 "$out")" 'Bash(npm run test:*)'
+  assert_eq "$(rr_argc "$out")" 13
+  assert_eq "$(rr_argv 13 "$out")" 'Bash(npm run test:*)'
+  # The memory file is in there, so reading the notes every prompt names is not a permission
+  # prompt (measured: without this even the read is asked for, the write still being the
+  # ritual's own business).
+  assert_match "$out" "--add-dir $STATE_DIR/rituals/flags"
   rr_load flags 'schedule: "@daily"'
-  assert_eq "$(ritual_args)" ''
+  assert_eq "$(ritual_args)" "--add-dir $STATE_DIR/rituals/flags"
+  # A home directory with a space in it: the flags go into the record as one line and are taken
+  # apart again inside the pane, so the path has to arrive as one argument. Nothing else in
+  # ritual_args has ever had a value that needed the quoting.
+  was_state=$STATE_DIR; STATE_DIR="$scratch/two words"
+  out=$(ritual_args)
+  assert_eq "$(rr_argc "$out")" 2
+  assert_eq "$(rr_argv 2 "$out")" "$scratch/two words/rituals/flags"
+  STATE_DIR=$was_state
   CFG_PERMISSION_MODE=acceptEdits
-  assert_eq "$(ritual_args)" '--permission-mode acceptEdits'   # a run is a resident: same default
+  assert_eq "$(ritual_args)" "--permission-mode acceptEdits --add-dir $STATE_DIR/rituals/flags"
   CFG_PERMISSION_MODE=''
 
   t "overlap: a run still going is one that has not finished, not one still sitting in its tab"
@@ -149,7 +161,7 @@ ritual_run_tests() {
   # with a minute from last week would be pruned before its pane came up.
   assert_eq "$R_launched" "$((mon + 37))"
 
-  assert_eq "$R_args" '--model haiku --allowedTools Read'
+  assert_eq "$R_args" "--model haiku --add-dir $STATE_DIR/rituals/slack-morning --allowedTools Read"
   assert_eq "$R_prompt_file" "$STATE_DIR/rituals/slack-morning/prompt"
   assert_match "$(cat "$R_prompt_file")" 'do the thing'
   assert_eq "$(ritual_stamp slack-morning)" "$mon"

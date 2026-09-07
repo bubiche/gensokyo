@@ -77,6 +77,13 @@ ritual_mode() { printf '%s' "${RIT_mode:-$CFG_PERMISSION_MODE}"; }
 # ritual_args: the launch flags for the record, shell-quoted the way cmd_new writes them
 # (lib/residents.sh eval's this back apart inside the pane). --allowedTools is variadic and
 # comes last of these, which is safe because _run always puts the prompt behind a `--`.
+#
+# --add-dir is always the ritual's own directory, because the memory file lives there and every
+# prompt ends with a sentence naming it. Without it, the run has to ask permission to *read* a
+# file gensokyo put outside its working directory and the ritual never asked for - measured, and
+# worse than the same file inside the repo would be. With it the file reads freely and a write
+# asks exactly as a write in the working directory would, which is the ritual's own
+# `mode:` / `allowed_tools` decision rather than an accident of where gensokyo keeps its state.
 ritual_args() {
   local out='' t mode
   mode=$(ritual_mode)
@@ -84,6 +91,7 @@ ritual_args() {
   [ -n "$RIT_effort" ] && out="$out --effort $(sq "$RIT_effort")"
   [ -n "$mode" ]       && out="$out --permission-mode $(sq "$mode")"
   [ -n "$RIT_mcp" ]    && out="$out --mcp-config $(sq "${RIT_mcp/#\~/$HOME}")"
+  out="$out --add-dir $(sq "$(ritual_dir "$RIT_slug")")"
   if [ -n "$RIT_allowed" ]; then
     out="$out --allowedTools"
     while IFS= read -r t || [ -n "$t" ]; do

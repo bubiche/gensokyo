@@ -60,6 +60,17 @@ iterm_tests() {
   if out=$(cmd_iterm frobnicate 2>&1); then bad "an unknown subcommand should refuse"; else assert_match "$out" "usage: gensokyo iterm"; fi
   assert_match "$(cmd_help)" "gensokyo iterm"
 
+  t "raising a tab: the AppleScript names one session exactly, and refuses to name none"
+  out=$(iterm_tab_script '✳ Cirno')
+  assert_match "$out" 'tell application "iTerm2"'
+  assert_match "$out" 'if (name of s) is "✳ Cirno" then'
+  assert_match "$out" 'select t'
+  assert_fails iterm_tab_script ''            # never ask iTerm2 to match the empty name
+  assert_eq "$(iterm_tab_script '' 2>&1)" ''
+  # A name is somebody else's string - the resident's own pane title - so it is escaped, not trusted.
+  assert_match "$(iterm_tab_script 'say "hi"')" 'is "say \"hi\"" then'
+  assert_match "$(iterm_tab_script 'back\slash')" 'is "back\\slash" then'
+
   t "doctor reports iTerm2's tmux window setting without ever writing it"
   assert_match "$(iterm_tabs_line 2)" 'tabs in one window'
   assert_nomatch "$(iterm_tabs_line 2)" 'Settings >'

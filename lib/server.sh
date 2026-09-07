@@ -348,5 +348,10 @@ cmd__tick() {
 focus_window() {
   [ -n "$1" ] || return 0
   tmux_ select-window -t "$1" 2>/dev/null
+  # tmux's own state is right now, and a plain client has already followed it. iTerm2 has not:
+  # under -CC it takes the user's tab choice as final and ignores this (lib/iterm.sh), so its
+  # tab is raised by asking iTerm2 directly - and only when one of its clients is attached to
+  # be asked, so a plain-only cockpit never pays for an osascript it has no use for.
+  [ "$(clients_in_mode cc)" -gt 0 ] && iterm_raise_tab "$(pane_title_of "$1")"
   return 0
 }

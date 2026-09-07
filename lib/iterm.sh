@@ -5,6 +5,11 @@
 # otherwise have to click through Settings for. Nothing else in iTerm2 is ever written: the
 # application's own defaults (how a tmux session comes back on attach, where the status bar
 # sits) stay the user's, and `doctor` only reports them.
+#
+# The file also holds the one thing gensokyo asks the running application to do rather than
+# reads from it: raise a tab. That is a gesture, not a setting - it leaves nothing behind and
+# writes nothing down - and it is here because iTerm2 will not take the instruction through
+# tmux (see "raising a tab" at the foot of this file).
 
 # The profile's identity, the same on every machine, so that installing over an older copy
 # keeps the profile a window or a session may already be pointing at. It doubles as the mark
@@ -114,4 +119,47 @@ iterm_remove() {
     || die "$(tilde "$dest") is not the profile gensokyo wrote (another Guid); leaving it alone"
   rm -f "$dest" || die "cannot remove $(tilde "$dest")"
   say "removed $(tilde "$dest"); iTerm2 drops the profile at once, open tabs keep their settings"
+}
+
+# ---------------------------------------------------------------- raising a tab
+# Tab selection under `-CC` runs one way only. iTerm2 pushes the tab the user picked into tmux -
+# clicking the shrine's tab moves tmux's current window on its own - and from then on iTerm2
+# owns that choice and ignores tmux's current window entirely. Measured on 3.6.11 against every
+# candidate: `select-window`, `select-window` + `refresh-client` and `switch-client` all move
+# tmux and leave the tab bar where it was, whether they are run from outside the session, from
+# `run-shell` inside it, or from the shrine's own handler. The condition is the front tab having
+# been chosen by the user, which is always true - the only way to be looking at the shrine is to
+# have clicked its tab. So the click that opens a resident has to reach iTerm2 itself.
+#
+# A tab is found the way the third notification gate already finds one: a cockpit tab's session
+# name is that pane's `#{pane_title}`. Selecting is a UI action, not a preference: nothing here
+# writes an iTerm2 default, and the consent it needs is the one `iterm_front_tab` already asks
+# for, so no new dialog appears.
+#
+# iterm_tab_script <session name>: the AppleScript, built apart from the running of it so the
+# quoting can be tested with no iTerm2 on the other end. No name, no script - iTerm2 must never
+# be asked to match "", which every session that has no title would answer to.
+iterm_tab_script() {
+  local n=$1
+  [ -n "$n" ] || return 1
+  n=${n//\\/\\\\}   # AppleScript string escapes: backslash first, or it doubles the next one
+  n=${n//\"/\\\"}
+  printf 'tell application "iTerm2" to tell current window to repeat with t in tabs\n'
+  printf '  repeat with s in sessions of t\n'
+  printf '    if (name of s) is "%s" then\n' "$n"
+  printf '      select t\n'
+  printf '      return\n'
+  printf '    end if\n'
+  printf '  end repeat\n'
+  printf 'end repeat\n'
+}
+
+# iterm_raise_tab <session name>: bring that tab to the front, and say nothing when it cannot be
+# done. A focus that iTerm2 will not grant is not worth an error printed over somebody's pane.
+iterm_raise_tab() {
+  local script
+  command -v osascript >/dev/null 2>&1 || return 0
+  script=$(iterm_tab_script "$1") || return 0
+  osascript -e "$script" >/dev/null 2>&1
+  return 0
 }

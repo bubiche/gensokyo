@@ -84,13 +84,18 @@ open_pane() {
 # leaves a resident that was asked to leave and never heard it. A spinner, a redraw or an
 # interrupt being handled all read as the pane changing; a pane waiting for input does not.
 pane_settled() {
-  local a b n=0
+  local a b n=0 still=0
   nap 0.3
   a=$(tmux_ capture-pane -p -t "$1" 2>/dev/null)
-  while [ "$n" -lt 12 ]; do
+  while [ "$n" -lt 20 ]; do
     nap 0.15
     b=$(tmux_ capture-pane -p -t "$1" 2>/dev/null)
-    [ "$a" = "$b" ] && return 0
+    if [ "$a" = "$b" ]; then
+      still=$((still + 1))
+      [ "$still" -ge 3 ] && return 0
+    else
+      still=0
+    fi
     a=$b; n=$((n + 1))
   done
   return 0
@@ -109,11 +114,19 @@ cmd_close() {
   [ -n "${1:-}" ] || die "usage: gensokyo close <name|slot>"
   f=$(find_resident "$1") || die "close: no resident '$1' (gensokyo list)"
   rec_load "$f"; id=${f##*/}
+  # A pane that has nothing left in it is closed here, rather than by sending `x` to the
+  # departed screen and trusting its input loop to act on it. `close` returns to whoever
+  # called it - the shrine's banish, the CLI, a script - and must not report work it has only
+  # asked somebody else to do: under load that keystroke can still be unread when the caller
+  # looks, leaving the record, its window and its slot behind. The departed screen keeps its
+  # own `[ close ]` button doing the same two things through `close_pane`, so a click and a
+  # command each finish their own work and neither waits on the other. Both remove the side
+  # files with the record, which a bare `rm` on this path used to leave behind.
   if [ -n "$R_departed" ]; then
-    tmux_ send-keys -t "$R_pane" x     # the departed screen removes the record and closes the pane
+    drop_record "$f"; tmux_ kill-pane -t "$R_pane" 2>/dev/null
     say "closed $R_name's pane"
   elif [ "$(tmux_ display -p -t "$R_pane" '#{pane_dead}' 2>/dev/null)" = 1 ]; then
-    rm -f "$f"; tmux_ kill-pane -t "$R_pane"
+    drop_record "$f"; tmux_ kill-pane -t "$R_pane" 2>/dev/null
     say "closed $R_name's dead pane"
   else
     ask_interrupt "$R_pane"

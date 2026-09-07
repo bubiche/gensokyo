@@ -429,7 +429,8 @@ null'
 
   t "smoke: closing the departed pane takes its window with it and frees the slot"
   "$G" close 2 >/dev/null 2>&1
-  wait_for 5 '[ ! -f "$RES_DIR/$id2" ]'
+  # No wait: `close` removes the record itself before it returns. If this ever needs one again,
+  # the command has gone back to asking the departed screen to do its work for it.
   assert_ok test ! -f "$RES_DIR/$id2"
   wait_for 5 '[ "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d " ")" = 2 ]'
   assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 2   # Alpha and the shrine

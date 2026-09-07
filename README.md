@@ -96,8 +96,10 @@ iTerm2 tab per resident after it. No key belongs to gensokyo there — everythin
 - Click a resident's line in the shrine, or its tab in the tab bar, to work in it. A resident
   fills its tab; nothing is ever split, tiled or zoomed, and you can drag a tab out to watch two
   at once.
-- `[ banish ]` asks which resident and then asks again before closing one; `[ recall ]` lists
-  everyone who has departed, this run or an earlier one; `[ quit ]` closes the whole cockpit.
+- `[ banish ]` asks which resident and then asks again before interrupting one: it stops
+  mid-thought and its tab shows the departed screen, where `[ close ]` finally lets the tab go.
+  `[ recall ]` lists everyone who has departed, this run or an earlier one; `[ quit ]` closes
+  the whole cockpit.
 - Every button carries the letter that does the same thing (`[ summon n ]`) for when your hands
   are already on the keyboard, and `[ ? ]` lists them all.
 

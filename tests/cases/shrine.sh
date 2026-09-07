@@ -5,7 +5,15 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 shrine_tests() {
-  local f
+  local f mon was_now
+  # These tests say what a frame draws, so the timetable it draws from is written here rather
+  # than read off whatever rituals this gensokyo ships: dated well ahead, so that nothing
+  # rebuilds it from the files while a frame is being asserted on.
+  shrine_timetable() {
+    printf '%s' "${1:-}" > "$STATE_DIR/timetable"
+    touch -t 203001010000 "$STATE_DIR/timetable"
+  }
+  shrine_timetable
   t "shrine: with nobody here the frame is the banner and the buttons, and nothing to focus"
   fresh; rm -f "$REGISTRY"
   shrine_render 80 24
@@ -185,10 +193,94 @@ shrine_tests() {
   assert_ok test "$(printf '%s\n' "$SHRINE_TEXT" | wc -l | tr -d ' ')" -le 24
   SHRINE_VIEW=main
 
-  t "shrine: what is not built yet says so instead of doing nothing"
+  t "shrine: the main screen's one line about the schedule is what fires next, and it is clickable"
+  fresh; rm -f "$REGISTRY"
+  mon=$(rt_at '2026-09-07 09:05:00'); was_now=${GENSOKYO_NOW:-}; GENSOKYO_NOW=$mon
+  shrine_timetable "slack-morning|yes|$((mon + 3600))|3 9 * * 1-5|check Slack for me
+nightly|no||@daily|the checks"
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  ⏲ next  slack-morning  2026-09-07 10:05 (in 1h) · 2 in all'
+  assert_match "$(shrine_at "$(shrine_map_find timetable next)")" '⏲ next  slack-morning'
+  # The row and the button run the same action; only the button is what `[ timetable t ]` is.
+  assert_eq "$(shrine_at "$(shrine_map_find timetable)")" '[ timetable t ]'
+
+  t "shrine: rituals with none of them on, and no rituals at all, each say which"
+  shrine_timetable 'nightly|no||@daily|the checks'
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  ⏲ one ritual, and it is not on'
+  shrine_timetable "a|no||@daily|
+b|no||@daily|"
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  ⏲ 2 rituals, none of them on'
+  shrine_timetable
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  ⏲ no rituals yet'
+  assert_eq "$(shrine_map_find timetable next)" ''
+
+  t "shrine: the timetable is every ritual, when each fires next, and which are not going to"
+  shrine_timetable "slack-morning|yes|$((mon + 3600))|3 9 * * 1-5|check Slack for me
+never|yes||0 0 30 2 *|a date that never comes
+nightly|no||@daily|the checks"
   shrine_do timetable
-  assert_match "$SHRINE_SAID" 'not available yet'
-  shrine_render 80 24
-  assert_match "$SHRINE_TEXT" 'not available yet'
+  assert_eq "$SHRINE_VIEW" timetable
+  shrine_render 100 24
+  assert_re "$SHRINE_TEXT" '^  1  slack-morning +on +3 9 \* \* 1-5 +2026-09-07 10:05$'
+  assert_re "$SHRINE_TEXT" '^  2  never +on +0 0 30 2 \* +on, but its schedule never comes round$'
+  assert_re "$SHRINE_TEXT" '^  3  nightly +off +@daily +paused$'
+  assert_match "$SHRINE_TEXT" '[ cancel q ]'
+
+  t "shrine: with nothing scheduled the timetable says how to start one rather than '(nobody)'"
+  shrine_timetable
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '(nothing is scheduled: gensokyo ritual new <name>)'
+  assert_nomatch "$SHRINE_TEXT" '(nobody)'
+
+  t "shrine: clicking a ritual opens what it is, when it fires and when it last ran"
+  mkdir -p "$CONFIG_DIR/rituals"
+  printf -- '---\nschedule: "3 9 * * 1-5"\ncwd: %s\ndescription: check Slack for me\n---\nlook at Slack\n' \
+    "$HOME" > "$CONFIG_DIR/rituals/slack-morning.md"
+  ritual_note slack-morning 'ran (due 2026-09-07 09:03)'
+  shrine_timetable "slack-morning|yes|$((mon + 3600))|3 9 * * 1-5|check Slack for me"
+  shrine_do timetable
+  shrine_render 100 24
+  f=$(shrine_digit 1)
+  shrine_do "${f%%|*}" "${f#*|}"
+  assert_eq "$SHRINE_VIEW" ritual
+  assert_eq "$SHRINE_ARG" slack-morning
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  ⏲ slack-morning'
+  assert_match "$SHRINE_TEXT" '  what it does check Slack for me'
+  assert_match "$SHRINE_TEXT" '  schedule     3 9 * * 1-5'
+  assert_match "$SHRINE_TEXT" '  next fire    2026-09-08 09:03 (in 23h)'
+  assert_match "$SHRINE_TEXT" '  last ran     2026-09-07 09:05 (0s ago)'
+  assert_match "$SHRINE_TEXT" '  in           ~'
+  assert_match "$SHRINE_TEXT" '[ run now r ]  [ pause p ]  [ cancel q ]'
+
+  t "shrine: and the letters on that screen are its own, not the shrine's behind it"
+  assert_eq "$(shrine_letter r)" ritual-run
+  assert_eq "$(shrine_letter p)" ritual-off
+  assert_eq "$(shrine_letter q)" cancel
+  assert_eq "$(shrine_letter n)" ''
+
+  t "shrine: pausing one stays on its screen, where the button and the next fire have flipped"
+  shrine_do ritual-off
+  assert_eq "$SHRINE_VIEW" ritual
+  assert_match "$SHRINE_SAID" 'slack-morning'
+  assert_eq "$(rit_value "$(grep '^enabled:' "$CONFIG_DIR/rituals/slack-morning.md" | head -n 1 | cut -d: -f2-)")" false
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '[ run now r ]  [ unpause p ]  [ cancel q ]'
+  assert_match "$SHRINE_TEXT" '  next fire    nothing: it is paused'
+  assert_eq "$(shrine_letter p)" ritual-on
+
+  t "shrine: a ritual that has gone since the timetable was drawn says so instead of drawing blanks"
+  SHRINE_ARG=not-a-ritual
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" 'there is no ritual called not-a-ritual any more'
+  assert_match "$SHRINE_TEXT" '[ cancel q ]'
+
   shrine_do cancel; SHRINE_SAID=''
+  rm -f "$CONFIG_DIR/rituals"/*.md "$STATE_DIR/timetable"
+  rm -rf "$STATE_DIR/rituals/slack-morning"
+  GENSOKYO_NOW=$was_now
+  unset -f shrine_timetable
 }

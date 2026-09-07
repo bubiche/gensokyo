@@ -295,6 +295,65 @@ mcp__claude_ai_Slack__*'
   SHARE=$was_share
   rm -rf "$scratch/share-rituals"
 
+  t "timetable: soonest first, and a paused ritual at the end with no fire worked out for it"
+  was_share=$SHARE
+  SHARE=$scratch/share-empty; mkdir -p "$SHARE/rituals"
+  was_now=${GENSOKYO_NOW:-}
+  GENSOKYO_NOW=$mon
+  rm -f "$mine"/*.md "$STATE_DIR/timetable"
+  printf -- '---\nschedule: "3 9 * * 1-5"\ncwd: %s\ndescription: the morning one\n---\nx\n' "$HOME" > "$mine/morning.md"
+  printf -- '---\nschedule: "@hourly"\ncwd: %s\n---\nx\n' "$HOME" > "$mine/hourly.md"
+  printf -- '---\nschedule: "@daily"\ncwd: %s\nenabled: false\n---\nx\n' "$HOME" > "$mine/paused.md"
+  timetable_rows
+  assert_eq "$(printf '%s\n' "$TIMETABLE" | cut -d'|' -f1 | tr '\n' ' ')" 'hourly morning paused '
+  assert_eq "$(rt_when "$(printf '%s\n' "$TIMETABLE" | sed -n 1p | cut -d'|' -f3)")" '2026-09-07 10:00 Mon'
+  assert_eq "$(rt_when "$(printf '%s\n' "$TIMETABLE" | sed -n 2p | cut -d'|' -f3)")" '2026-09-08 09:03 Tue'
+  assert_eq "$(printf '%s\n' "$TIMETABLE" | grep '^paused|' | cut -d'|' -f2,3)" 'no|'
+  assert_eq "$(printf '%s\n' "$TIMETABLE" | grep '^morning|' | cut -d'|' -f5)" 'the morning one'
+  assert_eq "$(timetable_count)" 3
+  assert_eq "$(timetable_next | cut -d'|' -f1)" hourly
+  assert_ok test -f "$STATE_DIR/timetable"
+
+  t "timetable: the file is the answer while nothing has changed, and is thrown away when one has"
+  printf 'stale|yes|%s|@daily|from the cache\n' "$((mon + 600))" > "$STATE_DIR/timetable"
+  touch -t 203001010000 "$STATE_DIR/timetable"   # newer than every ritual file: read, not rebuilt
+  timetable_rows
+  assert_eq "$(timetable_next | cut -d'|' -f1)" stale
+  touch -t 200001010000 "$STATE_DIR/timetable"   # older than one: rebuilt from the files
+  timetable_rows
+  assert_eq "$(timetable_next | cut -d'|' -f1)" hourly
+
+  t "timetable: a ritual written in the same second as the cache is one the cache may not have"
+  printf 'stale|yes|%s|@daily|from the cache\n' "$((mon + 600))" > "$STATE_DIR/timetable"
+  # Every source and the cache stamped with the same second - which is `ritual add` and the
+  # frame after it - so only "strictly newer" tells them apart.
+  touch -t 202609071005 "$mine" "$SHARE/rituals" "$mine"/*.md "$STATE_DIR/timetable"
+  timetable_rows
+  assert_eq "$(timetable_next | cut -d'|' -f1)" hourly
+
+  t "timetable: and thrown away when the fire it named has gone by, which is what a new day is"
+  printf 'stale|yes|%s|@daily|already gone by\n' "$((mon - 60))" > "$STATE_DIR/timetable"
+  touch -t 203001010000 "$STATE_DIR/timetable"   # so it is the passed fire and nothing else
+  timetable_rows
+  assert_eq "$(timetable_next | cut -d'|' -f1)" hourly
+
+  t "timetable: a ritual deleted leaves it, because the directory's own time moved with it"
+  rm -f "$mine/hourly.md"
+  timetable_rows
+  assert_eq "$(printf '%s\n' "$TIMETABLE" | cut -d'|' -f1 | tr '\n' ' ')" 'morning paused '
+  assert_eq "$(timetable_next | cut -d'|' -f1)" morning
+
+  t "timetable: with no rituals at all it is empty rather than missing, and says so"
+  rm -f "$mine"/*.md
+  timetable_rows
+  assert_eq "$TIMETABLE" ''
+  assert_eq "$(timetable_count)" 0
+  assert_eq "$(timetable_next)" ''
+  assert_ok test -f "$STATE_DIR/timetable"
+  SHARE=$was_share
+  rm -rf "$scratch/share-empty" "$STATE_DIR/timetable"
+  GENSOKYO_NOW=$was_now
+
   t "now_epoch: the clock a test can set, so the schedules can be asked about a fixed minute"
   was_now=${GENSOKYO_NOW:-}
   GENSOKYO_NOW=$mon

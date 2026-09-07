@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. Rituals run: the cockpit's own clock fires them into residents you can watch, and `gensokyo ritual` writes, runs and pauses them. What is not there yet is a resident that can set one up for you when you ask in words, the timetable button on the shrine tab, and the ritual settings that say so when you use them (`headless`, `persistent`, `keep`).
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. What is not there yet is the ritual settings that say so when you use them (`headless`, `persistent`, `keep`, `overlap`).
 
 ## Requirements
 
@@ -217,13 +217,33 @@ already handled, what it is waiting on. A fire missed while the machine slept is
 the next start, for the most recent miss within a week; a fire that lands while the last run is
 still going is skipped and says so in the log.
 
+The shortest way to a ritual is to ask a resident for one: *"every weekday at 9:05 check Slack
+for messages to me and summarize them"*. It has a skill for exactly this, so it will say back
+what it is about to schedule, where, and what it will need permission for, and write the file
+once you agree. "Pause that" and "what have I got scheduled?" go the same way.
+
+By hand, or to see what is there:
+
 ```sh
 gensokyo ritual                      # what is scheduled, when each fires next, and anything wrong with one
 gensokyo ritual new nightly-checks   # a template in $EDITOR; it arrives disabled
 gensokyo ritual run nightly-checks   # fire it now - which is how you approve its prompts once
 gensokyo ritual log nightly-checks   # every fire, skip and complaint
 gensokyo ritual disable slack-morning
+gensokyo ritual add --name x --schedule '@daily' --cwd . --prompt-file p.txt   # what the skill calls
 ```
+
+The shrine tab's `[ timetable t ]` is the same thing without the typing: every ritual with the
+minute it fires next, and clicking one gives you its schedule, its last run, what is wrong with
+it if anything, and the two buttons worth having there - `[ run now ]` and `[ pause ]`. The
+next fire is also on the shrine's main screen and in the status bar, so a schedule you set up
+this morning is visible without asking anything.
+
+Three examples ship, paused, in `share/rituals/`: `slack-morning`, `nightly-checks` and
+`inbox-zero`. They are there to be copied - `gensokyo ritual edit slack-morning` takes a copy
+into `~/.config/gensokyo/rituals/` and opens that, so an update cannot overwrite your version
+and your version cannot be lost in the install tree. Each one names a directory that is not on
+your machine on purpose; that is the line to change first.
 
 Run a new ritual by hand once before leaving it to the clock: whatever it asks permission for,
 you can approve in the pane and then write into `allowed_tools` (or set `mode: acceptEdits`), and
@@ -332,12 +352,18 @@ but that the first message of an exchange is the `gensokyo-peers` skill's to wri
 standing schedule belongs to gensokyo rather than to Claude Code's own scheduling. The last two
 are the only things a click cannot express.
 
-The plugin carries one skill, `gensokyo-peers`, and it is deliberately the only one. Casting a
-card is a button and needs no words spent on it, and a card's own text carries whatever rules
-that card needs. But an exchange you start by *typing* — "get Sakuya to review this" — has no
-card to carry them, and the rules are not guessable: Claude Code keeps no thread, so the
-opening message has to name who is asking, what is wanted, the reply shape, the round cap, and
-above all the reply address. Only the frontmatter description of a skill sits in a resident's
+The plugin carries two skills, and both are there for the same reason: they are the work a
+click cannot express. Casting a spell card is a button and needs no words spent on it, and a
+card's own text carries whatever rules that card needs — but an exchange you start by *typing*
+("get Sakuya to review this") has no card to carry them, and the rules are not guessable:
+Claude Code keeps no thread, so the opening message has to name who is asking, what is wanted,
+the reply shape, the round cap, and above all the reply address. That is `gensokyo-peers`. A
+schedule is the other: a ritual is a file with a cron line, a directory and a prompt written
+for a session that will not remember this conversation, and "every weekday at 9:05" is not a
+file anyone wants to write by hand. That is `gensokyo-ritual`, which also carries the two
+things a scheduled run cannot be trusted to get right on its own — say back what it is about to
+create before creating it, and pass on the warning when the directory has never had Claude
+Code's trust prompt answered. Only the frontmatter description of a skill sits in a resident's
 context; the rest is read if and when it is used.
 
 Both skills are named in that paragraph as prohibitions — *never* compose that first message

@@ -363,7 +363,7 @@ null'
   t "smoke: so does the slot number the line carries, and a click on a blank row does nothing"
   shrine_key 2
   assert_eq "$(pane_fronts "$pane2")" "$pane2"
-  shrine_click '⏲ no rituals yet' 3          # a row with nothing on it to click
+  shrine_click 'click a resident above' 3    # a row with nothing on it to click
   pause 0.6
   assert_eq "$(pane_current)" "$pane2"
   "$G" _focus 1 "$(tm list-clients -F '#{client_name}' | head -n 1)" >/dev/null 2>&1   # the prefix-1 key
@@ -713,6 +713,14 @@ null'
     --description 'run when it is asked to' --model haiku --prompt 'look at the thing' 2>&1)
   assert_match "$out" 'next fire'
   assert_match "$("$G" ritual list)" 'by-hand'
+  # The clock finds it without being restarted, and both always-visible surfaces say so: the
+  # shrine's own line, and the bar iTerm2 draws (status-right, which push_bar writes).
+  assert_match "$(shrine_shows '⏲ next  by-hand')" '⏲ next  by-hand'
+  # The bar the clock pushes into the two options iTerm2 draws. Pushed here rather than waited
+  # for: the clock skips its render while nothing is attached, and nothing is attached to this
+  # detached cockpit.
+  push_bar
+  assert_match "$(tm show -gv status-right)" '⏲ 04:00 by-hand'
   # The stamp the sweep would have written for a minute that has not come round yet: a hand run
   # must not spend it, or the 04:00 fire would skip itself.
   ritual_stamp_set by-hand 1788000000; stamp=$(ritual_stamp by-hand)
@@ -726,6 +734,11 @@ null'
   assert_match "$(cat "$STATE_DIR/rituals/by-hand/log")" 'ran (by hand)'
   assert_eq "$(ritual_stamp by-hand)" "$stamp"
   assert_match "$(tm list-windows -t =gensokyo -F '#{window_name}')" 'by-hand'
+  # Whose run this resident is, wherever a resident is listed: nobody summoned it, and the
+  # ritual's name is the answer to what it is doing there.
+  assert_match "$(shrine_shows '⏲ by-hand ·')" '⏲ by-hand ·'
+  assert_match "$("$G" list)" '· ⏲ by-hand'
+  assert_eq "$("$G" list --json | jq_ -r --arg id "$handid" '.[] | select(.session_id == $id) | .ritual')" by-hand
   # And its own listing now knows it has run, from the log rather than from the stamp.
   assert_match "$("$G" ritual log by-hand)" 'ran (by hand)'
   assert_match "$("$G" ritual list)" 'last ran'

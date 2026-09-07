@@ -1,6 +1,6 @@
 {
   "name": "gensokyo",
   "version": "0.1.0",
-  "description": "Loaded into every session gensokyo runs. Everything the cockpit does is a click; what it carries is the work a click cannot express - talking to another resident, which is a conversation and not a button.",
+  "description": "Loaded into every session gensokyo runs. Everything the cockpit does is a click; what it carries is the work a click cannot express - talking to another resident, which is a conversation and not a button, and putting work on a schedule, which is a file the user is not going to write by hand.",
   "author": { "name": "gensokyo" }
 }

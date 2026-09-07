@@ -99,17 +99,35 @@ EOF
 # and by coming first, and row 2 is the usage alone (iTerm2 has its own clock, and no key of
 # ours to put in a legend).
 cmd__bar() {   # cmd__bar <row 1|2> [active pane] [styled|plain]
-  local right
+  local right rit
   case $1 in
     1) bar_chips "${2:-}" "${3:-styled}" ;;
     2)
       right=$(usage_text)
+      rit=$(bar_ritual_text)
       if [ "${3:-styled}" = plain ]; then
-        printf '%s' "$right"
+        printf '%s%s' "${rit:+$rit   }" "$right"
       else
-        printf ' ⛩ %s   %s %s' "$(date +%H:%M)" "$(legend_text)" "${right:+#[align=right]$right }"
+        printf ' ⛩ %s   %s%s %s' "$(date +%H:%M)" "$(legend_text)" "${rit:+ · $rit}" \
+          "${right:+#[align=right]$right }"
       fi ;;
   esac
+  return 0
+}
+
+# bar_ritual_text: the schedule's field in the bar - when the next ritual fires and which one.
+# Not the "in 23h" the shrine adds next to it: the bar is read at a glance, and a clock time is
+# the thing a person compares against their own. Empty when nothing is going to fire at all,
+# because the bar is not where gensokyo says that nothing is scheduled.
+bar_ritual_text() {
+  local next slug when now fmt
+  timetable_rows
+  next=$(timetable_next)
+  [ -n "$next" ] || return 0
+  slug=${next%%|*}; when=${next#*|}; when=${when%%|*}
+  now=$(now_epoch)
+  fmt='+%H:%M'; [ $((when - now)) -lt 86400 ] || fmt='+%a %H:%M'
+  printf '⏲ %s %s' "$(date -r "$when" "$fmt" 2>/dev/null)" "$slug"
   return 0
 }
 
@@ -332,4 +350,39 @@ cmd__menu-banish() {
     tmux_ display-menu -c "$client" -T " banish $R_name (slot $R_slot)? " -x C -y C \
       "yes, ask $R_name to /exit" y "run-shell -b '$(sq "$SELF") close ${f##*/} >/dev/null 2>&1'" "no" n ""
   fi
+}
+
+# The rituals, for the plain tmux client: what fires when, and one submenu per ritual carrying
+# the same two actions the shrine's ritual screen has.
+cmd__menu-timetable() {
+  local client=$1 s i=0 args=() slug on next sched desc when label
+  s=$(sq "$SELF")
+  timetable_rows
+  while IFS='|' read -r slug on next sched desc; do
+    [ -n "$slug" ] || continue
+    i=$((i + 1)); [ "$i" -le 9 ] || break
+    when=paused; [ -n "$next" ] && when=$(ritual_when "$next")
+    label="$slug · $sched · $when"
+    args=(${args[@]+"${args[@]}"} "$label" "$i" "run-shell '$s _menu-ritual $(sq "$client") $(sq "$slug")'")
+  done <<EOF
+$TIMETABLE
+EOF
+  [ "$i" -gt 0 ] || { tmux_ display-message -c "$client" 'no rituals yet: gensokyo ritual new <name>'; return 0; }
+  args=(${args[@]+"${args[@]}"} "" "cancel" q "")
+  tmux_ display-menu -c "$client" -T " the rituals " -x C -y C "${args[@]}"
+}
+
+cmd__menu-ritual() {
+  local client=$1 slug=$2 s path args=()
+  s=$(sq "$SELF")
+  path=$(find_ritual "$slug") || { tmux_ display-message -c "$client" "no ritual $slug"; return 0; }
+  ritual_load "$path" || { tmux_ display-message -c "$client" "cannot read $(tilde "$path")"; return 0; }
+  args=("run it now, by hand" r "run-shell -b '$s ritual run $(sq "$RIT_slug") >/dev/null 2>&1'")
+  if ritual_enabled; then
+    args=("${args[@]}" "pause it" p "run-shell -b '$s ritual disable $(sq "$RIT_slug") >/dev/null 2>&1'")
+  else
+    args=("${args[@]}" "let it fire on its schedule again" p "run-shell -b '$s ritual enable $(sq "$RIT_slug") >/dev/null 2>&1'")
+  fi
+  args=("${args[@]}" "" "cancel" q "")
+  tmux_ display-menu -c "$client" -T " $RIT_slug " -x C -y C "${args[@]}"
 }

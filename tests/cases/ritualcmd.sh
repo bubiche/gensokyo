@@ -6,9 +6,40 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 ritual_cmd_tests() {
-  local mine=$CONFIG_DIR/rituals out rc mon before id
-  local was_share was_now was_start was_pane was_visual
+  local mine=$CONFIG_DIR/rituals out rc mon before id f
+  local was_share was_share_all was_now was_start was_pane was_visual
   mkdir -p "$mine"; rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
+
+  t "the rituals gensokyo ships: each one loads, each is paused, and no example is a surprise"
+  assert_eq "$(cd "$SHARE/rituals" && ls -- *.md | tr '\n' ' ')" 'inbox-zero.md nightly-checks.md slack-morning.md '
+  out=''
+  for f in "$SHARE"/rituals/*.md; do
+    ritual_load "$f" || { out="$out cannot-read:${f##*/}"; continue; }
+    # Paused is the one that matters: an example that fired on a fresh install would run
+    # somebody's morning into a directory they never named.
+    ritual_enabled && out="$out fires-on-a-fresh-install:$RIT_slug"
+    [ "$RIT_slug.md" = "${f##*/}" ] || out="$out named-something-else:${f##*/}"
+    # Its `cwd` is a directory on nobody's machine on purpose, and that is the only thing an
+    # example is allowed to be wrong about: everything else would be shipped broken.
+    case $(ritual_problem) in
+      ''|'cwd: '*) ;;
+      *) out="$out $RIT_slug:$(ritual_problem)" ;;
+    esac
+  done
+  assert_eq "$out" ''
+
+  t "and a shipped one's problem line is what to do about it, not a complaint it cannot act on"
+  assert_eq "$(rit_problem_line 'cwd: ~/dev/yourproject is not a directory' "$SHARE/rituals/slack-morning.md")" \
+    'an example: enable or edit it, and gensokyo copies it to your own rituals first'
+  # Anything else wrong with a shipped file is still said: the line is about the cwd, not about
+  # where the file lives.
+  assert_eq "$(rit_problem_line 'schedule: 9 5 * *' "$SHARE/rituals/slack-morning.md")" '! schedule: 9 5 * *'
+  assert_eq "$(rit_problem_line 'cwd: gone' "$mine/whatever.md")" '! cwd: gone'
+
+  # From here on the examples are out of the way: these tests are about the user's own rituals,
+  # and a fourth example added later must not fail an assertion about what is scheduled.
+  was_share_all=$SHARE
+  SHARE=$scratch/share-none; mkdir -p "$SHARE/rituals"
   # No .claude.json at all, which is the answer "nothing can be said about trust" - so the tests
   # that are not about the trust dialog are not about the trust dialog (lib/hooks.sh).
   rm -f "$CLAUDE_JSON"
@@ -292,6 +323,7 @@ and a second line'
   VISUAL=$was_visual
 
   rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
+  SHARE=$was_share_all; rm -rf "$scratch/share-none"
   [ -z "$was_now" ] && GENSOKYO_NOW='' || GENSOKYO_NOW=$was_now
   return 0
 }

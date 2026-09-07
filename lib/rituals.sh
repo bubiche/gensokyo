@@ -268,3 +268,112 @@ EOF
   [ "$n" -eq 1 ] || return 1
   printf '%s\n' "$part"
 }
+
+# ---------------------------------------------------------------- the timetable
+# When each ritual comes round next, worked out once and kept in a file. The shrine redraws
+# every few seconds, the bar is pushed with it and the timetable screen wants the answer for
+# every ritual at once - and cron_next walks the schedule forward, which for a `0 0 30 2 *` is
+# a four-year search. That is exactly the cost ritual_sweep's check order exists to keep out of
+# the clock's loop, so it is paid here instead: when a ritual file has changed, or when the fire
+# the file names has already gone by, and never otherwise.
+#
+#   slug|on|next fire epoch|schedule|description
+#
+# Soonest first, then the ones with no next fire - paused, or a schedule that never comes round
+# - by name, which is the order a timetable is read in.
+TIMETABLE=''   # the rows, once timetable_rows has read or rebuilt them
+
+# timetable_source_mtime: the newest thing that could have changed a ritual - the two
+# directories, so that a file added or deleted counts, and every ritual file in them. One stat
+# for all of it: this is asked once per frame, and a fork per ritual would not be.
+timetable_source_mtime() {
+  local p newest=0 m
+  set --
+  for p in "$CONFIG_DIR/rituals" "$SHARE/rituals"; do
+    [ -d "$p" ] && set -- "$@" "$p"
+  done
+  while IFS= read -r p; do
+    [ -n "$p" ] && set -- "$@" "$p"
+  done <<EOF
+$(ritual_files)
+EOF
+  [ $# -gt 0 ] || { printf '0\n'; return 0; }
+  for m in $(stat -f %m "$@" 2>/dev/null || stat -c %Y "$@" 2>/dev/null); do
+    [ "$m" -gt "$newest" ] && newest=$m
+  done
+  printf '%s\n' "$newest"
+}
+
+# timetable_build: the rows, from the ritual files. cron_next is asked only about a ritual that
+# is on: a paused one is not going to fire, so the minute it would have fired at is not a fact
+# worth a walk - and every shipped example is paused.
+timetable_build() {
+  local slug on sched target headless desc path next soon='' rest=''
+  while IFS='|' read -r slug on sched target headless desc path; do
+    [ -n "$slug" ] || continue
+    next=''
+    if [ "$on" = yes ] && cron_ok "$sched"; then
+      next=$(cron_next "$sched" "$(now_epoch)") || next=''
+    fi
+    if [ -n "$next" ]; then
+      soon="$soon$slug|$on|$next|$sched|$desc"$'\n'
+    else
+      rest="$rest$slug|$on||$sched|$desc"$'\n'
+    fi
+  done <<EOF
+$(ritual_rows_sorted)
+EOF
+  [ -z "$soon" ] || printf '%s' "$soon" | sort -t '|' -k3,3n
+  [ -z "$rest" ] || printf '%s' "$rest"
+  return 0
+}
+
+# timetable_rows: the timetable into TIMETABLE, rebuilt when it can no longer be right. Into a
+# variable rather than printed, because the shrine wants it once a frame and a command
+# substitution there is a fork a frame. A rebuild is written for whoever asks next; two of them
+# racing (a frame and a bar push) write the same answer, and the rename is atomic either way.
+timetable_rows() {
+  local f=$STATE_DIR/timetable first next stale='' now
+  TIMETABLE=''
+  now=$(now_epoch)
+  if [ -f "$f" ]; then
+    TIMETABLE=$(cat "$f" 2>/dev/null)
+    first=${TIMETABLE%%$'\n'*}
+    next=${first#*|}; next=${next#*|}; next=${next%%|*}
+    # Strictly newer, not as new: a ritual written in the same second as the cache is a ritual
+    # the cache may have been built without, and `ritual add` then the shrine is one second.
+    [ "$(mtime_of "$f")" -gt "$(timetable_source_mtime)" ] || stale=1
+    case $next in
+      ''|*[!0-9]*) ;;
+      *) [ "$next" -gt "$now" ] || stale=1 ;;   # the fire it named has gone by
+    esac
+  else
+    stale=1
+  fi
+  if [ -n "$stale" ]; then
+    TIMETABLE=$(timetable_build)
+    mkdir -p "$STATE_DIR" 2>/dev/null
+    if ! printf '%s\n' "$TIMETABLE" > "$f.tmp.$$" || ! mv "$f.tmp.$$" "$f"; then rm -f "$f.tmp.$$"; fi
+  fi
+  return 0
+}
+
+# timetable_next: "slug|epoch|description" for the ritual that fires next, or nothing at all.
+# The rows are soonest first, so it is the first one with a fire in it.
+timetable_next() {
+  local slug on next sched desc
+  while IFS='|' read -r slug on next sched desc; do
+    [ -n "$slug" ] && [ -n "$next" ] && { printf '%s|%s|%s' "$slug" "$next" "$desc"; return 0; }
+  done <<EOF
+$TIMETABLE
+EOF
+  return 0
+}
+
+# timetable_count: how many rituals there are at all, which is what the shrine says when none
+# of them is on.
+timetable_count() {
+  local n=0
+  [ -n "$TIMETABLE" ] && n=$(printf '%s\n' "$TIMETABLE" | grep -c '^')
+  printf '%s' "$n"
+}

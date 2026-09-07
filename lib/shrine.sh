@@ -58,6 +58,21 @@ quit-yes|y|[ yes y ]|close gensokyo
 cancel|n|[ no n ]|leave it running
 EOF
 }
+# One ritual's, on the screen the timetable opens: the middle button is whichever way round the
+# ritual is not, so that one that is on can be paused and a paused one can be let go again.
+# The table is read in a command substitution, twice over - once to draw the row, once to look a
+# letter up - so what it asks about the ritual has to be something the shrine's own process
+# holds: RIT_*, which shrine_view_ritual loads in that process every frame.
+shrine_ritual_buttons() {
+  printf 'ritual-run|r|[ run now r ]|fire it now, by hand, and leave its schedule alone\n'
+  if ritual_enabled; then
+    printf 'ritual-off|p|[ pause p ]|stop it firing, and keep the file\n'
+  else
+    printf 'ritual-on|p|[ unpause p ]|let it fire on its schedule again\n'
+  fi
+  printf 'cancel|q|[ cancel q ]|back to the shrine\n'
+}
+
 # The departed screen's, drawn by lib/residents.sh through the same walk in its own pane.
 departed_buttons() {
   cat <<'EOF'
@@ -89,6 +104,11 @@ shrine_render() {
     cast-peer)
              shrine_view_pick "$rows" "who should $SHRINE_ARG2 ask?" pick-peer \
                shrine_peer_rows 'the two of them talk to each other, then it reports back' ;;
+    timetable)
+             shrine_view_pick "$rows" 'the rituals: prompts on a schedule' pick-ritual \
+               shrine_ritual_rows "your rituals live in $(tilde "$CONFIG_DIR/rituals")" \
+               '(nothing is scheduled: gensokyo ritual new <name>)' ;;
+    ritual)  shrine_view_ritual ;;
     confirm) shrine_view_confirm ;;
     quit)    shrine_view_quit ;;
     help)    shrine_view_help ;;
@@ -126,7 +146,7 @@ EOF
 shrine_view_main() {
   local rows=$1 data n budget limit shown line w tail_rows banner_rows banner_cols
   local slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor
-  local five freset week wreset at tail tele
+  local five freset week wreset at ritual tail tele
 
   prune_records
   load_registry
@@ -163,7 +183,7 @@ shrine_view_main() {
     limit=$n
     [ "$n" -gt "$budget" ] && limit=$((budget - 1))
     shown=0
-    while IFS='|' read -r slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor five freset week wreset at; do
+    while IFS='|' read -r slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor five freset week wreset at ritual; do
       [ -n "$slot" ] || continue
       shown=$((shown + 1))
       if [ "$shown" -gt "$limit" ]; then
@@ -183,6 +203,9 @@ shrine_view_main() {
           waiting|question) tail="$tail · needs you${detail:+: $detail}" ;;
         esac
       fi
+      # Whose run this is, ahead of the rest: a resident that appeared on its own is a ritual's,
+      # and the name is the answer to "what is this and why is it here".
+      [ -n "$ritual" ] && tail="⏲ $ritual${tail:+ · $tail}"
       shrine_map_add "$((SHRINE_ROW + 1))" 1 "$SHRINE_COLS" focus "$slot"
       shrine_line "$(printf '  %-2s%s %-14s %-16s %s' \
         "$slot" "$(glyph_for "$state")" "${name:0:14}" "$(basename "$cwd")" "$tail")"
@@ -192,7 +215,7 @@ EOF
   fi
 
   shrine_line ''
-  shrine_line '  ⏲ no rituals yet'
+  shrine_ritual_line
   shrine_line ''
   shrine_draw_buttons shrine_buttons
   if [ "$n" -eq 0 ]; then
@@ -204,12 +227,99 @@ EOF
   return 0
 }
 
+# shrine_ritual_line: the one line the main screen gives the schedule - what fires next, and
+# nothing else, because the timetable screen behind it has room for the rest. The row is
+# clickable and opens that screen, the way a resident's row opens its tab.
+shrine_ritual_line() {
+  local next slug when n now
+  timetable_rows
+  n=$(timetable_count)
+  next=$(timetable_next)
+  [ "$n" -eq 0 ] && { shrine_line '  ⏲ no rituals yet'; return 0; }
+  shrine_map_add "$((SHRINE_ROW + 1))" 1 "$SHRINE_COLS" timetable next
+  if [ -z "$next" ]; then
+    if [ "$n" -eq 1 ]; then shrine_line '  ⏲ one ritual, and it is not on'
+    else shrine_line "  ⏲ $n rituals, none of them on"; fi
+    return 0
+  fi
+  slug=${next%%|*}; when=${next#*|}; when=${when%%|*}
+  now=$(now_epoch)
+  shrine_line "$(printf '  ⏲ next  %s  %s (in %s)%s' "$slug" "$(ritual_when "$when")" \
+    "$(fmt_age $((when - now)))" "$([ "$n" -gt 1 ] && printf ' · %s in all' "$n")")"
+  return 0
+}
+
+# The rituals there are, for the timetable picker: when each one comes round next, or why it is
+# not coming round at all.
+shrine_ritual_rows() {
+  local slug on next sched desc when
+  timetable_rows
+  while IFS='|' read -r slug on next sched desc; do
+    [ -n "$slug" ] || continue
+    if [ -n "$next" ]; then when=$(ritual_when "$next")
+    elif [ "$on" = yes ]; then when='on, but its schedule never comes round'
+    else when=paused
+    fi
+    printf '%s|%-18s %-4s %-14s %s\n' "$slug" "${slug:0:18}" \
+      "$([ "$on" = yes ] && printf on || printf off)" "${sched:0:14}" "$when"
+  done <<EOF
+$TIMETABLE
+EOF
+  return 0
+}
+
+# shrine_view_ritual: one ritual, and the two things worth doing to it from here. The file is
+# not edited in this pane (`gensokyo ritual edit` opens it in your own editor) and its journal
+# is not read here either: a screen of fixed height whose map has to match it row for row is
+# the wrong place for a log that grows.
+shrine_view_ritual() {
+  local path problem last now when
+  shrine_line ''
+  path=$(find_ritual "$SHRINE_ARG")
+  if [ -z "$path" ] || ! ritual_load "$path"; then
+    shrine_line "  there is no ritual called $SHRINE_ARG any more"
+    shrine_line ''
+    shrine_draw_buttons shrine_cancel_buttons
+    shrine_line '  click, or press q'
+    return 0
+  fi
+  now=$(now_epoch)
+  shrine_line "  ⏲ $RIT_slug"
+  shrine_line ''
+  [ -n "$RIT_description" ] && shrine_line "$(printf '  %-12s %s' 'what it does' "$RIT_description")"
+  shrine_line "$(printf '  %-12s %s' schedule "$RIT_schedule")"
+  if ! ritual_enabled; then
+    when='nothing: it is paused'
+  elif ! cron_ok "$RIT_schedule"; then
+    when='nothing: gensokyo cannot read that schedule'
+  else
+    # A schedule can be readable and still never come round - 30 February - and a labelled row
+    # with nothing after it would read as a bug rather than as the answer.
+    when=$(rit_next_text "$RIT_schedule") || when='nothing: that schedule never comes round'
+  fi
+  shrine_line "$(printf '  %-12s %s' 'next fire' "$when")"
+  last=$(ritual_last_run "$RIT_slug")
+  [ -n "$last" ] && shrine_line "$(printf '  %-12s %s (%s ago)' 'last ran' \
+    "$(ritual_when "$last")" "$(fmt_age $((now - last)))")"
+  shrine_line "$(printf '  %-12s %s' in "$(tilde "$RIT_cwd")")"
+  problem=$(ritual_problem)
+  [ -n "$problem" ] && shrine_line "  $(rit_problem_line "$problem" "$path")"
+  shrine_line ''
+  shrine_draw_buttons shrine_ritual_buttons
+  shrine_line '  click, or press its letter'
+  [ -n "$SHRINE_SAID" ] && shrine_line "  $SHRINE_SAID"
+  return 0
+}
+
 # ---------------------------------------------------------------- the other screens
-# shrine_view_pick <rows> <title> <action> <rows function> <hint>: a numbered list to click, and
-# a way back. The rows function prints "argument|label" lines, nearest first. Nine entries at
-# most, because each one carries a digit key as well as its line.
+# shrine_view_pick <rows> <title> <action> <rows function> <hint> [nothing]: a numbered list to
+# click, and a way back. The rows function prints "argument|label" lines, nearest first. Nine
+# entries at most, because each one carries a digit key as well as its line. The last argument
+# is the line for an empty list, which is about residents on most of these screens and about
+# rituals on one.
 shrine_view_pick() {
-  local rows=$1 title=$2 action=$3 src=$4 hint=$5 list n budget limit i=0 arg label
+  local rows=$1 title=$2 action=$3 src=$4 hint=$5 nothing=${6:-(nobody)}
+  local list n budget limit i=0 arg label
   list=$($src)
   n=0; [ -n "$list" ] && n=$(printf '%s\n' "$list" | grep -c '^')
   # Blank, the title and a blank above; a blank, the cancel button and the hint below.
@@ -221,7 +331,7 @@ shrine_view_pick() {
   shrine_line ''
   shrine_line "  $title"
   shrine_line ''
-  [ "$n" -gt 0 ] || shrine_line '  (nobody)'
+  [ "$n" -gt 0 ] || shrine_line "  $nothing"
   while IFS='|' read -r arg label; do
     [ -n "$label" ] || continue
     i=$((i + 1))
@@ -508,6 +618,7 @@ EOF
 shrine_view_table() {
   case $SHRINE_VIEW in
     main)    shrine_buttons ;;
+    ritual)  shrine_ritual_buttons ;;
     confirm) shrine_confirm_buttons ;;
     quit)    shrine_quit_buttons ;;
     *)       shrine_cancel_buttons ;;
@@ -615,12 +726,11 @@ shrine_do() {
       rec_load "$f"
       [ -n "${R_window:-$R_pane}" ] || { SHRINE_SAID="$R_name is still starting"; return 0; }
       focus_window "${R_window:-$R_pane}" ;;
-    summon|banish|recall|help|quit) SHRINE_VIEW=$action ;;
+    summon|banish|recall|help|quit|timetable) SHRINE_VIEW=$action ;;
     cast)      SHRINE_VIEW=cast; SHRINE_ARG='' SHRINE_ARG2='' ;;
     # Handed to the tmux server rather than run here: a reload respawns this pane, and this
     # process is a child of it - it would be killed halfway through its own work.
     reload)    tmux_ run-shell -b "$(sq "$SELF") _reload"; SHRINE_SAID='reloading' ;;
-    timetable) SHRINE_SAID='the timetable is not available yet' ;;
     cancel)    SHRINE_VIEW=main; SHRINE_ARG='' SHRINE_ARG2='' ;;
     pick-dir)     shrine_summon "$arg" ;;
     # A card, then who gets it, then - only for a card that names a peer - who that is. The
@@ -638,6 +748,17 @@ shrine_do() {
       SHRINE_SAID=$(shrine_run broadcast "$SHRINE_ARG" "$SHRINE_ARG2" --with "$arg")
       SHRINE_VIEW=main; SHRINE_ARG='' SHRINE_ARG2='' ;;
     pick-banish)  SHRINE_VIEW=confirm; SHRINE_ARG=$arg ;;
+    pick-ritual)  SHRINE_ARG=$arg; SHRINE_VIEW=ritual ;;
+    # The run and the pause are `gensokyo ritual` in a process of its own, for the reason every
+    # other action here is: those verbs end in `die` when they are unhappy, and an exit in this
+    # process would take the shrine's window with it. A pause stays on the ritual's screen,
+    # where the button flipping is the answer; a run hands the user back to the shrine, which is
+    # where the resident it started is about to appear.
+    ritual-run)
+      SHRINE_SAID=$(shrine_run ritual run "$SHRINE_ARG")
+      SHRINE_VIEW=main; SHRINE_ARG='' ;;
+    ritual-on)    SHRINE_SAID=$(shrine_run ritual enable "$SHRINE_ARG") ;;
+    ritual-off)   SHRINE_SAID=$(shrine_run ritual disable "$SHRINE_ARG") ;;
     # Handed over for the same reason as a reload, and more so: the quit kills the server this
     # pane belongs to, and it has residents to ask and to wait for before it gets there.
     quit-yes)

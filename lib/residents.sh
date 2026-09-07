@@ -187,7 +187,7 @@ cmd_close() {
 
 cmd_list() {
   local json='' all='' wait='' rows='' id status name cwd slot state pane win mode detail now tele n
-  local model ctx effort cache tcache cost branch advisor five freset week wreset at
+  local model ctx effort cache tcache cost branch advisor five freset week wreset at ritual
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;; --all) all=1 ;; --wait) wait=1 ;;
@@ -202,7 +202,7 @@ cmd_list() {
     while IFS='|' read -r id status name cwd _; do
       [ -n "$id" ] || continue
       [ -f "$RES_DIR/$id" ] && continue
-      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside|||||||||||||||"
+      rows="$rows"$'\n'"-|$id|$name|${status}|$cwd|-|outside||||||||||||||||"
     done <<EOF
 $REG
 EOF
@@ -220,6 +220,7 @@ EOF
       | map({slot: (.[0] | opt | if . == null then null else tonumber end), session_id: .[1], name: .[2],
              status: .[3], cwd: .[4], pane: (.[5] | opt), window: .[6], outside: (.[6] == "outside"),
              permission_mode: (.[7] | opt), detail: (.[8] | opt), branch: (.[15] | opt),
+             ritual: (.[22] | opt),
              telemetry: (if .[21] == "" then null else
                {model: (.[9] | opt), context_pct: (.[10] | num), effort: (.[11] | opt),
                 cache_pct: (.[12] | num), turn_cache_pct: (.[13] | num), cost_usd: (.[14] | num),
@@ -232,11 +233,11 @@ EOF
   else
     now=$(date +%s)
     printf '  %-3s %-2s %-16s %-36s %s\n' '#' '' name directory session
-    while IFS='|' read -r slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor five freset week wreset at; do
+    while IFS='|' read -r slot id name state cwd pane win mode detail model ctx effort cache tcache cost branch advisor five freset week wreset at ritual; do
       [ -n "$slot" ] || continue
       [ "$slot" = - ] && slot=' '
-      printf '  %-3s %s  %-16s %-36s %s  %s%s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" \
-        "$state" "${detail:+ ($detail)}"
+      printf '  %-3s %s  %-16s %-36s %s  %s%s%s\n' "$slot" "$(glyph_for "$state")" "${name:0:16}" "$(tilde "$cwd" 36)" "${id:0:8}" \
+        "$state" "${detail:+ ($detail)}" "${ritual:+ · ⏲ $ritual}"
       # A second line once the resident's status line has reported (mode alone is not worth one).
       [ -n "$at" ] && printf '         %s · %s ago\n' \
         "$(tele_fields "$model" "$ctx" "$effort" "$cache" "$tcache" "$cost" "$branch" "$advisor" "$mode" verbose)" "$(fmt_age $((now - at)))"
@@ -284,9 +285,8 @@ cmd__run() {
   trap : INT
   eval "set -- $args"
   # Every resident, recalled or new, gets the hooks and status line wrapper (lib/hooks.sh,
-  # lib/telemetry.sh), the plugin - which carries no skill until there is one worth a resident's
-  # context - and the three-sentence paragraph; all are per-session flags, nothing in ~/.claude
-  # changes.
+  # lib/telemetry.sh), the plugin - two skills, each for work a click cannot express - and the
+  # three-sentence paragraph; all are per-session flags, nothing in ~/.claude changes.
   set -- --settings "$(launch_settings "$id" "$cwd")" --plugin-dir "$SHARE/plugin" \
     --append-system-prompt "$(system_paragraph "$name")" "$@"
   if [ -n "$resume" ]; then
@@ -312,8 +312,8 @@ cmd__run() {
 # can reach - the resident's own name, that the others can be written to, and where a standing
 # schedule goes. The last sentence is the one that has to be here: without it a request like
 # "every weekday at 9..." goes to Claude Code's own scheduling, which gensokyo can neither see
-# nor stop. `gensokyo-ritual` does not ship yet, so the sentence says so rather than sending the
-# resident after something that is not there.
+# nor stop - measured, and the reason the prohibition names the three ways there rather than
+# only naming the skill.
 #
 # The clause pointing at `gensokyo-peers` is here because the skill does not fire without it,
 # measured 2026-09-07: told only that it can message the others by name, a resident asked to
@@ -323,7 +323,7 @@ cmd__run() {
 # there. A skill that describes how to do something the system prompt already grants has to be
 # named at the point the grant is made, or it is never reached for.
 system_paragraph() {
-  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks; that skill is not built yet, so until it is, tell the user to run \`gensokyo ritual new <name>\` themselves rather than scheduling anything for them."
+  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks."
 }
 
 # What the resident's own tab shows once it has left: the same buttons the shrine draws, drawn by

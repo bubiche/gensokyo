@@ -5,7 +5,7 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 core_tests() {
-  local out f qw was_tmux was_ask
+  local out f qw was_tmux was_ask mon was_now
 
   t "ver_ge compares dotted versions, letters ignored"
   assert_ok ver_ge 3.7c 3.3
@@ -155,10 +155,10 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=OldName cwd=/Users/me/dev/beta pane=%2 window=@1
   rec 33333333-cccc-4000-8000-000000000003 slot=3 name=Youmu cwd=/tmp pane=%3 window=@1 departed=1
   rec 44444444-dddd-4000-8000-000000000004 slot=4 name=Cirno cwd=/tmp window=@1
-  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|@1|||||||||||||||
-2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|@1|||||||||||||||
-3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|@1|||||||||||||||
-4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|@1|||||||||||||||'
+  assert_eq "$(resident_rows)" '1|ed82e343-81ce-4b9e-8fdb-9b32d8136a5c|Marisa|idle|/Users/me/dev/alpha|%1|@1||||||||||||||||
+2|f2fe56c9-466e-4333-bed0-4a89460dd0b8|Sakuya|waiting|/Users/me/dev/beta|%2|@1||||||||||||||||
+3|33333333-cccc-4000-8000-000000000003|Youmu|departed|/tmp|%3|@1||||||||||||||||
+4|44444444-dddd-4000-8000-000000000004|Cirno|starting|/tmp|-|@1||||||||||||||||'
   assert_eq "$(rec_get "$RES_DIR/f2fe56c9-466e-4333-bed0-4a89460dd0b8" name)" Sakuya
 
   t "resident_rows: a pending question or finished turn from the hooks shows as needing you"
@@ -239,7 +239,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   done
 
   t "plugin_skills names what the plugin carries, so doctor can say it"
-  assert_eq "$(plugin_skills)" 'gensokyo-peers'
+  assert_eq "$(plugin_skills)" 'gensokyo-peers gensokyo-ritual'
 
   t "the peer skill leads with the reply channel, the thing that had to be learned twice"
   out=$(cat "$root/share/plugin/skills/gensokyo-peers/SKILL.md")
@@ -248,6 +248,22 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   # Saying one thing to everybody is a button; the skill has to point back at it rather than
   # teach a resident to fan out SendMessage calls by hand.
   assert_match "$out" 'gensokyo broadcast'
+
+  t "the ritual skill sends the schedule here, confirms first, and passes the warning on"
+  out=$(cat "$root/share/plugin/skills/gensokyo-ritual/SKILL.md")
+  # The description is the routing surface, and it was measured losing: with the words missing,
+  # "every weekday at 9..." went to Claude Code's own scheduling instead. What a user actually
+  # says has to be in it.
+  assert_match "$(sed -n '2,4p' "$root/share/plugin/skills/gensokyo-ritual/SKILL.md")" 'every weekday at 9:05'
+  assert_match "$out" 'Do not use the built-in `schedule` skill, `CronCreate`, or scheduled tasks'
+  # A ritual runs unattended, so the two things that cannot be left to the model's judgement:
+  # ask before writing one, and hand on what `ritual add` warned about.
+  assert_match "$out" 'Confirm before you create anything'
+  assert_match "$out" 'Never leave it out of what you report'
+  assert_match "$out" 'gensokyo ritual add --name slack-morning'
+  assert_match "$out" 'gensokyo ritual disable slack-morning'
+  # And what a ritual is not, so it is not promised: no clock while the cockpit is down.
+  assert_match "$out" 'only fire while gensokyo is running'
 
   t "system_paragraph says three things and teaches nothing a button already does"
   out=$(system_paragraph Marisa)
@@ -261,11 +277,9 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'never compose'
   assert_match "$out" 'gensokyo-ritual'
   assert_match "$out" 'never the built-in'
-  assert_match "$out" 'not built yet'
-  # And what to say instead of "gensokyo cannot schedule anything", which stopped being true the
-  # moment `gensokyo ritual` shipped. The clause goes altogether when the skill arrives.
-  assert_match "$out" 'gensokyo ritual new'
-  for f in summon banish recall 'gensokyo new' 'gensokyo close' 'gensokyo list' focus tmux; do
+  # Both skills ship, so the paragraph names them and stops: no command of gensokyo's own is in
+  # here, because a resident that can read a skill does not need the CLI spelled out for it.
+  for f in summon banish recall 'gensokyo new' 'gensokyo ritual' 'gensokyo close' 'gensokyo list' focus tmux; do
     assert_nomatch "$out" "$f"
   done
   out=$("$root/bin/gensokyo" help --json)   # the later tests read this again
@@ -278,7 +292,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
 
   t "doctor reports the plugin and whether gensokyo is on PATH"
   out=$(PATH=/usr/bin:/bin cmd_doctor)
-  assert_match "$out" "plugin     $root/share/plugin (loaded into every resident; skills: gensokyo-peers)"
+  assert_match "$out" "plugin     $root/share/plugin (loaded into every resident; skills: gensokyo-peers gensokyo-ritual)"
   assert_match "$out" 'on PATH    no: run ./install.sh'
 
   t "doctor reports iTerm2 and its profile from the environment, without launching anything"
@@ -312,6 +326,35 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(cmd__bar 1 '' plain)" ' ⛩ gensokyo  no residents yet '
   assert_match "$(cmd__bar 1 '')" 'then g n to summon'
 
+
+  t "the bar's second row carries the next ritual, as a clock time and a name"
+  mon=$(rt_at '2026-09-07 09:05:00'); was_now=${GENSOKYO_NOW:-}; GENSOKYO_NOW=$mon
+  printf 'slack-morning|yes|%s|3 9 * * 1-5|check Slack\n' "$((mon + 3600))" > "$STATE_DIR/timetable"
+  touch -t 203001010000 "$STATE_DIR/timetable"
+  assert_eq "$(bar_ritual_text)" '⏲ 10:05 slack-morning'
+  assert_match "$(cmd__bar 2 '' plain)" '⏲ 10:05 slack-morning'
+  assert_match "$(cmd__bar 2 '')" '· ⏲ 10:05 slack-morning'
+  # A fire days away is not a time of day: the day it falls on is the part worth the columns.
+  printf 'weekly-sweep|yes|%s|@weekly|\n' "$((mon + 86400 * 3))" > "$STATE_DIR/timetable"
+  touch -t 203001010000 "$STATE_DIR/timetable"
+  assert_eq "$(bar_ritual_text)" '⏲ Thu 09:05 weekly-sweep'
+
+  t "and nothing at all when nothing is going to fire: the bar is not where that is said"
+  printf 'nightly|no||@daily|\n' > "$STATE_DIR/timetable"
+  touch -t 203001010000 "$STATE_DIR/timetable"
+  assert_eq "$(bar_ritual_text)" ''
+  assert_eq "$(cmd__bar 2 '' plain)" "$(usage_text)"
+  rm -f "$STATE_DIR/timetable"
+  GENSOKYO_NOW=$was_now
+
+  t "the tty ritual menus refuse what is not there rather than dying inside a run-shell"
+  # Both run as children of the tmux server, where a `die` would take the job down without a
+  # word to anybody; and with no server here every tmux_ call fails - so what is asserted is
+  # that the refusal path still comes back.
+  assert_ok cmd__menu-ritual someclient nothing-of-the-sort
+  : > "$STATE_DIR/timetable"; touch -t 203001010000 "$STATE_DIR/timetable"
+  assert_ok cmd__menu-timetable someclient
+  rm -f "$STATE_DIR/timetable"
 
   t "clock_age is empty until the clock has ticked once"
   rm -f "$STATE_DIR/clock"

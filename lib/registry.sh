@@ -46,11 +46,12 @@ registry_row() {
 # resident_rows: one line per record, sorted by slot, with these |-separated columns:
 #   1 slot  2 id  3 name  4 state  5 cwd  6 pane  7 window  8 mode  9 detail
 #   10 model  11 ctx%  12 effort  13 cache%  14 turn cache%  15 cost  16 branch  17 advisor
-#   18 5h%  19 5h reset  20 week%  21 week reset  22 telemetry epoch
+#   18 5h%  19 5h reset  20 week%  21 week reset  22 telemetry epoch  23 ritual
 # state: busy|waiting|question|idle|departed|starting ("starting": launched, not in the
 # registry yet); mode is the permission mode (from the hooks, else the launch flag); detail is
 # the one line the hooks recorded about what the resident waits for; 10-22 come from the
-# resident's last status line report (lib/telemetry.sh) and are empty until the first one.
+# resident's last status line report (lib/telemetry.sh) and are empty until the first one;
+# 23 is the ritual whose run this resident is, and empty for one a person summoned.
 #
 # The registry gives busy|waiting|idle; the status file the hooks write adds what the registry
 # cannot see: a question dialog (`question`) and a finished turn nobody has looked at yet
@@ -87,10 +88,10 @@ resident_rows() {
     else
       state=starting
     fi
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$R_slot" "$id" "$rname" "$state" "$R_cwd" "${R_pane:--}" "$R_window" "${S_mode:-$R_mode}" "$S_detail" \
       "$T_model" "$T_ctx" "$T_effort" "$T_cache" "$T_tcache" "$T_cost" "$(git_branch "$R_cwd")" "$T_advisor" \
-      "$T_five" "$T_five_reset" "$T_week" "$T_week_reset" "$T_at"
+      "$T_five" "$T_five_reset" "$T_week" "$T_week_reset" "$T_at" "$R_ritual"
   done | sort -n
 }
 

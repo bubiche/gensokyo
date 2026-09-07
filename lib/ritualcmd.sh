@@ -35,6 +35,18 @@ ritual_last_run() {
   awk -F'\t' '$2 ~ /^ran \(/ { v = $1 } END { if (v != "") print v }' "$d/log" 2>/dev/null
 }
 
+# rit_problem_line <problem> <path>: what a listing puts under a ritual with something wrong
+# with it. One case gets a different line: a shipped example names a directory that is on
+# nobody's machine on purpose, and the file is not the user's to fix - an update replaces it -
+# so what to do about it is to take a copy, which enable and edit do by themselves.
+RIT_EXAMPLE='an example: enable or edit it, and gensokyo copies it to your own rituals first'
+rit_problem_line() {
+  case $2 in
+    "$SHARE"/*) case $1 in cwd:*) printf '%s' "$RIT_EXAMPLE"; return 0 ;; esac ;;
+  esac
+  printf '! %s' "$1"
+}
+
 # rit_mine <path>: the user's own copy of that ritual, made from the shipped one if that is what
 # was named. The install tree is not the user's to edit and an update may replace it, and a file
 # of the same name in the config directory shadows the shipped one anyway (lib/rituals.sh) - so
@@ -195,10 +207,14 @@ ritual_cmd_list() {
     [ -n "$slug" ] || continue
     [ "$n" -eq 0 ] && printf '  %-18s %-4s %-14s %-26s %s\n' ritual '' schedule 'next fire' 'what it does'
     n=$((n + 1))
+    # A paused ritual's next fire is the minute its schedule names, which is in the JSON for
+    # whoever wants it - but a column of times beside the word `off` reads as a promise, so
+    # here it says what is actually going to happen instead.
     printf '  %-18s %-4s %-14s %-26s %s\n' "$slug" "$([ "$on" = yes ] && printf on || printf off)" \
-      "$sched" "${next:+$nexttext (in $(fmt_age $((next - now))))}" "$desc"
+      "$sched" "$([ "$on" = yes ] && printf '%s' "${next:+$nexttext (in $(fmt_age $((next - now))))}" || printf paused)" \
+      "$desc"
     [ -n "$last" ] && printf '  %-18s %s\n' '' "last ran $(ritual_when "$last") ($(fmt_age $((now - last))) ago)"
-    [ -n "$problem" ] && printf '  %-18s %s\n' '' "! $problem"
+    [ -n "$problem" ] && printf '  %-18s %s\n' '' "$(rit_problem_line "$problem" "$path")"
   done <<EOF
 $rows
 EOF

@@ -6,6 +6,13 @@
 
 recall_tests() {
   local out id1=aaaaaaaa-1111-4000-8000-000000000001 id2=bbbbbbbb-2222-4000-8000-000000000002 id3=cccccccc-3333-4000-8000-000000000003
+  local was_tmux was_start was_pane
+  # Half of these rows are departed residents *in a pane*, and a unit test has no tmux server to
+  # hold one, so which panes are live is answered here. It is not scenery: it is the question
+  # recall_rows asks of every record, and the same fixture with nothing live is the state after
+  # `gensokyo quit`. The real functions come back at the end - the suite runs on in this shell.
+  was_tmux=$(declare -f tmux_); was_start=$(declare -f start_server); was_pane=$(declare -f open_pane)
+  tmux_() { case $1 in list-panes) printf '%%1\n%%2\n' ;; esac; return 0; }
 
   t "recall_rows: departed residents in panes and archived records, newest first, transcript found by id"
   fresh; rm -rf "$DEPARTED_DIR"; mkdir -p "$DEPARTED_DIR" "$scratch/cc/projects/-tmp-a" "$scratch/cc/projects/-tmp-b"
@@ -36,6 +43,33 @@ Sakuya null false true $(mtime_of "$scratch/cc/projects/-tmp-b/$id3.jsonl")"
   assert_match "$("$root/bin/gensokyo" resume reimu 2>&1)" 'Reimu is still here (slot 1)'
   assert_match "$("$root/bin/gensokyo" recall --bogus 2>&1)" 'unknown option --bogus'
   assert_match "$("$root/bin/gensokyo" resume a b 2>&1)" 'one resident at a time'
+
+  t "recall: a resident whose pane went with the server is offered as an earlier run, not in place"
+  # `gensokyo quit` leaves the records exactly as they are, pane ids and all, so that the next
+  # cockpit can offer them back. Nothing in a record says its server has gone; only the pane can.
+  tmux_() { return 1; }   # no server, so nothing is live
+  out=$(cmd_resume)
+  assert_nomatch "$out" 'still in its pane'
+  assert_re "$out" '^  Youmu +/tmp/a +bbbbbbbb +[0-9]+[a-z]+ ago · no transcript$'
+  assert_eq "$(cmd_resume --json | jq_ -r 'map(select(.name == "Youmu")) | .[0] | "\(.slot) \(.in_pane)"')" 'null false'
+  # And recalling it archives the record on the way to a fresh pane instead of sending `r` into
+  # a pane that is not there and reporting success. The cockpit itself is stubbed out.
+  mkdir -p "$scratch/work/youmu"; rec_set "$RES_DIR/$id2" cwd "$scratch/work/youmu"
+  start_server() { :; }
+  open_pane() { printf '%s\n' "$2" > "$scratch/title.out"; printf '%%9\n'; }
+  out=$(cmd_resume Youmu 2>&1)
+  assert_match "$out" "recalled Youmu (slot 2) in $scratch/work/youmu"
+  assert_nomatch "$out" 'into its pane'
+  assert_ok test -f "$RES_DIR/$id2"
+  assert_ok test ! -f "$DEPARTED_DIR/$id2"
+  assert_eq "$(rec_get "$RES_DIR/$id2" resume)|$(rec_get "$RES_DIR/$id2" slot)|$(rec_get "$RES_DIR/$id2" departed)|$(rec_get "$RES_DIR/$id2" pane)" '1|2||'
+  # The window title and the remembered directory are Youmu's, not the last record read by the
+  # `another X is here already` guard on its way past - rec_load's R_* are globals, and Reimu
+  # is still in RES_DIR to clobber them with.
+  assert_match "$(cat "$scratch/title.out")" Youmu
+  assert_eq "$(sed -n 1p "$STATE_DIR/recent-dirs")" "$scratch/work/youmu"
+
+  eval "$was_tmux"; eval "$was_start"; eval "$was_pane"
   fresh; rm -rf "$DEPARTED_DIR" "$scratch/cc/projects"
   assert_match "$(cmd_resume)" 'nobody has departed'
 }

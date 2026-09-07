@@ -152,6 +152,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/residents.sh" || exit 1
 # shellcheck source=../lib/recall.sh
 . "$LIB/recall.sh" || exit 1
+# shellcheck source=../lib/spellcards.sh
+. "$LIB/spellcards.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh
@@ -160,6 +162,17 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/iterm.sh" || exit 1
 
 # ---------------------------------------------------------------- doctor / help / version
+# plugin_skills: the skill names the resident plugin carries, for `doctor`. A skill costs every
+# resident context whether or not it is used, so the count is worth having in front of the user.
+plugin_skills() {
+  local d out=''
+  for d in "$SHARE"/plugin/skills/*/SKILL.md; do
+    [ -f "$d" ] || continue
+    d=${d%/SKILL.md}; out="${out:+$out }${d##*/}"
+  done
+  printf '%s' "${out:-none yet}"
+}
+
 cmd_doctor() {
   local v w
   say "gensokyo $VERSION"
@@ -190,7 +203,7 @@ cmd_doctor() {
   say "  config     $CONFIG_DIR$([ -f "$CONFIG_DIR/config" ] || printf ' (defaults)')"
   say "  state      $STATE_DIR"
   if [ -f "$SHARE/plugin/.claude-plugin/plugin.json" ]; then
-    say "  plugin     $SHARE/plugin (loaded into every resident; no skill in it yet)"
+    say "  plugin     $SHARE/plugin (loaded into every resident; skills: $(plugin_skills))"
   else
     say "  plugin     MISSING: no $SHARE/plugin/.claude-plugin/plugin.json; residents will not start"
   fi
@@ -270,6 +283,7 @@ new|summon|[dir] [-n name] [-m model] [-e effort] [-p mode]|start a Claude Code 
 close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
+broadcast|spell|<card> <who> [--with peer]|cast a spell card at all, awaiting, idle or a resident; alone: the cards there are
 reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
 quit|||ask every resident to /exit, then stop the cockpit: the shrine, the clock and the tabs go
 help||[--json]|this list; --json for tools
@@ -326,14 +340,14 @@ main() {
     close|banish) shift; cmd_close "$@" ;;
     list|who) shift; cmd_list "$@" ;;
     resume|recall) shift; cmd_resume "$@" ;;
+    broadcast|spell) shift; cmd_broadcast "$@" ;;
     reload) shift; cmd_reload "$@" ;;
     quit) shift; cmd_quit "$@" ;;
-    spell) cmd__not_yet broadcast ;;
     ritual) cmd__not_yet schedule ;;
-    broadcast|schedule|update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit)
+    schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit|_menu-spell|_menu-cast-target|_menu-cast-peer)
       shift; "cmd_$cmd" "$@" ;;
-    _menu-spell|_menu-message|_menu-timetable)
+    _menu-timetable)
       tmux_ display-message "$cmd is not available yet"; exit 0 ;;
     *) die "unknown command: $cmd (see: gensokyo help)" ;;
   esac

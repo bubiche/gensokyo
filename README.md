@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications and the per-resident telemetry (model, context, cost, usage) work; broadcasts and schedules are not there yet.
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work; schedules are not there yet.
 
 ## Requirements
 
@@ -99,12 +99,13 @@ iTerm2 tab per resident after it. No key belongs to gensokyo there — everythin
   mid-thought and its tab shows the departed screen, where `[ close ]` finally lets the tab go.
   `[ recall ]` lists everyone who has departed, this run or an earlier one; `[ quit ]` closes
   the whole cockpit.
+- `[ cast ]` sends one prompt to several residents at once; the section below is about that.
 - Every button carries the letter that does the same thing (`[ summon n ]`) for when your hands
   are already on the keyboard, and `[ ? ]` lists them all.
 
 Shell > tmux > Detach leaves everyone running; `gensokyo` again brings all the tabs back. The
-CLI (`gensokyo new`, `close`, `resume`, `list`, `quit`) does the same things for scripts and for
-gensokyo's own use, but nothing in the cockpit needs you to type it.
+CLI (`gensokyo new`, `close`, `resume`, `list`, `broadcast`, `quit`) does the same things for
+scripts and for gensokyo's own use, but nothing in the cockpit needs you to type it.
 
 With the plain tmux client — `gensokyo --tty`, or any terminal that is not iTerm2 — the
 shrine is a window instead of a tab, and the same actions are on `Ctrl-Space g` and a letter,
@@ -118,6 +119,73 @@ reach anything already running, so this is what to press after a change; two thi
 reach are the settings a resident was launched with (a change to the hooks needs that resident
 recalled) and the environment the tmux server itself inherited, such as `PATH` or a newly
 vendored tmux, which needs the cockpit restarted.
+
+## Spell cards
+
+A **spell card** is a prompt in a file. `[ cast ]` on the shrine tab asks which card, then who
+gets it — everyone, everyone who needs you, everyone who is resting, or one resident — and
+types it into each of their prompts, exactly as if you had typed it there yourself. Four ship
+with gensokyo:
+
+| Card | What it asks for |
+|---|---|
+| `Spirit Sign "Status Report"` | three lines from every resident: what it is on, where that stands, what is next |
+| `Border Sign "Sync Up"` | every resident tells the others what it is on, and raises any overlap with the one it affects |
+| `Review Sign "Second Opinion"` | one resident asks another to review its uncommitted diff, and iterates until it hears LGTM |
+| `Time Sign "Wrap Up"` | summarize the session, leave the tree clean, then go quiet |
+
+Your own go in `~/.config/gensokyo/spellcards/<name>.md`, and writing one is writing a file —
+ask any Claude Code session to do it. The name uses letters, digits, `.`, `_` and `-`. A little
+frontmatter is optional; the rest is the prompt:
+
+```markdown
+---
+title: Moon Sign "Test It"
+summary: run the tests and say only whether they pass
+peer: required
+---
+Run the test suite in {cwd} and tell me in one line whether it passes. Then ask {peer}
+whether it agrees, and say that its reply must come back to you as a SendMessage
+addressed to {self}.
+```
+
+Four placeholders are filled in for each resident the card reaches: `{self}` is its own name,
+`{cwd}` its directory, `{residents}` the names of the other live residents (or `nobody`), and
+`{peer}` the resident you pick after the target. A card whose frontmatter says
+`peer: required` is a **pair card**: it goes to one resident, and the shrine asks who that
+resident should talk to.
+
+Residents talk to each other with `SendMessage`, and Claude Code keeps no thread of such an
+exchange — so the rules of one live in the card's own text, where they cost a resident nothing
+until that card is cast. The sentence that matters most is the reply address: **a card that
+asks for an answer has to say that the answer comes back as a `SendMessage` addressed to
+`{self}`**. Told only what the reply should look like, the resident being asked writes its
+findings into its own pane, where the resident waiting for them never sees it — and the wait
+looks exactly like `SendMessage` being broken. `Review Sign "Second Opinion"` says it; so
+should yours.
+
+Casting never types into a resident that has something open — a permission or plan dialog, a
+question of its own, or the workspace-trust dialog a session shows the first time it is
+summoned into a directory. The card would go into the dialog and the Enter after it would
+*answer* the dialog, which is not what you asked for. Those residents are named and left out
+rather than skipped quietly, and a card that does not reach a resident's prompt is reported as
+not sent rather than counted:
+
+```
+$ gensokyo broadcast status-report all
+gensokyo: broadcast: Cirno is still starting up; left out
+cast Spirit Sign "Status Report" on 2 residents
+```
+
+Casting also clears a resident's gold `✦`: gensokyo typed for you, so whatever it was waiting
+to be told, it has been.
+
+`gensokyo broadcast` is the same thing for scripts: `gensokyo broadcast` alone lists the cards,
+`gensokyo broadcast status-report all` casts one, and
+`gensokyo broadcast second-opinion Marisa --with Sakuya` casts a pair card. A card is named by
+its filename or its title, or by enough of either to pick out one card. There is no way to
+broadcast free text: telling one resident something is typing in its pane, and a prompt worth
+sending to everybody is worth a file.
 
 ## When a resident needs you
 
@@ -214,8 +282,27 @@ does is a click, so no resident is taught how to start, close, recall or switch 
 others — you do that yourself, in one gesture, and their contexts stay yours to spend.
 
 What every resident is launched with, per session and without touching `~/.claude`, is
-`--plugin-dir share/plugin` (a plugin that carries no skill yet) and a three-sentence
-`--append-system-prompt`: the name it is living under, that the other sessions in
-`claude agents` can be written to with `SendMessage`, and that a standing schedule belongs to
-gensokyo rather than to Claude Code's own scheduling. The last of those is the only thing a
-click cannot express, and the skill that will collect one arrives with the rituals.
+`--plugin-dir share/plugin` and a three-sentence `--append-system-prompt`: the name it is
+living under, that the other sessions in `claude agents` can be written to with `SendMessage`
+but that the first message of an exchange is the `gensokyo-peers` skill's to write, and that a
+standing schedule belongs to gensokyo rather than to Claude Code's own scheduling. The last two
+are the only things a click cannot express.
+
+The plugin carries one skill, `gensokyo-peers`, and it is deliberately the only one. Casting a
+card is a button and needs no words spent on it, and a card's own text carries whatever rules
+that card needs. But an exchange you start by *typing* — "get Sakuya to review this" — has no
+card to carry them, and the rules are not guessable: Claude Code keeps no thread, so the
+opening message has to name who is asking, what is wanted, the reply shape, the round cap, and
+above all the reply address. Only the frontmatter description of a skill sits in a resident's
+context; the rest is read if and when it is used.
+
+Both skills are named in that paragraph as prohibitions — *never* compose that first message
+yourself, *never* use Claude Code's own scheduling — and that phrasing is doing real work. A
+resident merely told it *may* use `gensokyo-peers` does not: asked to "get Aya to review the
+uncommitted diff", it writes a perfectly reasonable message that never says where the answer
+should go, and the review lands in Aya's own pane where nobody is looking. Named as a
+prohibition, the same request loads the skill and the message comes back.
+
+The resident being written *to* is taught nothing at all: given one well-formed message it
+keeps the convention it was addressed with, tag and all, without ever having been told the
+format.

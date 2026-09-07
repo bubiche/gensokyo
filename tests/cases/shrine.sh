@@ -186,7 +186,7 @@ shrine_tests() {
   SHRINE_VIEW=main
 
   t "shrine: what is not built yet says so instead of doing nothing"
-  shrine_do cast
+  shrine_do timetable
   assert_match "$SHRINE_SAID" 'not available yet'
   shrine_render 80 24
   assert_match "$SHRINE_TEXT" 'not available yet'

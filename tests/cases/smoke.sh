@@ -65,6 +65,17 @@ shrine_click() {
   col=${2:-$(awk -v l="$line" -v s="$1" 'BEGIN { print index(l, s) + 1 }')}
   tm send-keys -t "$p" -l "$(printf '\033[<0;%s;%sM\033[<0;%s;%sm' "$col" "$row" "$col" "$row")"
 }
+# cast_landed <pane> <text>: what a resident's pane holds after a card has been typed into it,
+# once <text> - the stub's echo of the card's last line - has arrived. A card is many lines
+# long and the pane shows both what was typed and what the resident echoed back, so twice its
+# height: by the time the end of it is there the beginning has scrolled off the visible screen.
+# The assertion is therefore about the scrollback (-S -), which is readable because the stub is
+# an ordinary program rather than a full-screen one, with -J putting each wrapped line back
+# together so a path that wraps is still one string.
+cast_landed() {
+  pane_shows "$1" "$2" >/dev/null
+  tm capture-pane -p -J -S - -t "$1" 2>/dev/null
+}
 # shrine_key <character>: the letter or digit that does the same as clicking.
 shrine_key() { local p; p=$(shrine_pane); [ -n "$p" ] && tm send-keys -t "$p" -l "$1"; }
 # shrine_type <text>: an answer to the question the shrine is holding.
@@ -358,6 +369,52 @@ null'
   "$G" _focus 1 "$(tm list-clients -F '#{client_name}' | head -n 1)" >/dev/null 2>&1   # the prefix-1 key
   assert_eq "$(pane_fronts "$pane1")" "$pane1"
 
+  t "smoke: casting a card types it into every resident and submits it, and takes the gold off"
+  payload "$id1" Stop ',"permission_mode":"acceptEdits","last_assistant_message":"idle again"' | TMUX_PANE=$pane1 "$G" _hook
+  rm -f "$REGISTRY"
+  assert_re "$("$G" list)" '^  1   ✦  Alpha'
+  out=$("$G" broadcast status-report all 2>&1)
+  assert_match "$out" 'cast Spirit Sign "Status Report" on 2 residents'
+  assert_match "$(cast_landed "$pane1" '> were mid-task')" '> Stop and tell me where you are'
+  assert_match "$(cast_landed "$pane2" '> were mid-task')" '> Stop and tell me where you are'
+  rm -f "$REGISTRY"
+  assert_re "$("$G" list)" '^  1   ○  Alpha'   # gensokyo typed for the user, so nothing is pending
+
+  t "smoke: a resident holding a dialog is reported, never typed into - the card would answer it"
+  echo waiting > "$STUB_STATE/$id2.status"; rm -f "$REGISTRY"
+  out=$("$G" broadcast status-report all 2>&1)
+  assert_match "$out" 'Beta has a dialog waiting for you; left out'
+  assert_match "$out" 'cast Spirit Sign "Status Report" on Alpha'
+  out=$("$G" broadcast status-report Beta 2>&1)
+  assert_match "$out" 'Beta has a dialog waiting for you; not cast at'
+  assert_fails "$G" broadcast status-report Beta
+  rm -f "$STUB_STATE/$id2.status"; rm -f "$REGISTRY"
+
+  t "smoke: a pair card goes to one resident, with {peer}, {self} and {cwd} filled in"
+  out=$("$G" broadcast second-opinion Alpha --with Beta 2>&1)
+  assert_match "$out" 'cast Review Sign "Second Opinion" on Alpha, with Beta as peer'
+  out=$(cast_landed "$pane1" '> that instead of messaging it again')
+  assert_match "$out" '> Ask Beta for a review of the uncommitted changes in'
+  assert_match "$out" "$scratch/work/alpha"
+  assert_match "$out" 'addressed to Alpha'
+  assert_nomatch "$out" '{peer}'
+  assert_nomatch "$(tm capture-pane -p -J -S - -t "$pane2" 2>/dev/null)" 'Ask Beta for a review'
+
+  t "smoke: {residents} is everyone else, per resident, and idle picks out who is resting"
+  out=$("$G" broadcast sync-up idle 2>&1)
+  assert_match "$out" 'cast Border Sign "Sync Up" on 2 residents'
+  assert_match "$(cast_landed "$pane1" '> anybody')" '> The other residents on this machine are: Beta.'
+  assert_match "$(cast_landed "$pane2" '> anybody')" '> The other residents on this machine are: Alpha.'
+
+  t "smoke: and the cast button does the same three steps by mouse"
+  shrine_key s
+  assert_match "$(shrine_shows 'cast which spell card?')" 'Spirit Sign "Status Report"'
+  assert_ok shrine_click 'Time Sign "Wrap Up"' 3
+  assert_match "$(shrine_shows 'on?')" 'everyone ('
+  assert_ok shrine_click '1 ○ Alpha' 3
+  assert_match "$(shrine_shows 'on Alpha')" 'cast Time Sign "Wrap Up" on Alpha'
+  assert_match "$(cast_landed "$pane1" '> things, stop and wait for me')" '> We are finishing here'
+
   t "smoke: the summon button opens the picker; a click there and a name bring a resident in"
   shrine_key n
   assert_match "$(shrine_shows 'summon a resident into')" 'summon a resident into'
@@ -527,6 +584,12 @@ null'
   assert_fails tm has-session -t '=gensokyo'
   # The record is still there and unarchived, which is what makes the next cockpit offer it back.
   assert_ok test -f "$RES_DIR/$id5"
+  # It still names the pane it departed in, and that pane went down with the server, so what
+  # `resume` offers has to say earlier run - not "still in its pane", which invites a recall
+  # into nothing.
+  out=$("$G" resume 2>&1)
+  assert_match "$out" Suika
+  assert_nomatch "$out" 'still in its pane'
   assert_match "$("$G" quit 2>&1)" 'gensokyo is not running'
 
   t "smoke: a resident asking for the quit hands it to the server, so its own Ctrl-C cannot stop it"

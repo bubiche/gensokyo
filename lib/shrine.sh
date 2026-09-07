@@ -16,7 +16,11 @@ SHRINE_COLS=80     # the width shrine_render is drawing for; lines are cut to it
 SHRINE_ROW=0       # rows drawn so far, so the next line knows its own row number
 SHRINE_BUSY=''     # a redraw is in flight, or a question is up; do not draw over either
 SHRINE_VIEW=main   # which screen is up: main, or the picker a button opened
-SHRINE_ARG=''      # what that screen is about (the resident a confirmation names)
+SHRINE_ARG=''      # what that screen is about (the resident a confirmation names, the spell
+                   # card a target picker is for)
+SHRINE_ARG2=''     # ... and the second thing, when a screen needs two (the target a peer is
+                   # being chosen for). Two variables rather than one packed string, because
+                   # every value in the map is |-separated and a slug is free to hold anything
 SHRINE_SAID=''     # one line under the buttons: what the last action said
 SHRINE_KEY=''      # what shrine_event read: one character, or `esc`
 SHRINE_CLICK=''    # ... or "row column", when it was a click
@@ -32,7 +36,7 @@ shrine_buttons() {
 summon|n|[ summon n ]|start a resident in a directory of your choosing
 banish|x|[ banish x ]|ask a resident to /exit; its tab then shows the departed screen
 recall|r|[ recall r ]|bring a departed resident back, with its name and transcript
-cast|s|[ cast s ]|send one prompt to every resident at once
+cast|s|[ cast s ]|cast a spell card: one prompt typed into every resident you pick
 timetable|t|[ timetable t ]|the rituals: prompts on a schedule
 reload|l|[ reload l ]|run gensokyo's own code again after you change it on disk
 quit|q|[ quit q ]|close gensokyo: everyone /exits and the tmux server stops
@@ -77,6 +81,14 @@ shrine_render() {
                'it is asked to /exit, and can be recalled afterwards' ;;
     recall)  shrine_view_pick "$rows" 'recall which resident?' pick-recall shrine_gone_rows \
                'it comes back with its name and its transcript' ;;
+    cast)    shrine_view_pick "$rows" 'cast which spell card?' pick-card shrine_card_rows \
+               "your own cards go in $(tilde "$CONFIG_DIR/spellcards")" ;;
+    cast-target)
+             shrine_view_pick "$rows" "cast $(shrine_card_field title) on?" pick-target \
+               shrine_target_rows 'the card is typed into each of them and submitted' ;;
+    cast-peer)
+             shrine_view_pick "$rows" "who should $SHRINE_ARG2 ask?" pick-peer \
+               shrine_peer_rows 'the two of them talk to each other, then it reports back' ;;
     confirm) shrine_view_confirm ;;
     quit)    shrine_view_quit ;;
     help)    shrine_view_help ;;
@@ -268,6 +280,72 @@ EOF
   return 0
 }
 
+# The spell cards there are to cast, and the one being cast, for the screens that follow.
+shrine_card_rows() {
+  local slug title peer summary path
+  while IFS='|' read -r slug title peer summary path; do
+    [ -n "$slug" ] || continue
+    printf '%s|%-34s %-13s %s\n' "$slug" "$title" \
+      "$([ "$peer" = required ] && printf 'asks a peer')" "$summary"
+  done <<EOF
+$(card_rows_sorted)
+EOF
+  return 0
+}
+# shrine_card_field <title|peer>: one field of the card the picker is holding in SHRINE_ARG.
+shrine_card_field() {
+  local f
+  f=$(find_card "$SHRINE_ARG") || return 0
+  card_load "$f" || return 0
+  case $1 in title) printf '%s' "$CARD_title" ;; peer) printf '%s' "$CARD_peer" ;; esac
+  return 0
+}
+
+# Who a card can be cast at: the three groups, then the residents one at a time. The rule is
+# cast_targets' rule and not a second one - departed, still starting, or holding a dialog the
+# card would answer - so the counts are what a cast will actually reach and the picker never
+# offers a resident the cast would then refuse.
+shrine_target_rows() {
+  local slot id name state cwd rest all=0 await=0 rest_n=0 rows
+  rows=$(resident_rows)
+  while IFS='|' read -r slot id name state cwd rest; do
+    [ -n "$id" ] || continue
+    case $state in departed|starting) continue ;; esac
+    [ -n "$(cast_blocked "$id")" ] && continue
+    all=$((all + 1))
+    case $state in waiting) await=$((await + 1)) ;; idle) rest_n=$((rest_n + 1)) ;; esac
+  done <<EOF
+$rows
+EOF
+  [ "$all" -gt 0 ] || return 0
+  printf 'all|everyone (%s)\n' "$all"
+  [ "$await" -gt 0 ] && printf 'awaiting|everyone who needs you (%s)\n' "$await"
+  [ "$rest_n" -gt 0 ] && printf 'idle|everyone who is resting (%s)\n' "$rest_n"
+  while IFS='|' read -r slot id name state cwd rest; do
+    [ -n "$id" ] || continue
+    case $state in departed|starting) continue ;; esac
+    [ -n "$(cast_blocked "$id")" ] && continue
+    printf '%s|%s %s %-14s %s\n' "$name" "$slot" "$(glyph_for "$state")" "${name:0:14}" "$(tilde "$cwd" 40)"
+  done <<EOF
+$rows
+EOF
+  return 0
+}
+
+# And who it can be cast with: everyone except the resident it is being cast on.
+shrine_peer_rows() {
+  local slot id name state cwd rest
+  while IFS='|' read -r slot id name state cwd rest; do
+    [ -n "$id" ] || continue
+    case $state in departed|starting) continue ;; esac
+    [ "$(lower "$name")" = "$(lower "$SHRINE_ARG2")" ] && continue
+    printf '%s|%s %s %-14s %s\n' "$name" "$slot" "$(glyph_for "$state")" "${name:0:14}" "$(tilde "$cwd" 40)"
+  done <<EOF
+$(resident_rows)
+EOF
+  return 0
+}
+
 # The one action worth a second click: a banished resident stops mid-thought.
 shrine_view_confirm() {
   local name
@@ -414,7 +492,9 @@ EOF
 shrine_digit() {
   local r c1 c2 action arg i=0
   while IFS='|' read -r r c1 c2 action arg; do
-    case $action in pick-dir|pick-banish|pick-recall) ;; *) continue ;; esac
+    # Every list entry's action is named pick-<something> and no button's is, so a screen
+    # added later gets its digits for nothing.
+    case $action in pick-*) ;; *) continue ;; esac
     i=$((i + 1))
     [ "$i" = "$1" ] && { printf '%s|%s' "$action" "$arg"; return 0; }
   done <<EOF
@@ -526,13 +606,27 @@ shrine_do() {
       [ -n "${R_window:-$R_pane}" ] || { SHRINE_SAID="$R_name is still starting"; return 0; }
       focus_window "${R_window:-$R_pane}" ;;
     summon|banish|recall|help|quit) SHRINE_VIEW=$action ;;
-    cast)      SHRINE_SAID='casting a spell card is not available yet' ;;
+    cast)      SHRINE_VIEW=cast; SHRINE_ARG='' SHRINE_ARG2='' ;;
     # Handed to the tmux server rather than run here: a reload respawns this pane, and this
     # process is a child of it - it would be killed halfway through its own work.
     reload)    tmux_ run-shell -b "$(sq "$SELF") _reload"; SHRINE_SAID='reloading' ;;
     timetable) SHRINE_SAID='the timetable is not available yet' ;;
-    cancel)    SHRINE_VIEW=main; SHRINE_ARG='' ;;
+    cancel)    SHRINE_VIEW=main; SHRINE_ARG='' SHRINE_ARG2='' ;;
     pick-dir)     shrine_summon "$arg" ;;
+    # A card, then who gets it, then - only for a card that names a peer - who that is. The
+    # cast itself runs `gensokyo broadcast`, which is what the tty menus and the CLI run too.
+    pick-card)    SHRINE_ARG=$arg; SHRINE_ARG2=''; SHRINE_VIEW=cast-target ;;
+    pick-target)
+      SHRINE_ARG2=$arg
+      if [ "$(shrine_card_field peer)" = required ]; then
+        SHRINE_VIEW=cast-peer
+      else
+        SHRINE_SAID=$(shrine_run broadcast "$SHRINE_ARG" "$arg")
+        SHRINE_VIEW=main; SHRINE_ARG='' SHRINE_ARG2=''
+      fi ;;
+    pick-peer)
+      SHRINE_SAID=$(shrine_run broadcast "$SHRINE_ARG" "$SHRINE_ARG2" --with "$arg")
+      SHRINE_VIEW=main; SHRINE_ARG='' SHRINE_ARG2='' ;;
     pick-banish)  SHRINE_VIEW=confirm; SHRINE_ARG=$arg ;;
     # Handed over for the same reason as a reload, and more so: the quit kills the server this
     # pane belongs to, and it has residents to ask and to wait for before it gets there.
@@ -634,7 +728,7 @@ shrine_frame() {
 shrine_interrupt() {
   SHRINE_CANCEL=1
   SHRINE_VIEW=main
-  SHRINE_ARG='' SHRINE_SAID=''
+  SHRINE_ARG='' SHRINE_ARG2='' SHRINE_SAID=''
   return 0
 }
 

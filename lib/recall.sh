@@ -14,11 +14,26 @@ transcript_of() {
 # residents still showing the departed screen in a pane (slot set) and records of earlier
 # runs (slot empty). `when` is the transcript's mtime, else the moment the resident departed.
 recall_rows() {
-  local f id when tr
+  local f id when tr live
+  live=$'\n'$(live_panes)$'\n'
   for f in "$RES_DIR"/* "$DEPARTED_DIR"/*; do
     [ -f "$f" ] || continue
     rec_load "$f"; id=${f##*/}
-    case $f in "$RES_DIR"/*) [ -n "$R_departed" ] || continue ;; *) R_slot= ;; esac
+    case $f in
+      "$RES_DIR"/*)
+        [ -n "$R_departed" ] || continue
+        # The slot is the whole of "still in its pane", and that is only true while the pane is
+        # there. `gensokyo quit` leaves these records where they are on purpose - it is what
+        # lets the next cockpit offer them back - so a record naming a pane whose server has
+        # gone is the ordinary case here and not an odd one. Without this the list, the `g r`
+        # menu and --json all offer an in-place recall into nothing. A record with no pane at
+        # all is not in a pane either, and has to be asked first: with no server the list is
+        # two bare newlines, which an empty pane id would match.
+        if [ -z "$R_pane" ]; then R_slot=
+        else case $live in *$'\n'"$R_pane"$'\n'*) ;; *) R_slot= ;; esac
+        fi ;;
+      *) R_slot= ;;
+    esac
     tr=$(transcript_of "$id")
     if [ -n "$tr" ]; then when=$(mtime_of "$tr"); else when=${R_departed:-${R_launched:-0}}; fi
     printf '%s|%s|%s|%s|%s|%s\n' "$when" "$id" "$R_name" "$R_cwd" "$R_slot" "$tr"
@@ -43,11 +58,11 @@ EOF
 
 # resume [name|slot|session-id] [--focus] [--json]: alone, who can be recalled; with a name, a
 # departed resident still in its pane is recalled there (the screen's own `r` key), one from an
-# earlier run gets a fresh slot and pane. Claude Code resumes the same session id and keeps
-# the name and transcript; the launch flags chosen at summon time apply again, the first
-# prompt is not replayed.
+# earlier run - or one whose pane went with its server - gets a fresh slot and pane. Claude
+# Code resumes the same session id and keeps the name and transcript; the launch flags chosen
+# at summon time apply again, the first prompt is not replayed.
 cmd_resume() {
-  local who='' focus='' json='' f id rec slot
+  local who='' focus='' json='' f id rec slot name
   while [ $# -gt 0 ]; do
     case $1 in
       --focus) focus=1 ;;
@@ -62,15 +77,31 @@ cmd_resume() {
   if f=$(find_resident "$who"); then
     rec_load "$f"
     [ -n "$R_departed" ] || die "resume: $R_name is still here (slot $R_slot)"
-    tmux_ send-keys -t "$R_pane" r
-    [ -n "$focus" ] && focus_window "${R_window:-$R_pane}"
-    say "recalled $R_name into its pane (slot $R_slot)"
-    return 0
+    if pane_live "$R_pane"; then
+      tmux_ send-keys -t "$R_pane" r
+      [ -n "$focus" ] && focus_window "${R_window:-$R_pane}"
+      say "recalled $R_name into its pane (slot $R_slot)"
+      return 0
+    fi
+    # The pane this record names went with its server (`gensokyo quit`, kill-server), and the
+    # record stayed behind so the next cockpit could offer it back. Sending `r` into a pane
+    # that is gone did nothing and said it had worked - and from the `g r` menu, which throws
+    # the output away, nothing at all. So the record joins the earlier runs, which is what the
+    # start_server below would do to it anyway, and the recall gives it a fresh pane. The path
+    # is carried over rather than looked up again: `who` may be a slot, and find_departed
+    # answers to a name or a session id only.
+    archive_record "$f" || die "resume: could not move $R_name's record aside ($f)"
+    f=$DEPARTED_DIR/${f##*/}
+  else
+    f=$(find_departed "$who") || die "resume: nobody called '$who' has departed (gensokyo resume lists them)"
   fi
-  f=$(find_departed "$who") || die "resume: nobody called '$who' has departed (gensokyo resume lists them)"
-  rec_load "$f"; id=${f##*/}
-  [ -d "$R_cwd" ] || die "resume: $R_name's directory is gone: $R_cwd"
-  find_resident "$R_name" >/dev/null && die "resume: another $R_name is here already (gensokyo list); close it first"
+  rec_load "$f"; id=${f##*/}; name=$R_name
+  [ -d "$R_cwd" ] || die "resume: $name's directory is gone: $R_cwd"
+  # rec_load's R_* are globals and find_resident reads every record in turn, so what it leaves
+  # behind is the last record it read, not this one. Everything below wants this one: ask while
+  # nothing depends on them, then load the record again.
+  find_resident "$name" >/dev/null && die "resume: another $name is here already (gensokyo list); close it first"
+  rec_load "$f"
   [ -n "$(transcript_of "$id")" ] || warn "no transcript for $R_name under $CLAUDE_DIR/projects; Claude Code may not find the session"
   start_server
   slot=$(next_slot); rec=$RES_DIR/$id

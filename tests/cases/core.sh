@@ -185,15 +185,39 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_eq "$(quit_wait 44444444-eeee-4000-8000-000000000004)" 0   # a record already gone counts as left
   QUIT_WAIT=$qw
 
-  t "the plugin manifest is valid and ships no skill: a click needs no words spent on it"
+  t "the plugin manifest is valid, and every skill in it has a name and a description"
   assert_ok test -f "$root/share/plugin/.claude-plugin/plugin.json"
   assert_ok jq_ -e '.name == "gensokyo"' "$root/share/plugin/.claude-plugin/plugin.json"
-  assert_eq "$(find "$root/share/plugin" -name 'SKILL.md' | wc -l | tr -d ' ')" 0
+  # A skill's frontmatter description is in every resident's context whether the skill is ever
+  # used, so it is the one part that must be there and must be short.
+  for f in "$root"/share/plugin/skills/*/SKILL.md; do
+    [ -f "$f" ] || continue
+    assert_eq "$(sed -n '1p' "$f")" '---'
+    assert_eq "$(sed -n '2,4p' "$f" | sed -n 's/^name: //p')" "$(basename "$(dirname "$f")")"
+    assert_re "$(sed -n '2,6p' "$f")" '^description: .+'
+  done
+
+  t "plugin_skills names what the plugin carries, so doctor can say it"
+  assert_eq "$(plugin_skills)" 'gensokyo-peers'
+
+  t "the peer skill leads with the reply channel, the thing that had to be learned twice"
+  out=$(cat "$root/share/plugin/skills/gensokyo-peers/SKILL.md")
+  assert_match "$out" 'the reply must come back as a `SendMessage` addressed to'
+  assert_match "$out" 'ListAgents'
+  # Saying one thing to everybody is a button; the skill has to point back at it rather than
+  # teach a resident to fan out SendMessage calls by hand.
+  assert_match "$out" 'gensokyo broadcast'
 
   t "system_paragraph says three things and teaches nothing a button already does"
   out=$(system_paragraph Marisa)
   assert_match "$out" 'resident name is Marisa'
   assert_match "$out" 'SendMessage'
+  # Both skills are named here, and both are named as a prohibition rather than a suggestion.
+  # Measured 2026-09-07: a resident told only that it *may* use gensokyo-peers does not - it
+  # writes the message itself and leaves out the reply channel, which is the whole failure the
+  # skill exists to prevent. "never compose ... yourself" is what made it fire.
+  assert_match "$out" 'gensokyo-peers'
+  assert_match "$out" 'never compose'
   assert_match "$out" 'gensokyo-ritual'
   assert_match "$out" 'never the built-in'
   assert_match "$out" 'not built yet'
@@ -210,7 +234,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
 
   t "doctor reports the plugin and whether gensokyo is on PATH"
   out=$(PATH=/usr/bin:/bin cmd_doctor)
-  assert_match "$out" "plugin     $root/share/plugin (loaded into every resident; no skill in it yet)"
+  assert_match "$out" "plugin     $root/share/plugin (loaded into every resident; skills: gensokyo-peers)"
   assert_match "$out" 'on PATH    no: run ./install.sh'
 
   t "doctor reports iTerm2 and its profile from the environment, without launching anything"

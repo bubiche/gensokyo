@@ -70,9 +70,48 @@ printf '\033]2;✳ %s\007' "$name"
 echo "stub-claude $name ($id)${resume:+ resumed}"
 echo "env CLAUDE*: $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | grep -c -v -x CLAUDE_CONFIG_DIR)"
 [ -n "$prompt" ] && echo "> $prompt"
+
+# Bracketed paste, because a spell card depends on it. tmux only wraps a paste in \033[200~ and
+# \033[201~ if the program asked for it, and the real thing does: the whole card then arrives as
+# one block, shows as a collapsed "[Pasted text #1 +7 lines]" and submits when Enter comes, in
+# one prompt. Without this the stub read a card as one prompt per line, echoing each as it went,
+# which interleaved its own output with the keystrokes still arriving and corrupted the text -
+# nothing like what a resident does with the same card.
+esc=$(printf '\033')
+pstart="${esc}[200~" pend="${esc}[201~"
+printf '%s[?2004h' "$esc"
+trap 'printf "%s[?2004l" "$esc"; rm -f "$STUB_STATE/$id.json"' EXIT
+pasted='' pastes=0
 while :; do
   IFS= read -r line; rc=$?
   if [ "$rc" -ne 0 ]; then [ "$rc" -gt 128 ] && continue; break; fi   # Ctrl-C: input cleared, keep going
+  case $line in
+    *"$pstart"*)
+      pasted=${line#*"$pstart"}
+      while :; do
+        case $pasted in *"$pend"*) break ;; esac
+        IFS= read -r more || break
+        pasted="$pasted
+$more"
+      done
+      pasted=${pasted%"$pend"*}
+      pastes=$((pastes + 1))
+      lines=$(printf '%s\n' "$pasted" | grep -c '')
+      if [ "$lines" -gt 1 ]; then
+        printf '[Pasted text #%s +%s lines]\n' "$pastes" "$((lines - 1))"
+      else
+        printf '%s\n' "$pasted"   # a one-liner arrives literally, as it does in Claude Code
+      fi
+      # Then submit it, as one prompt however many lines it holds. Claude Code holds a paste
+      # until Enter and this cannot: the tty here is line-buffered, so the newline that finishes
+      # the paste *is* the Enter that was sent after it, already consumed as this line's
+      # terminator. Holding for a second Enter would wait for one that never comes. That the
+      # real thing submits only on Enter is verified against live residents, not here; what this
+      # stub is for is the part that can go wrong silently - that the card arrives whole.
+      printf '%s\n' "$pasted" | sed 's/^/> /'
+      pasted=''
+      continue ;;
+  esac
   case $line in
     /exit) echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"

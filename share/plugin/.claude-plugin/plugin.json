@@ -1,6 +1,6 @@
 {
   "name": "gensokyo",
   "version": "0.1.0",
-  "description": "Loaded into every session gensokyo runs. It carries no skill yet: everything the cockpit does is a click, and only work a click cannot express earns a resident's context.",
+  "description": "Loaded into every session gensokyo runs. Everything the cockpit does is a click; what it carries is the work a click cannot express - talking to another resident, which is a conversation and not a button.",
   "author": { "name": "gensokyo" }
 }

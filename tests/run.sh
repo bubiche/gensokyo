@@ -112,6 +112,8 @@ fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; }
 . "$here/cases/telemetry.sh"
 # shellcheck source=cases/recall.sh
 . "$here/cases/recall.sh"
+# shellcheck source=cases/spellcards.sh
+. "$here/cases/spellcards.sh"
 # shellcheck source=cases/install.sh
 . "$here/cases/install.sh"
 # shellcheck source=cases/iterm.sh
@@ -120,9 +122,9 @@ fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; }
 . "$here/cases/smoke.sh"
 
 case $what in
-  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; install_tests; iterm_tests ;;
+  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; install_tests; iterm_tests ;;
   smoke) smoke_tests ;;
-  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; install_tests; iterm_tests; smoke_tests ;;
+  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; install_tests; iterm_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

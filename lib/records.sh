@@ -80,9 +80,16 @@ archive_records() {
   local f
   for f in "$RES_DIR"/*; do
     [ -f "$f" ] || continue
-    mkdir -p "$STATE_DIR/departed" && mv "$f" "$STATE_DIR/departed/"
-    drop_side_files "${f##*/}"
+    archive_record "$f"
   done
+}
+
+# archive_record <record>: one record out of the way, side files and all. The path is written
+# out rather than taken from recall.sh's $DEPARTED_DIR so this file owes nothing to the order
+# the libraries are sourced in.
+archive_record() {
+  mkdir -p "$STATE_DIR/departed" && mv "$1" "$STATE_DIR/departed/" || return 1
+  drop_side_files "${1##*/}"
 }
 
 # Every writer here renames a `<file>.tmp.<pid>` into place, which is atomic and leaves nothing
@@ -95,11 +102,30 @@ sweep_stale_temps() {
   return 0
 }
 
+# live_panes: every pane id on the server, one per line; nothing at all when there is no
+# server. Callers wrap it in newlines themselves - live=$'\n'$(live_panes)$'\n' - so that one
+# pane can be matched with `case $live in *$'\n'"$pane"$'\n'*)`. The wrapping cannot move in
+# here: a command substitution eats the trailing newline, and the pattern needs it (measured
+# the hard way - prune_records without it dropped every record on the last line of the list).
+live_panes() { tmux_ list-panes -s -t "=$SESSION" -F '#{pane_id}' 2>/dev/null; }
+
+# pane_live <pane-id>: true while that pane is there. An empty argument is false on purpose -
+# with no server the wrapped list is two bare newlines, which an empty id would match. Callers
+# holding a list of records fetch live_panes once and match it themselves instead
+# (prune_records, recall_rows).
+pane_live() {
+  local live
+  [ -n "$1" ] || return 1
+  live=$'\n'$(live_panes)$'\n'
+  case $live in *$'\n'"$1"$'\n'*) return 0 ;; esac
+  return 1
+}
+
 # prune_records: drop records whose pane was killed behind our back (tmux kill-pane, a
 # closed window). A record without a pane yet is a summon in progress; keep it for 30 s.
 prune_records() {
   local live f now
-  live=$'\n'$(tmux_ list-panes -s -t "=$SESSION" -F '#{pane_id}' 2>/dev/null)$'\n'
+  live=$'\n'$(live_panes)$'\n'
   [ "$live" != $'\n\n' ] || return 0
   now=$(date +%s)
   for f in "$RES_DIR"/*; do

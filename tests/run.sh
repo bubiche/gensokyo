@@ -34,6 +34,9 @@ export HOME=${HOME:-/tmp}
 # whatever machine runs the suite next.
 export TZ=Asia/Tokyo
 unset TMUX TMUX_PANE
+# Nothing in the suite may open an editor and wait for it: `ritual new` and `ritual edit` hand
+# the file to $VISUAL/$EDITOR, and whatever this machine's owner has set would sit there.
+export EDITOR=: VISUAL=:
 # A fake osascript / notify-send logs "subtitle|text" (its last two arguments) instead of
 # showing a desktop notification.
 mkdir -p "$scratch/fakebin"
@@ -122,6 +125,8 @@ fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; rm -f "$STATE_DIR/quitting"; }
 . "$here/cases/rituals.sh"
 # shellcheck source=cases/ritualrun.sh
 . "$here/cases/ritualrun.sh"
+# shellcheck source=cases/ritualcmd.sh
+. "$here/cases/ritualcmd.sh"
 # shellcheck source=cases/install.sh
 . "$here/cases/install.sh"
 # shellcheck source=cases/iterm.sh
@@ -130,9 +135,9 @@ fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; rm -f "$STATE_DIR/quitting"; }
 . "$here/cases/smoke.sh"
 
 case $what in
-  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; install_tests; iterm_tests ;;
+  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests ;;
   smoke) smoke_tests ;;
-  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; install_tests; iterm_tests; smoke_tests ;;
+  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

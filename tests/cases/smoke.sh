@@ -702,5 +702,33 @@ null'
   assert_match "$(cat "$STATE_DIR/rituals/nightly-checks/log")" \
     "ran (due $(ritual_when "$(ritual_stamp nightly-checks)"))"
   rm -f "$CONFIG_DIR/rituals/nightly-checks.md"
+
+  t "smoke: ritual add then ritual run - a ritual written by a command, fired by hand"
+  local handid handpane stamp
+  # The whole way a ritual is meant to arrive: a command writes the file (which is what the skill
+  # calls once the user has said yes), and another fires it now so its prompts can be approved
+  # once. Both through the binary, in a cockpit that is already running.
+  rm -rf "$STATE_DIR/rituals"; mkdir -p "$scratch/work/by-hand"
+  out=$("$G" ritual add --name by-hand --schedule '0 4 * * *' --cwd "$scratch/work/by-hand" \
+    --description 'run when it is asked to' --model haiku --prompt 'look at the thing' 2>&1)
+  assert_match "$out" 'next fire'
+  assert_match "$("$G" ritual list)" 'by-hand'
+  # The stamp the sweep would have written for a minute that has not come round yet: a hand run
+  # must not spend it, or the 04:00 fire would skip itself.
+  ritual_stamp_set by-hand 1788000000; stamp=$(ritual_stamp by-hand)
+  out=$("$G" ritual run by-hand 2>&1)
+  assert_match "$out" "by-hand is running in $(tilde "$scratch/work/by-hand")"
+  handid=$(grep -l '^ritual=by-hand$' "$RES_DIR"/* 2>/dev/null | head -n 1); handid=${handid##*/}
+  assert_ok wait_for 10 '[ -n "$(rec_get "$RES_DIR/$handid" pane)" ]'
+  handpane=$(rec_get "$RES_DIR/$handid" pane)
+  assert_match "$(pane_shows "$handpane" 'memory.md')" '> look at the thing'
+  assert_match "$(cat "$STUB_STATE/$handid.args")" '--model haiku'
+  assert_match "$(cat "$STATE_DIR/rituals/by-hand/log")" 'ran (by hand)'
+  assert_eq "$(ritual_stamp by-hand)" "$stamp"
+  assert_match "$(tm list-windows -t =gensokyo -F '#{window_name}')" 'by-hand'
+  # And its own listing now knows it has run, from the log rather than from the stamp.
+  assert_match "$("$G" ritual log by-hand)" 'ran (by hand)'
+  assert_match "$("$G" ritual list)" 'last ran'
+  rm -f "$CONFIG_DIR/rituals/by-hand.md"
   tm kill-server 2>/dev/null
 }

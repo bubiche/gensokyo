@@ -163,6 +163,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/rituals.sh" || exit 1
 # shellcheck source=../lib/ritualrun.sh
 . "$LIB/ritualrun.sh" || exit 1
+# shellcheck source=../lib/ritualcmd.sh
+. "$LIB/ritualcmd.sh" || exit 1
 # shellcheck source=../lib/hooks.sh
 . "$LIB/hooks.sh" || exit 1
 # shellcheck source=../lib/telemetry.sh
@@ -293,6 +295,7 @@ close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
 broadcast|spell|<card> <who> [--with peer]|cast a spell card at all, awaiting, idle or a resident; alone: the cards there are
+ritual|schedule|list [--json] / <verb> <name>|the scheduled work: what fires when; verbs are add, run, enable, disable, log, edit, new
 reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
 quit|||ask every resident to /exit, then stop the cockpit: the shrine, the clock and the tabs go
 help||[--json]|this list; --json for tools
@@ -352,8 +355,8 @@ main() {
     broadcast|spell) shift; cmd_broadcast "$@" ;;
     reload) shift; cmd_reload "$@" ;;
     quit) shift; cmd_quit "$@" ;;
-    ritual) cmd__not_yet schedule ;;
-    schedule|update|uninstall) cmd__not_yet "$cmd" ;;
+    ritual|schedule) shift; cmd_ritual "$@" ;;
+    update|uninstall) cmd__not_yet "$cmd" ;;
     _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit|_menu-spell|_menu-cast-target|_menu-cast-peer)
       shift; "cmd_$cmd" "$@" ;;
     _menu-timetable)

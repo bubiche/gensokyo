@@ -323,7 +323,7 @@ cmd__run() {
 # there. A skill that describes how to do something the system prompt already grants has to be
 # named at the point the grant is made, or it is never reached for.
 system_paragraph() {
-  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks; that skill is not built yet, so until it is, tell the user that gensokyo cannot schedule anything for them."
+  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks; that skill is not built yet, so until it is, tell the user to run \`gensokyo ritual new <name>\` themselves rather than scheduling anything for them."
 }
 
 # What the resident's own tab shows once it has left: the same buttons the shrine draws, drawn by

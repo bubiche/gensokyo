@@ -262,6 +262,9 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'gensokyo-ritual'
   assert_match "$out" 'never the built-in'
   assert_match "$out" 'not built yet'
+  # And what to say instead of "gensokyo cannot schedule anything", which stopped being true the
+  # moment `gensokyo ritual` shipped. The clause goes altogether when the skill arrives.
+  assert_match "$out" 'gensokyo ritual new'
   for f in summon banish recall 'gensokyo new' 'gensokyo close' 'gensokyo list' focus tmux; do
     assert_nomatch "$out" "$f"
   done

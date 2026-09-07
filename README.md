@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work; schedules are not there yet.
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. Rituals run: the cockpit's own clock fires them into residents you can watch, and `gensokyo ritual` writes, runs and pauses them. What is not there yet is a resident that can set one up for you when you ask in words, the timetable button on the shrine tab, and the ritual settings that say so when you use them (`headless`, `persistent`, `keep`).
 
 ## Requirements
 
@@ -58,6 +58,7 @@ bin/gensokyo               # attach the cockpit (--tty for the plain tmux client
 bin/gensokyo help          # command list; --json is the same for tools
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a tab of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
+bin/gensokyo ritual                  # what is scheduled; also add, run, enable, disable, log, edit, new
 bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: run the new code (Ctrl-Space l)
 bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
@@ -186,6 +187,49 @@ to be told, it has been.
 its filename or its title, or by enough of either to pick out one card. There is no way to
 broadcast free text: telling one resident something is typing in its pane, and a prompt worth
 sending to everybody is worth a file.
+
+## Rituals
+
+A ritual is standing work on a schedule: a markdown file that says when to run, where, and what
+to ask for. The cockpit's clock checks the schedules every twenty seconds, and a ritual that has
+come round is summoned as a resident of its own - a tab you can watch, take over, or ignore. The
+tab you were working in keeps the focus.
+
+```
+~/.config/gensokyo/rituals/slack-morning.md
+
+---
+name: slack-morning
+description: Morning Slack triage
+schedule: "3 9 * * 1-5"     # five cron fields, local time; also @hourly @daily @weekly, "every 30m"
+cwd: ~/dev/mozart
+model: haiku
+allowed_tools: ["Read", "Grep"]
+enabled: true
+---
+Check Slack for anything addressed to me since your last run, summarize what
+needs a reply, and list the open questions.
+```
+
+Every run is a fresh session, so nothing accumulates a year of context - and every prompt is sent
+with a sentence naming the ritual's own `memory.md`, which is where the continuity lives: what it
+already handled, what it is waiting on. A fire missed while the machine slept is made up once, at
+the next start, for the most recent miss within a week; a fire that lands while the last run is
+still going is skipped and says so in the log.
+
+```sh
+gensokyo ritual                      # what is scheduled, when each fires next, and anything wrong with one
+gensokyo ritual new nightly-checks   # a template in $EDITOR; it arrives disabled
+gensokyo ritual run nightly-checks   # fire it now - which is how you approve its prompts once
+gensokyo ritual log nightly-checks   # every fire, skip and complaint
+gensokyo ritual disable slack-morning
+```
+
+Run a new ritual by hand once before leaving it to the clock: whatever it asks permission for,
+you can approve in the pane and then write into `allowed_tools` (or set `mode: acceptEdits`), and
+a run nobody is there to answer just waits with a gold chip until you look at it. A directory
+Claude Code has never been trusted in is refused with the reason, because a run that stops at
+that dialog is alive - and would make every later fire skip itself as "still going".
 
 ## When a resident needs you
 

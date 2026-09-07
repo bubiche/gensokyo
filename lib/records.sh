@@ -121,10 +121,29 @@ pane_live() {
   return 1
 }
 
+# quit_in_progress: `gensokyo quit` between the first /exit and the kill-server. It is the one
+# window in which a record naming a pane that is not in the list means nothing at all: the panes
+# are going, one after another, and a tick that reads the list in the middle sees the shrine but
+# not a resident whose window has already gone. The marker is a file rather than a variable
+# because the tick that would do the damage is a different process (the clock, a shrine redraw).
+# It is also given a life. start_clock clears it, but an interrupted quit - Ctrl-C in the middle
+# of quit_wait, or a kill-server that fails - leaves the server up with its clock already
+# ticking, and nothing would clear it for as long as that cockpit ran. Two minutes is well past
+# the slowest honest quit (QUIT_WAIT, plus a pane_settled for each resident before it), and what
+# a stale marker costs until then is only that a record whose pane went keeps its slot.
+QUIT_MARKER_LIFE=120
+quit_in_progress() {
+  [ -f "$STATE_DIR/quitting" ] || return 1
+  [ $(( $(date +%s) - $(mtime_of "$STATE_DIR/quitting") )) -le "$QUIT_MARKER_LIFE" ]
+}
+
 # prune_records: drop records whose pane was killed behind our back (tmux kill-pane, a
-# closed window). A record without a pane yet is a summon in progress; keep it for 30 s.
+# closed window). A record without a pane yet is a summon in progress; keep it for 30 s. Nothing
+# is dropped while a quit is going on: there a pane that has gone is the quit doing its work, and
+# these records are what the next cockpit offers back under `resume`.
 prune_records() {
   local live f now
+  quit_in_progress && return 0
   live=$'\n'$(live_panes)$'\n'
   [ "$live" != $'\n\n' ] || return 0
   now=$(date +%s)

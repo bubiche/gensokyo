@@ -103,11 +103,40 @@ pane_settled() {
 
 # The two halves of asking a resident to leave, in the order they have to happen: Ctrl-C clears
 # a half-typed prompt (or interrupts the running turn) so that /exit lands on an empty line,
-# pane_settled waits for that to arrive, and `send-keys -l` then Enter submits reliably. Two
-# functions rather than one because `close` asks one resident and `quit` asks everybody: there
-# the interrupts all go out first, so that nobody waits for the resident before it.
-ask_interrupt() { tmux_ send-keys -t "$1" C-c; }
-ask_exit()      { tmux_ send-keys -t "$1" -l '/exit' \; send-keys -t "$1" Enter; }
+# pane_settled waits for that to arrive, and `send-keys -l` then Enter submits reliably. They are
+# separate because `quit` sends every interrupt first, so that nobody waits for the resident
+# before it; `close`, which has one resident to ask, takes them together in ask_leave below.
+ask_interrupt() { [ -n "$1" ] || return 1; tmux_ send-keys -t "$1" C-c; }
+ask_exit()      { [ -n "$1" ] || return 1; tmux_ send-keys -t "$1" -l '/exit' \; send-keys -t "$1" Enter; }
+
+# EXIT_WAIT: how long one resident gets to act on one /exit. Claude Code is gone within a second
+# of reading it, so this is slack for a loaded machine and for a resident finishing a tool call,
+# not for one that is thinking: what runs out of it is asked a second time, not given longer.
+EXIT_WAIT=6
+
+# departed_within <session-id> <seconds>: true once that record says the resident has gone.
+# The record is the only proof that a /exit was read - cmd__run writes `departed` the moment
+# claude returns - and the pane's own text is not: a recalled resident still has the last
+# departed screen in its scrollback, which a capture matches just as happily.
+departed_within() {
+  local limit
+  limit=$(( $(date +%s) + $2 ))
+  while :; do
+    [ -n "$(rec_get "$RES_DIR/$1" departed 2>/dev/null)" ] && return 0
+    [ "$(date +%s)" -ge "$limit" ] && return 1
+    nap 0.3
+  done
+}
+
+# ask_leave <pane> <session-id>: the whole gesture, and whether it was heard. Ctrl-C clears a
+# half-typed prompt or interrupts the turn, pane_settled waits for that to arrive so the /exit
+# does not lose its first characters to it, and the record says whether claude read it.
+ask_leave() {
+  ask_interrupt "$1"
+  pane_settled "$1"
+  ask_exit "$1"
+  departed_within "$2" "$EXIT_WAIT"
+}
 
 cmd_close() {
   local f id
@@ -129,10 +158,25 @@ cmd_close() {
     drop_record "$f"; tmux_ kill-pane -t "$R_pane" 2>/dev/null
     say "closed $R_name's dead pane"
   else
-    ask_interrupt "$R_pane"
-    pane_settled "$R_pane"
-    ask_exit "$R_pane"
-    say "asked $R_name to leave (/exit); the pane shows the departed screen once claude exits"
+    # A keystroke is not a message: send-keys says tmux wrote it, never that the resident read
+    # it, and one that goes missing leaves a resident nothing can shift - this used to send the
+    # /exit, report that it had asked and return, with claude still sitting in the tab. So the
+    # record is watched, and the whole gesture repeated once if nothing comes of it.
+    #
+    # The whole gesture, not the /exit on its own: the interrupt is there to clear a half-typed
+    # prompt, and a lost keystroke can leave one (part of the last /exit still in the box), which
+    # a second /exit typed after it would only lengthen into something that matches nothing.
+    #
+    # Repeating is safe because the departed screen ignores a slash command (shrine_event): a
+    # resident that leaves between the check and the keystroke reads that /exit at that screen,
+    # whose close key is the `x` in the middle of it, and it used to take the pane and the record
+    # with it. That race is milliseconds wide and it happened, so the guard is there and not here.
+    if ask_leave "$R_pane" "$id" || ask_leave "$R_pane" "$id"; then
+      say "$R_name has left (/exit); the tab shows the departed screen"
+    else
+      warn "$R_name did not answer /exit in ${EXIT_WAIT}s, twice; its tab is still open (try again, or /exit in it)"
+      return 1
+    fi
   fi
 }
 

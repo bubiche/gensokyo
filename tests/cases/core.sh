@@ -5,7 +5,7 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 core_tests() {
-  local out f qw
+  local out f qw was_tmux was_ask
 
   t "ver_ge compares dotted versions, letters ignored"
   assert_ok ver_ge 3.7c 3.3
@@ -43,6 +43,47 @@ core_tests() {
   rec_load "$RES_DIR/r1"
   assert_eq "$R_slot|$R_name|$R_cwd|$R_pane" '1|Marisa|/tmp/a|'
 
+  t "prune_records drops a record whose pane has gone - but never while a quit is going on"
+  fresh; rec p1 slot=1 name=Reimu cwd=/tmp/a pane=%1; rec p2 slot=2 name=Youmu cwd=/tmp/a pane=%7
+  was_tmux=$(declare -f tmux_)
+  tmux_() { case $1 in list-panes) printf '%%1\n' ;; esac; return 0; }   # %7 is not there any more
+  # `gensokyo quit` asks everyone to leave and then kills the server, so its panes go one after
+  # another and this is what a tick in the middle of it sees. Dropping the record there loses the
+  # resident for good: those records are what the next cockpit offers back under `resume`.
+  : > "$STATE_DIR/quitting"
+  prune_records
+  assert_ok test -f "$RES_DIR/p2"
+  # The marker is not forever - start_clock clears it - and afterwards the same record is pruned
+  # exactly as it was before.
+  rm -f "$STATE_DIR/quitting"
+  prune_records
+  assert_ok test ! -f "$RES_DIR/p2"
+  # An interrupted quit does not switch pruning off for good: the marker has a life, because the
+  # clock that would clear it is already running and will not start again.
+  : > "$STATE_DIR/quitting"; touch -t "$(date -v-5M +%Y%m%d%H%M)" "$STATE_DIR/quitting"
+  assert_fails quit_in_progress
+  rm -f "$STATE_DIR/quitting"
+  assert_ok test -f "$RES_DIR/p1"
+  eval "$was_tmux"
+
+  t "departed_within: the record, not the pane, is what says a /exit was read"
+  fresh; rec d1 slot=1 name=Reimu cwd=/tmp/a pane=%1
+  assert_fails departed_within d1 1
+  rec_set "$RES_DIR/d1" departed 1700000000
+  assert_ok departed_within d1 1
+
+  t "quit_wait asks whoever has not answered a second time, and reports the ones that never do"
+  fresh; rec q1 slot=1 name=Reimu cwd=/tmp/a pane=%1
+  was_ask=$(declare -f ask_exit); rm -f "$STATE_DIR/asked"
+  ask_exit() { printf '%s\n' "$1" >> "$STATE_DIR/asked"; }
+  qw=$QUIT_WAIT; QUIT_WAIT=2
+  assert_eq "$(quit_wait q1)" 1
+  assert_eq "$(grep -c '^%1$' "$STATE_DIR/asked")" 1   # once, not once a tick
+  # One that has left is not asked again: it is at its departed screen, where `x` closes its pane.
+  rec_set "$RES_DIR/q1" departed 1700000000; rm -f "$STATE_DIR/asked"
+  assert_eq "$(quit_wait q1)" 0
+  assert_ok test ! -f "$STATE_DIR/asked"
+  QUIT_WAIT=$qw; eval "$was_ask"
   t "a temp file left by a killed writer is swept, and one being written now is not"
   fresh
   : > "$STATE_DIR/registry.json.tmp.4242"          # yesterday's, from a process that was killed

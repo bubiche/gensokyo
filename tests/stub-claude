@@ -7,7 +7,8 @@
 #                             entry per running stub session, status from <id>.status
 #   interactive (default)     honours --session-id, --name, --resume, swallows the other
 #                             launch flags, sets the pane title to "✳ <name>", echoes input,
-#                             /rename <name> renames, /exit exits 0
+#                             /rename <name> renames, /exit exits 0 - unless <id>.eat-exit says
+#                             to drop that many of them first, which is how the retry is tested
 # Every session keeps its registry entry in $STUB_STATE/<session-id>.json and its launch
 # arguments in <session-id>.args so tests can assert on them. bash 3.2 compatible.
 
@@ -113,7 +114,18 @@ $more"
       continue ;;
   esac
   case $line in
-    /exit) echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
+    /exit)
+      # A keystroke lost on demand. gensokyo's `close` and `quit` have to notice that a resident
+      # never heard the /exit and ask again, and the real thing is a timing flake that turns up in
+      # about one smoke run in five and vanishes when instrumented - nothing a test can summon.
+      # `<id>.eat-exit` says how many /exits to drop, and drops them the way the flake does: one
+      # character short, so nothing matches and the resident sits there.
+      if [ -f "$STUB_STATE/$id.eat-exit" ] && [ "$(cat "$STUB_STATE/$id.eat-exit")" -gt 0 ]; then
+        printf '%s\n' "$(( $(cat "$STUB_STATE/$id.eat-exit") - 1 ))" > "$STUB_STATE/$id.eat-exit"
+        echo "> ${line%?}"
+        continue
+      fi
+      echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"
                 write_entry "$id" "$name" '"idle"'; printf '\033]2;✳ %s\007' "$name"; echo "renamed to $name" ;;
     *) echo "> $line" ;;

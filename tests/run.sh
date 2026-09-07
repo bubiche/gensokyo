@@ -100,7 +100,7 @@ EOF
 set_bins
 ensure_dirs
 rec() { printf '%s\n' "$@" | sed 's/^ *//' > "$RES_DIR/$1"; }   # rec <id> key=v ...
-fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; }
+fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; rm -f "$STATE_DIR/quitting"; }
 
 # shellcheck source=cases/core.sh
 . "$here/cases/core.sh"

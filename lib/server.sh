@@ -234,6 +234,14 @@ cmd_quit() {
   # Records whose pane went away behind gensokyo's back first: one of those would be asked to
   # leave, would never answer, and would hold the quit for the whole of QUIT_WAIT.
   prune_records
+  # From here on the panes start going, and they go one at a time: every resident is asked to
+  # /exit and then the server is killed. A shrine redraw or a clock tick that reads the pane list
+  # in the middle of that would take a record whose window has already gone for a pane killed
+  # behind gensokyo's back and delete it - and these records are exactly what the next cockpit
+  # offers back under `resume`. The marker goes up after the prune above, which wants that same
+  # pruning done while nothing has moved yet; start_clock clears it, so a quit that never
+  # reached the kill leaves nothing switched off for longer than the cockpit it was in.
+  : > "$STATE_DIR/quitting"
   # Three passes rather than one loop per resident: every interrupt goes out first, then every
   # /exit, then one wait they all share. A resident that has already departed, or whose pane
   # died under it, has nothing to answer with and is left to the kill.
@@ -268,8 +276,14 @@ cmd_quit() {
 # never did - a resident that is mid-tool-call can take a while, and one that is wedged would
 # otherwise hold the cockpit open for as long as it liked.
 quit_wait() {
-  local id n limit
+  local id n limit again asked=''
   limit=$(( $(date +%s) + QUIT_WAIT ))
+  # Halfway through, whoever has not answered is asked a second time. A send-keys that tmux wrote
+  # is not a keystroke the resident read, and a lost one would otherwise hold the cockpit open for
+  # the whole wait and then be left behind with claude still in it. Only those with no `departed`
+  # are asked, and a resident that leaves in that instant reads the /exit at its departed screen,
+  # which ignores a slash command rather than acting on the `x` in the middle of it.
+  again=$(( limit - QUIT_WAIT / 2 ))
   while :; do
     n=0
     for id in "$@"; do
@@ -277,6 +291,13 @@ quit_wait() {
       [ -n "$(rec_get "$RES_DIR/$id" departed)" ] || n=$((n + 1))
     done
     { [ "$n" -eq 0 ] || [ "$(date +%s)" -ge "$limit" ]; } && break
+    if [ -z "$asked" ] && [ "$(date +%s)" -ge "$again" ]; then
+      asked=1
+      for id in "$@"; do
+        [ -f "$RES_DIR/$id" ] || continue
+        [ -n "$(rec_get "$RES_DIR/$id" departed)" ] || ask_exit "$(rec_get "$RES_DIR/$id" pane)"
+      done
+    fi
     nap 0.3
   done
   printf '%s\n' "$n"
@@ -298,7 +319,7 @@ CLOCK_TICK=3
 # reason - the running one is the code it was started with.
 start_clock() {
   local gen
-  rm -f "$STATE_DIR/clock.stray"
+  rm -f "$STATE_DIR/clock.stray" "$STATE_DIR/quitting"
   gen=$(date +%s).$$
   printf '%s\n' "$gen" > "$STATE_DIR/clock.gen"
   printf '%s\n' "$gen" > "$STATE_DIR/clock"   # count as a tick at once, so a second attach does not start a second loop

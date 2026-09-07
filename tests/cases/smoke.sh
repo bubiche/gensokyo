@@ -459,7 +459,7 @@ null'
 
   t "smoke: close asks for /exit; the pane shows the departed screen; the chip dims"
   out=$("$G" close gamma 2>&1)
-  assert_match "$out" 'Gamma'
+  assert_match "$out" 'Gamma has left (/exit)'
   assert_match "$(pane_shows "$pane2" 'Gamma has left the shrine')" 'Gamma has left the shrine'
   assert_ok test -n "$(rec_get "$RES_DIR/$id2" departed)"
   rm -f "$REGISTRY"
@@ -481,8 +481,12 @@ null'
   assert_match "$("$G" resume gamma 2>&1)" 'Gamma is still here (slot 2)'
   rm -f "$REGISTRY"
   assert_re "$("$G" list)" '^  2   ○  Gamma .*idle$'
-  "$G" close gamma >/dev/null 2>&1
-  assert_match "$(pane_shows "$pane2" 'Gamma has left the shrine')" 'Gamma has left the shrine'
+  out=$("$G" close gamma 2>&1)
+  # The record, not the pane: this pane still has the first departed screen in its scrollback, so
+  # matching that text would pass while Gamma sat there with claude still in it - which is how a
+  # lost /exit used to slip past this line and fail three tests further down instead.
+  assert_match "$out" 'Gamma has left (/exit)'
+  assert_ok test -n "$(rec_get "$RES_DIR/$id2" departed)"
 
   t "smoke: closing the departed pane takes its window with it and frees the slot"
   "$G" close 2 >/dev/null 2>&1
@@ -493,6 +497,57 @@ null'
   assert_eq "$(tm list-windows -t =gensokyo -F x | wc -l | tr -d ' ')" 2   # Alpha and the shrine
   assert_match "$("$G" new "$scratch/work/beta")" '(slot 2)'
   pause 0.5
+
+  t "smoke: a /exit the resident never hears is asked again, and close reports what happened"
+  # The lost keystroke that cost this suite 22 tests, on demand: the stub drops the first /exit
+  # one character short, exactly as the flake did. `close` used to send it, say it had asked and
+  # return, leaving a resident nothing could shift and every later test failing instead.
+  out=$("$G" new "$scratch/work/alpha" -n Nitori 2>&1)
+  assert_match "$out" 'summoned Nitori'
+  id5=$(basename "$(find_resident Nitori)")
+  wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
+  assert_match "$(pane_shows "$pane" "stub-claude Nitori")" 'stub-claude Nitori'
+  printf '1\n' > "$STUB_STATE/$id5.eat-exit"
+  out=$("$G" close Nitori 2>&1)
+  assert_match "$out" 'Nitori has left (/exit)'
+  assert_nomatch "$out" 'did not answer'
+  assert_ok test -n "$(rec_get "$RES_DIR/$id5" departed)"
+  assert_eq "$(cat "$STUB_STATE/$id5.eat-exit")" 0     # the first one really was eaten
+  # And one that is never heard at all is said so, not reported as a departure.
+  out=$("$G" close Nitori 2>&1); assert_match "$out" "closed Nitori's pane"   # the departed pane
+  out=$("$G" new "$scratch/work/alpha" -n Momiji 2>&1)
+  id5=$(basename "$(find_resident Momiji)")
+  wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
+  assert_match "$(pane_shows "$pane" "stub-claude Momiji")" 'stub-claude Momiji'
+  printf '9\n' > "$STUB_STATE/$id5.eat-exit"
+  out=$("$G" close Momiji 2>&1)
+  assert_match "$out" 'Momiji did not answer /exit'
+  assert_eq "$(rec_get "$RES_DIR/$id5" departed)" ''
+  rm -f "$STUB_STATE/$id5.eat-exit"
+  out=$("$G" close Momiji 2>&1); assert_match "$out" 'Momiji has left (/exit)'
+  "$G" close Momiji >/dev/null 2>&1                    # its pane, so the counts below still hold
+  wait_for 5 '[ ! -f "$RES_DIR/$id5" ]'
+  assert_ok test ! -f "$RES_DIR/$id5"
+
+
+  t "smoke: /exit typed at a departed tab is ignored, not read as its close key"
+  # The `x` in `/exit` used to close the pane and delete the record - the resident gone from
+  # `resume` altogether. `quit` asks a second time when a /exit goes unheard, so a resident that
+  # leaves in that instant reads the retry at this screen; typing /exit twice does it by hand.
+  out=$("$G" new "$scratch/work/alpha" -n Kogasa 2>&1)
+  id5=$(basename "$(find_resident Kogasa)")
+  wait_for 10 '[ -n "$(rec_get "$RES_DIR/$id5" pane)" ]'; pane=$(rec_get "$RES_DIR/$id5" pane)
+  assert_match "$(pane_shows "$pane" "stub-claude Kogasa")" 'stub-claude Kogasa'
+  "$G" close Kogasa >/dev/null 2>&1
+  assert_match "$(pane_shows "$pane" 'Kogasa has left the shrine')" 'Kogasa has left the shrine'
+  tm send-keys -t "$pane" -l '/exit' \; send-keys -t "$pane" Enter
+  pause 1
+  assert_ok test -f "$RES_DIR/$id5"                    # still recallable
+  assert_ok tm has-session -t '=gensokyo'
+  assert_eq "$(tm display -p -t "$pane" '#{pane_id}' 2>/dev/null)" "$pane"
+  "$G" close Kogasa >/dev/null 2>&1                    # its pane, so the counts below still hold
+  wait_for 5 '[ ! -f "$RES_DIR/$id5" ]'
+  assert_ok test ! -f "$RES_DIR/$id5"
 
   t "smoke: every resident gets a window of its own, one pane in each, the shrine's aside"
   "$G" new "$scratch/work/alpha" >/dev/null; "$G" new "$scratch/work/alpha" >/dev/null; "$G" new "$scratch/work/alpha" >/dev/null

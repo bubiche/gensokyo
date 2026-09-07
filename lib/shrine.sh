@@ -538,6 +538,16 @@ shrine_event() {
   local c seq btn col row
   SHRINE_KEY='' SHRINE_CLICK=''
   IFS= read -r -s -n 1 -t "$SHRINE_TICK" c 2>/dev/null || return 0
+  # A slash command typed at a screen that is not Claude Code. `/exit` in a departed tab was read
+  # letter by letter and its `x` is the close key, so the pane went and the record with it - which
+  # is a resident lost, since `resume` offers what the records hold. It happens for real: `quit`
+  # asks a second time when the first /exit goes unheard, and a resident that leaves in that
+  # instant reads the retry here; a user typing /exit twice in a row does the same by hand.
+  # Nothing on these screens is reached by `/`, so the rest of the line goes in the bin.
+  if [ "$c" = / ]; then
+    while IFS= read -r -s -n 1 -t 1 c 2>/dev/null; do [ -n "$c" ] || break; done
+    return 0
+  fi
   if [ "$c" != $'\033' ]; then SHRINE_KEY=$c; return 0; fi
   IFS= read -r -s -n 1 -t 1 c 2>/dev/null || { SHRINE_KEY=esc; return 0; }
   [ "$c" = '[' ] || { SHRINE_KEY=esc; return 0; }

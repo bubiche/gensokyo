@@ -20,7 +20,9 @@ A ritual runs unattended, so a wrong one is wrong every morning. Say back what y
 create - in one short block, not a form - and get a yes first:
 
 - **what it will do**, in the words you are going to put in the prompt;
-- **when**, as a time and days, not as a cron line ("weekdays at 09:05");
+- **when**, as a time and days, not as a cron line ("weekdays at 09:05"). This machine's clock is
+  the one a ritual is read on, so say the time back in it and **never convert it to UTC** - not in
+  what you say, and not in the cron line you write;
 - **which directory** it runs in - the current one unless the user says otherwise;
 - **what it will need permission for**, if anything (see below).
 
@@ -47,7 +49,9 @@ gensokyo ritual add --name slack-morning --schedule '5 9 * * 1-5' \
 
 - `--name` becomes the file name and the tab's name: letters, digits, `.` `_` `-`.
 - `--schedule` takes five cron fields, `@hourly` `@daily` `@weekly` `@monthly`, or
-  `every 30m`. It is checked before anything is written, and a schedule that never comes round
+  `every 30m`. The fields are **this machine's local time**: 9:05 on weekdays is `5 9 * * 1-5`
+  wherever the user is, and a UTC conversion writes a ritual that fires at the wrong hour while
+  looking correct in what you told them. It is checked before anything is written, and a schedule that never comes round
   (30 February) is refused.
 - `--cwd` must be a directory that exists; leave it out for the one you are in.
 - `--allowed-tools` can be repeated, or given a comma-separated list. Anything not on it stops
@@ -96,6 +100,11 @@ gensokyo ritual edit slack-morning    # opens the file in the user's editor - fo
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
 each ritual's `name`, `enabled`, `schedule`, `next_fire`, `last_run`, `cwd` and `problem`. A
 `problem` is why that ritual is not firing, and it is the answer to "why didn't it run?".
+
+That listing is the whole answer to what the user has scheduled - there is nowhere else on this
+machine to look, and nothing else to ask. A ritual with `"enabled": false` is one the user has,
+paused: name it and say it is paused, because "you have nothing scheduled" is a different and
+wrong answer, and it is the one they will act on.
 
 To change what a ritual does, edit its file at the `path` the JSON gives - `add` refuses a name
 that already exists rather than overwriting somebody's file.

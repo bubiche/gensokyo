@@ -70,6 +70,9 @@ trap : INT   # Claude Code survives Ctrl-C (it clears the input); so does the st
 printf '\033]2;✳ %s\007' "$name"
 echo "stub-claude $name ($id)${resume:+ resumed}"
 echo "env CLAUDE*: $(env | sed -n 's/^\(CLAUDE[A-Za-z0-9_]*\)=.*/\1/p' | grep -c -v -x CLAUDE_CONFIG_DIR)"
+# What the skills tell a resident to type. From a checkout it is only here because the wrapper
+# put this copy first on PATH; a resident that cannot resolve it goes looking for the binary.
+echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
 [ -n "$prompt" ] && echo "> $prompt"
 
 # Bracketed paste, because a spell card depends on it. tmux only wraps a paste in \033[200~ and

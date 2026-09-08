@@ -364,6 +364,15 @@ EOF
   else
     say "  disabled, so it will not fire: gensokyo ritual enable $name"
   fi
+  # The five fields are read on this machine's clock (lib/cron.sh walks with a local `date`), and
+  # this line is here because something else tells a resident otherwise: a session that knows the
+  # user's timezone is also told to convert a local time to UTC before writing a cron line, and it
+  # will do it to a ritual - measured 2026-09-08, five times in eight, while reporting back the
+  # hour the user asked for. Printing the clock the schedule is actually read on is what makes
+  # that visible at the one moment somebody is still looking.
+  # %z, not %Z: the abbreviation is a zone's own business - Singapore has none and prints `+08`
+  # while Tokyo prints `JST` - and the offset is the quantity a UTC conversion got wrong anyway.
+  say "  $sched is this machine's clock, now $(date '+%H:%M %z') - a ritual is never in UTC"
   say "  gensokyo ritual run $name   fires it now, so its prompts can be approved once"
   return 0
 }

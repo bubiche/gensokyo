@@ -264,6 +264,12 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'gensokyo ritual disable slack-morning'
   # And what a ritual is not, so it is not promised: no clock while the cockpit is down.
   assert_match "$out" 'only fire while gensokyo is running'
+  # Measured 2026-09-08: a session that knows the user's timezone is also told to convert a local
+  # time to UTC before writing a cron line, and it does it to a ritual - five runs in eight - while
+  # saying back the hour that was asked for, so the confirmation reads as agreeing with itself. The
+  # rule belongs both in the flag and in what gets confirmed, which is where it gets said wrong.
+  assert_match "$out" 'never convert it to UTC'
+  assert_match "$out" "this machine's local time"
 
   t "system_paragraph says three things and teaches nothing a button already does"
   out=$(system_paragraph Marisa)
@@ -277,6 +283,13 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   assert_match "$out" 'never compose'
   assert_match "$out" 'gensokyo-ritual'
   assert_match "$out" 'never the built-in'
+  # The clause the built-in's own procedure makes necessary: it converts a local time to UTC, and
+  # a ritual is not in UTC. Named at the grant, for the same reason gensokyo-peers is.
+  assert_match "$out" 'never convert a time you are given to UTC'
+  # Reading is granted as explicitly as writing. Asked what it had scheduled, a resident answered
+  # off CronList and said "nothing" over three rituals on disk: a sentence about setting a schedule
+  # up does not reach a question about what is already there.
+  assert_match "$out" 'question about what is scheduled'
   # Both skills ship, so the paragraph names them and stops: no command of gensokyo's own is in
   # here, because a resident that can read a skill does not need the CLI spelled out for it.
   for f in summon banish recall 'gensokyo new' 'gensokyo ritual' 'gensokyo close' 'gensokyo list' focus tmux; do

@@ -54,6 +54,11 @@ ritual_cmd_tests() {
     --allowed-tools 'mcp__claude_ai_Slack__*' --prompt 'Check Slack and summarize.' 2>&1)
   assert_match "$out" "wrote $(tilde "$mine/slack-morning.md")"
   assert_match "$out" 'next fire  2026-09-08 09:03 (in 23h)'
+  # The clock the five fields are read on, said out loud. A resident that has been told to convert
+  # a local time to UTC writes `3 1 * * 1-5` and reports back 09:03; this line is the only thing in
+  # the exchange that contradicts it, so it prints whether or not the ritual is on.
+  assert_match "$out" "3 9 * * 1-5 is this machine's clock, now "
+  assert_match "$out" 'a ritual is never in UTC'
   ritual_load "$mine/slack-morning.md"
   assert_eq "$RIT_slug|$RIT_name|$RIT_schedule|$RIT_cwd" "slack-morning|slack-morning|3 9 * * 1-5|$scratch"
   # A description with a colon and a `#` in it: written quoted, because a bare value loses

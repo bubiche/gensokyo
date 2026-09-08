@@ -159,12 +159,22 @@ smoke_tests() {
   args=$(cat "$STUB_STATE/$id2.args")
   assert_match "$args" "--session-id $id2 --name Beta"
   assert_match "$args" "--plugin-dir $root/share/plugin"
+  # All three cron tools share one per-session in-memory store: a schedule built on CronCreate dies
+  # with the pane without ever firing, and with CronCreate refused CronList can only ever answer
+  # "no scheduled jobs" however many rituals are on disk - which one resident duly told its owner.
+  # The `schedule` skill itself is not refused: its cloud routines are the only schedule here that
+  # runs while the cockpit is down.
+  assert_match "$args" '--disallowed-tools CronCreate CronList CronDelete'
   assert_match "$args" '--append-system-prompt'
   assert_match "$args" '--settings {"hooks":{"UserPromptSubmit"'
   assert_match "$args" '--model haiku --permission-mode plan'
   assert_eq "$(rec_get "$RES_DIR/$id2" mode)" plan
   assert_nomatch "$(cat "$STUB_STATE/$id1.args")" '--model'
   assert_match "$(tm capture-pane -p -t "$pane1")" 'env CLAUDE*: 0'
+  # The skills print `gensokyo ritual add` and `gensokyo ritual run` for the user to read, so bare
+  # `gensokyo` has to be the copy that launched the resident - not missing, which sends a resident
+  # hunting the filesystem for it, and not somebody else's copy either.
+  assert_match "$(tm capture-pane -p -t "$pane1")" "gensokyo on PATH: $root/bin/gensokyo"
 
   t "smoke: the shrine tab draws a block per resident and the buttons under them"
   assert_re "$(shrine_pane)" '^%[0-9]+$'

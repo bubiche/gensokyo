@@ -275,10 +275,18 @@ cmd__run() {
   rm -f "$STATE_DIR/status/$id"   # a fresh launch waits for nothing yet
   cd "$cwd" || die "cannot cd to $cwd"
   scrub_env
-  # Nothing in the resident reads GENSOKYO_BIN today - the hooks and the status line are given
-  # absolute paths in --settings - but the ritual skill will run the CLI, and from a checkout
-  # `gensokyo` is not on PATH. GENSOKYO_RESIDENT is what tells the CLI it is being run from
-  # inside a pane it owns.
+  # The skills tell a resident to run `gensokyo`, and from a checkout that is not on PATH. Put
+  # this copy's own directory first, which holds nothing but gensokyo itself and so shadows
+  # nothing: what the skills print is then what the user can paste, and a resident launched from
+  # here runs the code that launched it rather than some other copy. Without it one went looking
+  # for the binary with a `find` across the whole home directory - it got there, but only because
+  # there happened to be exactly one checkout to find.
+  case ":$PATH:" in
+    *":${SELF%/*}:"*) ;;
+    *) PATH="${SELF%/*}:$PATH"; export PATH ;;
+  esac
+  # GENSOKYO_BIN is the absolute path for anything that would rather not trust PATH at all;
+  # GENSOKYO_RESIDENT is what tells the CLI it is being run from inside a pane it owns.
   export GENSOKYO_BIN=$SELF GENSOKYO_RESIDENT=$id
   # Ctrl-C in the pane must reach claude (it clears the input) without killing this wrapper.
   # A trap with a command is reset to the default in the child, so claude sees nothing special.
@@ -287,7 +295,21 @@ cmd__run() {
   # Every resident, recalled or new, gets the hooks and status line wrapper (lib/hooks.sh,
   # lib/telemetry.sh), the plugin - two skills, each for work a click cannot express - and the
   # three-sentence paragraph; all are per-session flags, nothing in ~/.claude changes.
-  set -- --settings "$(launch_settings "$id" "$cwd")" --plugin-dir "$SHARE/plugin" \
+  #
+  # The whole in-memory cron surface is refused, because none of the three can do what a resident
+  # would reach for it to do. CronCreate schedules into a store belonging to the session that
+  # called it, so a "every weekday at 9:05" built on it goes when the pane goes, having never
+  # fired: something that looks scheduled and is not, which is worse than either real answer - a
+  # ritual, or the cloud routines the `schedule` skill writes, which are left alone and are the
+  # only schedule here that outlives the cockpit. CronList and CronDelete then read and write that
+  # same per-session store, and with CronCreate gone nothing can ever have put anything in it - so
+  # CronList's only possible answer in a resident is "no scheduled jobs", whatever the user
+  # actually has. That is not a harmless empty list: asked "what have I got scheduled?" a resident
+  # answered it from CronList and told the owner they had nothing, with three rituals on disk
+  # (2026-09-08). A tool whose every answer is wrong is worth less than no tool, which is the
+  # whole argument for refusing all three. They go first so the variadic value stops at --settings.
+  set -- --disallowed-tools CronCreate CronList CronDelete \
+    --settings "$(launch_settings "$id" "$cwd")" --plugin-dir "$SHARE/plugin" \
     --append-system-prompt "$(system_paragraph "$name")" "$@"
   if [ -n "$resume" ]; then
     # Recall: same session id and transcript; Claude Code keeps the name it had.
@@ -323,7 +345,7 @@ cmd__run() {
 # there. A skill that describes how to do something the system prompt already grants has to be
 # named at the point the grant is made, or it is never reached for.
 system_paragraph() {
-  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks."
+  printf '%s' "You are running inside gensokyo, a cockpit that runs several Claude Code sessions (residents) side by side on this machine; your resident name is $1. The other sessions in \`claude agents\` are residents too and you can message them with SendMessage by name, but never compose the first message of an exchange you want an answer to yourself: use the \`gensokyo-peers\` skill to write it. For any standing or repeating schedule, and to answer any question about what is scheduled or to change one, use the \`gensokyo-ritual\` skill and never the built-in \`schedule\` skill, CronCreate or scheduled tasks; a schedule here is read on this machine's own clock, so never convert a time you are given to UTC."
 }
 
 # What the resident's own tab shows once it has left: the same buttons the shrine draws, drawn by

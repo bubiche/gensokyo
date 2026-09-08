@@ -241,11 +241,11 @@ cmd_doctor() {
   fi
   v=$(command -v gensokyo 2>/dev/null) || v=
   if [ -z "$v" ]; then
-    say "  on PATH    no: run ./install.sh to link ~/.local/bin/gensokyo (residents fall back to \$GENSOKYO_BIN)"
+    say "  on PATH    no: run ./install.sh to link ~/.local/bin/gensokyo (residents get this copy on PATH either way)"
   elif [ "$(real_path "$v")" = "$SELF" ]; then
     say "  on PATH    $v -> this copy"
   else
-    say "  on PATH    $v -> a different copy ($(real_path "$v")); residents launched from here use \$GENSOKYO_BIN"
+    say "  on PATH    $v -> a different copy ($(real_path "$v")); residents launched from here get this one first"
   fi
   say "  prefix     $CFG_PREFIX ($(prefix_label))"
   say "  needs you  toast=$CFG_NOTIFY_TOAST desktop=$CFG_NOTIFY_DESKTOP ($(desktop_notifier)) bell=$CFG_NOTIFY_BELL  (config: NOTIFY_TOAST/NOTIFY_DESKTOP/NOTIFY_BELL=off)"

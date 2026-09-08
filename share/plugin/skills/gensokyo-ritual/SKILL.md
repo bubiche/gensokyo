@@ -58,8 +58,29 @@ gensokyo ritual add --name slack-morning --schedule '5 9 * * 1-5' \
   the run at a permission dialog until the user answers, which for a 02:00 run means until
   morning - so name the tools the prompt is going to need. `--mode acceptEdits` is the blunter
   way; `--model haiku` is worth it for anything that is only reading and summarising.
+- `--target` is where the fire lands. Leave it out for the default, a fresh session per run in a
+  tab of its own, which is the right answer for almost everything - the prompt is written for a
+  session that has never seen the job before, and the memory file is what carries continuity.
+  `--target persistent` gives the ritual one session it keeps between fires; offer it only when
+  the user says the runs need to remember each other in conversation rather than in notes, and
+  say that the context and the bill grow. `--target <resident name>` types the prompt into a
+  resident they already have - for "ask Sakuya to do X every morning" - and that prompt gets no
+  memory-file sentence, so it has to stand on its own.
 - `--disabled` writes it without turning it on, for a ritual the user wants to look at first.
 - `--headless` is the run with no tab at all (see below).
+- `--keep` is how long the finished run's tab stays before gensokyo closes it, `2h` by default.
+  Only worth naming when the user asks for it - `--keep forever` for a ritual whose tab they
+  want to come back to, a shorter one for a ritual that fires often. Idle time, so anything they
+  type in that tab puts its life back.
+- `--overlap` is what happens when a fire lands while the last run is still going: `skip` (the
+  default, and the right answer for a daily job), `queue` to run it as soon as the ritual is
+  free, `parallel` to start a second run beside the first. Worth raising only for a ritual that
+  fires often enough to catch itself up - "every 30m" and a job that sometimes takes longer. It
+  is a default-target setting; a session that is already there queues its own prompts.
+
+`--keep` and `--overlap` only mean anything for the default target, and `--headless` is a
+`claude -p` of its own so it cannot join a session either. `gensokyo ritual add` refuses a
+combination that could not work rather than writing a file with a line that does nothing.
 
 **Read what the command says back and pass it on.** It prints the next fire, and it warns -
 having written the file - when the directory is one Claude Code has never been trusted in. That
@@ -120,8 +141,9 @@ gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and it
 ```
 
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
-each ritual's `name`, `enabled`, `schedule`, `next_fire`, `last_run`, `cwd` and `problem`. A
-`problem` is why that ritual is not firing, and it is the answer to "why didn't it run?".
+each ritual's `name`, `enabled`, `schedule`, `next_fire`, `last_run`, `target`, `headless`,
+`keep`, `overlap`, `cwd` and `problem`. A `problem` is why that ritual is not firing, and it is
+the answer to "why didn't it run?".
 
 That listing is the whole answer to what the user has scheduled - there is nowhere else on this
 machine to look, and nothing else to ask. A ritual with `"enabled": false` is one the user has,
@@ -143,9 +165,8 @@ that already exists rather than overwriting somebody's file.
 - **Rituals only fire while gensokyo is running.** A closed cockpit or a sleeping laptop means
   no fire; the next start runs what was missed once. Say so if the user is counting on
   something happening while the machine is off - that is a cloud routine, not a ritual.
-- A run gets a tab you can watch, or no tab at all with `--headless`. A ritual firing into a
-  resident that is already there, and expiry after a finished run, are not wired up yet:
-  `target`, `overlap` and `keep` are refused with a word about why rather than half-working.
+- A fire lands in a tab of its own, in no tab at all (`--headless`), or in a resident that is
+  already there (`--target`). A run that expires after finishing is `--keep`.
 - A ritual is one prompt on a schedule. Anything that needs to talk to another resident is the
   `gensokyo-peers` skill, and anything the user wants to fire off by hand at several residents
   at once is a spell card (`gensokyo broadcast`).

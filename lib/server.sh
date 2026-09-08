@@ -374,6 +374,9 @@ cmd__tick() {
       { [ "$swept" -eq 0 ] || [ $((now - swept)) -gt $((RITUAL_SWEEP * 4)) ]; } && catch=1
       swept=$now
       ritual_sweep "$catch"
+      # And the other way round: a run that has finished and been read is a tab nobody needs
+      # any more, which is `keep`. Same beat, because it is written in minutes and hours.
+      ritual_reap
     fi
     sleep "$CLOCK_TICK"
   done

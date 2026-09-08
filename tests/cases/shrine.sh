@@ -254,7 +254,15 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_TEXT" '  next fire    2026-09-08 09:03 (in 23h)'
   assert_match "$SHRINE_TEXT" '  last ran     2026-09-07 09:05 (0s ago)'
   assert_match "$SHRINE_TEXT" '  in           ~'
+  # Nothing about the target, which is the default: a fire that opens a tab of its own needs no
+  # explaining, and the two that go into a resident already there do.
+  assert_nomatch "$SHRINE_TEXT" '  target'
   assert_match "$SHRINE_TEXT" '[ run now r ]  [ pause p ]  [ remove x ]  [ cancel q ]'
+  # What becomes of the tab, which is the default here because the ritual says nothing about it.
+  assert_match "$SHRINE_TEXT" '  keep         its tab closes 2h after the run finishes'
+  # And nothing about overlap, which is the other default: a row that says what everybody gets
+  # is a row that says nothing.
+  assert_nomatch "$SHRINE_TEXT" '  overlap'
   # Nothing about which kind of run it is, for the kind whose fire opens a tab: that explains
   # itself, and a row saying so on every ritual would be a row that says nothing.
   assert_nomatch "$SHRINE_TEXT" '  headless'
@@ -282,6 +290,8 @@ nightly|no||@daily|the checks"
   SHRINE_ARG=quiet-one
   shrine_render 80 24
   assert_match "$SHRINE_TEXT" '  headless     no pane: a claude -p per run, and a log of what it said'
+  # And no word about the tab, on the one kind of ritual that never has one.
+  assert_nomatch "$SHRINE_TEXT" '  keep'
   # And a run in progress, which neither the tab bar nor the timetable has anything to show for.
   mkdir -p "$STATE_DIR/rituals/quiet-one"
   was_hr=$(declare -f ritual_headless_running)
@@ -290,6 +300,38 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_TEXT" '  headless     a run of it is going right now, with no pane'
   eval "$was_hr"
   rm -f "$CONFIG_DIR/rituals/quiet-one.md"; rm -rf "$STATE_DIR/rituals/quiet-one"
+  SHRINE_ARG=slack-morning
+
+  t "shrine: a ritual whose tabs stay says that, since that is how the tab bar fills up"
+  printf -- '---\nschedule: "@daily"\ncwd: %s\nkeep: forever\noverlap: queue\n---\nstay\n' "$HOME" \
+    > "$CONFIG_DIR/rituals/lingerer.md"
+  SHRINE_ARG=lingerer
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  keep         its tab stays until you close it'
+  assert_match "$SHRINE_TEXT" '  overlap      a fire while the last run is going waits its turn'
+  printf -- '---\nschedule: "@daily"\ncwd: %s\noverlap: parallel\n---\nstay\n' "$HOME" \
+    > "$CONFIG_DIR/rituals/lingerer.md"
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  overlap      a fire while the last run is going starts a second run'
+  rm -f "$CONFIG_DIR/rituals/lingerer.md"
+  SHRINE_ARG=slack-morning
+
+  t "shrine: a ritual that fires into a resident already there says which, and no tab of its own"
+  printf -- '---\nschedule: "@daily"\ntarget: Reimu\n---\ntell Reimu\n' \
+    > "$CONFIG_DIR/rituals/at-reimu.md"
+  SHRINE_ARG=at-reimu
+  shrine_render 90 24
+  assert_match "$SHRINE_TEXT" '  target       its prompt is typed into Reimu, wherever that resident is working'
+  # No directory row: it runs wherever Reimu was started. No keep row: it opens no tab to close.
+  assert_nomatch "$SHRINE_TEXT" '  in     '
+  assert_nomatch "$SHRINE_TEXT" '  keep'
+  printf -- '---\nschedule: "@daily"\ncwd: %s\ntarget: persistent\n---\nagain\n' "$HOME" \
+    > "$CONFIG_DIR/rituals/at-reimu.md"
+  shrine_render 90 24
+  assert_match "$SHRINE_TEXT" '  target       one session of its own, kept between fires and recalled if it leaves'
+  assert_match "$SHRINE_TEXT" '  in           ~'
+  assert_nomatch "$SHRINE_TEXT" '  keep'
+  rm -f "$CONFIG_DIR/rituals/at-reimu.md"
   SHRINE_ARG=slack-morning
 
   t "shrine: a ritual that has gone since the timetable was drawn says so instead of drawing blanks"

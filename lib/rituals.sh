@@ -100,6 +100,29 @@ rit_list() {
   return 0
 }
 
+# rit_keep_secs <keep>: how long a finished run's tab stays, in seconds - and nothing at all for
+# the two words that mean "until somebody says otherwise", which is why the answer is a failure
+# and not a 0. It is also what says whether a `keep:` line can be read at all: ritual_problem
+# asks it rather than keeping a second copy of the same rule.
+rit_keep_secs() {
+  local n u
+  case $1 in forever|until_banished) return 1 ;; esac
+  n=${1%?}; u=${1#"$n"}
+  case $n in ''|*[!0-9]*) return 1 ;; esac
+  # Nine digits of days is two and a half million years, so anything longer is a typo - and the
+  # multiplication below would wrap round to whatever fits, which the reaper would read as a tab
+  # to take right now. Refused as a length nobody meant rather than turned into a number.
+  [ ${#n} -le 9 ] || return 1
+  case $u in
+    s) printf '%s' "$n" ;;
+    m) printf '%s' "$((n * 60))" ;;
+    h) printf '%s' "$((n * 3600))" ;;
+    d) printf '%s' "$((n * 86400))" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
 # The keys a ritual file may set. Anything else is a typo as far as a reader can tell - a
 # `schedul:` line is a ritual that never fires - so unknown keys are collected and named.
 RIT_KEYS=' name description schedule target cwd model effort mode permission_mode allowed_tools allowedTools mcp_config keep overlap headless catch_up enabled '
@@ -109,11 +132,11 @@ RIT_KEYS=' name description schedule target cwd model effort mode permission_mod
 ritual_load() {
   local f=$1 line l key val item state=start list=''
   RIT_slug='' RIT_path='' RIT_name='' RIT_description='' RIT_schedule='' RIT_cwd=''
-  RIT_model='' RIT_effort='' RIT_mode='' RIT_allowed='' RIT_mcp='' RIT_keep='' RIT_prompt=''
+  RIT_model='' RIT_effort='' RIT_mode='' RIT_allowed='' RIT_mcp='' RIT_prompt=''
   RIT_unknown=''
   # The defaults, which are the answers the Slack example never has to write down: one fresh
-  # resident in a pane, a run skipped rather than doubled, and on.
-  RIT_target=new RIT_overlap=skip RIT_headless=false RIT_catch_up=true RIT_enabled=true
+  # resident in a pane whose tab does not stay for ever, a run skipped rather than doubled, and on.
+  RIT_target=new RIT_keep=2h RIT_overlap=skip RIT_headless=false RIT_catch_up=true RIT_enabled=true
   [ -f "$f" ] || return 1
   RIT_path=$f
   RIT_slug=${f##*/}; RIT_slug=${RIT_slug%.md}
@@ -193,39 +216,61 @@ ritual_problem() {
     say "schedule: $RIT_schedule never comes round (a date that does not exist, like 30 February)"; return 0; }
   [ -n "$RIT_prompt" ] || {
     say 'no prompt: the lines under the frontmatter are what the resident is asked to do'; return 0; }
+  # A slot is not a name: `next_slot` hands out the smallest free number, so slot 3 is a
+  # different resident in every cockpit and a ritual that named one would fire into whoever
+  # happens to be there. Names begin with a letter for exactly this reason (lib/records.sh).
+  case $RIT_target in
+    new|persistent) ;;
+    [A-Za-z]*) ;;
+    *) say "target: $RIT_target is neither new, persistent, nor a resident's name (a name starts with a letter; a slot number is given out afresh by every cockpit, so a ritual cannot name one)"; return 0 ;;
+  esac
+  # `headless: true` is a `claude -p` of its own - a process with no session to join - so the two
+  # settings cannot both mean anything at once.
+  ! rit_bool "$RIT_headless" || [ "$RIT_target" = new ] || {
+    say "headless: true is a claude -p of its own, which is always a fresh session, so it goes with target: new and not with $RIT_target"; return 0; }
+  # The `cwd` checks are for the targets that start a session of their own. A ritual that fires
+  # into a resident somebody else summoned has no directory to check: the prompt lands in that
+  # resident's session, wherever that was started, and a `cwd:` line on such a ritual says
+  # nothing about where anything runs.
+  if [ "$RIT_target" = new ] || [ "$RIT_target" = persistent ]; then
+    [ -n "$RIT_cwd" ] || { say 'cwd: missing (the directory the run works in)'; return 0; }
+    # Nothing a ritual is read from has a directory of its own: the clock runs from wherever the
+    # tmux server was started, so a relative path would mean one thing to the check and another
+    # to the run. Refused rather than resolved against a directory nobody chose.
+    case $RIT_cwd in
+      /*) ;;
+      *) say "cwd: $RIT_cwd is not a full path (a run starts from the clock, which is in no directory of yours: ~/... or /...)"; return 0 ;;
+    esac
+    [ -d "$RIT_cwd" ] || { say "cwd: $(tilde "$RIT_cwd") is not a directory"; return 0; }
+    # A directory Claude Code has not been trusted in stops the run at its trust dialog, and a
+    # stalled run is worse than a refused one: it is alive, so `overlap: skip` counts it as still
+    # going and every later fire is skipped without a word. Said here instead, with the answer.
+    #
+    # A headless run is the exception, and not by our choice: `claude -p` skips the workspace
+    # trust dialog outright, which its own `--help` says of every non-interactive run. So there
+    # is no dialog to stall at and nothing to ask about, and a headless ritual in a directory
+    # nobody has opened by hand is fine. Skipped rather than reordered: every other cwd check
+    # still applies to it.
+    rit_bool "$RIT_headless" || dir_trusted "$RIT_cwd" || {
+      say "cwd: nothing has answered Claude Code's trust prompt for $(tilde "$RIT_cwd") (open it once and accept, or the run stops at that dialog with nobody there to answer)"; return 0; }
+  fi
+  case $RIT_overlap in
+    skip|queue|parallel) ;;
+    *) say "overlap: $RIT_overlap is not a thing to do about a run that is still going (skip, queue, parallel)"; return 0 ;;
+  esac
+  # `queue` and `parallel` are about a second run of this ritual's own, and only `new` starts a
+  # run: a prompt sent to a resident that is already there is queued by Claude Code itself when
+  # that resident is mid-turn, so for the other targets there is nothing here left to decide.
+  # Said rather than ignored, because a ritual whose `overlap:` line does nothing is worth a word.
   case $RIT_target in
     new) ;;
-    persistent) say 'target: persistent is not wired up yet; new starts a fresh resident per run'; return 0 ;;
-    *) say "target: $RIT_target is not wired up yet; new starts a fresh resident per run"; return 0 ;;
-  esac
-  [ -n "$RIT_cwd" ] || { say 'cwd: missing (the directory the run works in)'; return 0; }
-  # Nothing a ritual is read from has a directory of its own: the clock runs from wherever the
-  # tmux server was started, so a relative path would mean one thing to the check and another
-  # to the run. Refused rather than resolved against a directory nobody chose.
-  case $RIT_cwd in
-    /*) ;;
-    *) say "cwd: $RIT_cwd is not a full path (a run starts from the clock, which is in no directory of yours: ~/... or /...)"; return 0 ;;
-  esac
-  [ -d "$RIT_cwd" ] || { say "cwd: $(tilde "$RIT_cwd") is not a directory"; return 0; }
-  # A directory Claude Code has not been trusted in stops the run at its trust dialog, and a
-  # stalled run is worse than a refused one: it is alive, so `overlap: skip` counts it as still
-  # going and every later fire is skipped without a word. Said here instead, with the answer.
-  #
-  # A headless run is the exception, and not by our choice: `claude -p` skips the workspace trust
-  # dialog outright, which its own `--help` says of every non-interactive run. So there is no
-  # dialog to stall at and nothing to ask about, and a headless ritual in a directory nobody has
-  # opened by hand is fine. Skipped rather than reordered: every other `cwd` check still applies.
-  rit_bool "$RIT_headless" || dir_trusted "$RIT_cwd" || {
-    say "cwd: nothing has answered Claude Code's trust prompt for $(tilde "$RIT_cwd") (open it once and accept, or the run stops at that dialog with nobody there to answer)"; return 0; }
-  case $RIT_overlap in
-    skip) ;;
-    queue|parallel) say "overlap: $RIT_overlap is not wired up yet; skip leaves the running one alone"; return 0 ;;
-    *) say "overlap: $RIT_overlap is not a thing to do about a run that is still going (skip)"; return 0 ;;
+    *) [ "$RIT_overlap" = skip ] || {
+         say "overlap: $RIT_overlap is only about a target of new, which is the target that starts a run of its own (a prompt sent to a resident that is already there is queued by Claude Code itself)"; return 0; } ;;
   esac
   case $RIT_keep in
-    ''|forever|until_banished) ;;
-    *[0-9][smhd]) case ${RIT_keep%?} in ''|*[!0-9]*) say "keep: $RIT_keep is not a length (30m, 2h, 1d, forever, until_banished)"; return 0 ;; esac ;;
-    *) say "keep: $RIT_keep is not a length (30m, 2h, 1d, forever, until_banished)"; return 0 ;;
+    forever|until_banished) ;;
+    *) rit_keep_secs "$RIT_keep" >/dev/null ||
+         { say "keep: $RIT_keep is not a length (30m, 2h, 1d, forever, until_banished)"; return 0; } ;;
   esac
   rit_bool_word "$RIT_enabled"  || { say "enabled: $RIT_enabled is neither true nor false"; return 0; }
   rit_bool_word "$RIT_headless" || { say "headless: $RIT_headless is neither true nor false"; return 0; }

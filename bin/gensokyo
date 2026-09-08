@@ -357,7 +357,7 @@ main() {
     quit) shift; cmd_quit "$@" ;;
     ritual|schedule) shift; cmd_ritual "$@" ;;
     update|uninstall) cmd__not_yet "$cmd" ;;
-    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit|_menu-spell|_menu-cast-target|_menu-cast-peer|_menu-timetable|_menu-ritual|_menu-ritual-rm|_headless)
+    _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit|_menu-spell|_menu-cast-target|_menu-cast-peer|_menu-timetable|_menu-ritual|_menu-ritual-rm|_headless|_reap|_send)
       shift; "cmd_$cmd" "$@" ;;
     *) die "unknown command: $cmd (see: gensokyo help)" ;;
   esac

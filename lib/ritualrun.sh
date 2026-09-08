@@ -5,7 +5,8 @@
 
 # Everything a ritual keeps between runs lives in one directory of its own, named by the
 # ritual: the memory file the prompt points at, the stamp that says which minute it last ran
-# for, the log a skipped or refused run leaves behind, and the prompt as it was last sent.
+# for, the log a skipped or refused run leaves behind, the prompt as it was last sent, a copy of
+# that prompt per run for the pane that is about to read it, and the fire waiting its turn.
 ritual_dir() { printf '%s\n' "$STATE_DIR/rituals/$1"; }
 
 # The minute a ritual last ran for, as an epoch already floored to the minute - not a
@@ -65,9 +66,18 @@ ritual_memory() {
 # session per run has a clean context and forgets everything; the file is where the continuity
 # lives, and the sentence naming it is sent with every prompt whether the ritual mentions it or
 # not, so a ritual nobody wrote a memory instruction for still keeps its notes.
+#
+# `target: <name>` is the one kind that gets the prompt and nothing else. That resident was
+# summoned by hand, so it has no `--add-dir` for the ritual's directory and reading the file
+# would be a permission prompt every single morning - and it has none of the forgetting the
+# memory file exists for: one ongoing conversation of its own is why somebody named it.
 ritual_prompt_text() {
-  printf '%s\n\nYour notes from previous runs are at `%s`. Read them first; update them before you finish.\n' \
-    "$RIT_prompt" "$(ritual_memory "$RIT_slug")"
+  case $RIT_target in
+    new|persistent)
+      printf '%s\n\nYour notes from previous runs are at `%s`. Read them first; update them before you finish.\n' \
+        "$RIT_prompt" "$(ritual_memory "$RIT_slug")" ;;
+    *) printf '%s\n' "$RIT_prompt" ;;
+  esac
 }
 
 # ritual_mode: the permission mode a run gets - the ritual's own, else whatever a resident
@@ -163,12 +173,54 @@ ritual_reason() {
   printf 'catch-up %s\n' "$miss"
 }
 
+# ---------------------------------------------------------------- overlap: the fire in the way
+# What to do about a fire that lands while the last run is still going. `skip` is the default and
+# says so in the log; `parallel` starts a second run beside the first; `queue` holds the fire and
+# runs it when the ritual is free again.
+#
+# The queue is one fire deep and the newest one wins, for the same reason catch-up runs once for
+# the most recent miss: a run that takes all day would otherwise queue every minute of it and
+# then fire them all, which is not what anybody asking for "run it afterwards" wants. And it is
+# given a life, because a fire that finally starts hours after its minute is worse than a fire
+# that was skipped - the prompt was written for that minute.
+RITUAL_QUEUE_LIFE=3600
+rit_queue_file() { printf '%s\n' "$(ritual_dir "$1")/queued"; }
+rit_queue_set() {
+  local d
+  d=$(ritual_dir "$1"); mkdir -p "$d" || return 1
+  printf '%s\n' "$2" > "$d/queued.tmp.$$" && mv "$d/queued.tmp.$$" "$d/queued"
+}
+rit_queue_clear() { rm -f "$(ritual_dir "$1")/queued"; return 0; }
+
+# rit_queue_due <slug>: "queued <epoch>" for a fire whose turn has come, and nothing at all
+# otherwise - nothing queued, the run it is waiting behind still going, or a fire too old to be
+# worth running now, which is dropped here with a line saying so.
+rit_queue_due() {
+  local when now
+  when=$(sed -n 1p "$(rit_queue_file "$1")" 2>/dev/null)
+  case ${when:-x} in ''|*[!0-9]*) return 1 ;; esac
+  now=$(now_epoch)
+  if [ $((now - when)) -gt "$RITUAL_QUEUE_LIFE" ]; then
+    rit_queue_clear "$1"
+    ritual_note "$1" \
+      "dropped the fire queued for $(ritual_when "$when"): the run in its way took over $(fmt_age "$RITUAL_QUEUE_LIFE")"
+    return 1
+  fi
+  # Asked here rather than left to the sweep: a queued fire reported while the ritual is still
+  # busy would be queued again by the same sweep, and the log would say so every twenty seconds.
+  ritual_busy "$1" && return 1
+  printf 'queued %s\n' "$when"
+}
+
 # ritual_launch <why>: fire it, whichever way the ritual says. The two ways have almost nothing
 # in common - one opens a window and hands the prompt to a resident, the other is a process with
 # no terminal - so the decision is made once, here, and both callers just say what the run is for.
 ritual_launch() {
   rit_bool "$RIT_headless" && { ritual_launch_headless "${1:-}"; return $?; }
-  ritual_launch_pane
+  case $RIT_target in
+    new) ritual_launch_pane ;;
+    *)   ritual_launch_send "${1:-}" ;;
+  esac
 }
 
 # ritual_launch_pane: the resident that does the work. The same record cmd_new writes, plus the two
@@ -179,11 +231,20 @@ ritual_launch() {
 # rows print it, and prune_records drops a record that has no pane 30 s after it - so a
 # catch-up run stamped with a minute from last week would be born prunable.
 ritual_launch_pane() {
-  local id slot rec name mode pf
+  local id slot rec name mode pf keep
   ensure_dirs
-  pf=$(ritual_dir "$RIT_slug")/prompt
+  id=$(new_uuid)
   mkdir -p "$(ritual_dir "$RIT_slug")" || return 1
+  # Two copies of the prompt, and each has one job. `prompt` is the prompt as it was last sent,
+  # for whoever opens the ritual's directory. `prompt.<session>` is this run's own, because the
+  # pane reads it later - a moment later, or a slow moment later - and `overlap: parallel` means
+  # two runs of one ritual can be starting at once. One file would have the second launch
+  # rewriting what the first one's pane has not read yet, and a ritual edited in between would
+  # send the wrong prompt into a run already under way. It goes when its record does
+  # (drop_side_files), so a run leaves no more behind than it did before.
+  pf=$(ritual_dir "$RIT_slug")/prompt.$id
   ritual_prompt_text > "$pf" || return 1
+  cp "$pf" "$(ritual_dir "$RIT_slug")/prompt" 2>/dev/null
   # The ritual's own name, so its tab reads like the job it is doing. A resident name has to
   # start with a letter (a leading digit is a slot), and a departed run may still be holding it,
   # in which case the run gets a placeholder name and the record still says which ritual it is.
@@ -192,16 +253,30 @@ ritual_launch_pane() {
   [ -n "$name" ] && find_resident "$name" >/dev/null 2>&1 && name=''
   [ -n "$name" ] || name=$(pick_name)
   mode=$(ritual_mode)
-  id=$(new_uuid); slot=$(next_slot); rec=$RES_DIR/$id
+  # How long this run's tab stays, in seconds, decided now and written down - the reaper reads
+  # the record and never the ritual file. A ritual edited or deleted this afternoon must not
+  # change what happens to a tab that is already open, and a run whose ritual has gone still has
+  # a tab somebody has to close. Nothing at all for `forever`, which is a tab that stays.
+  # Only a run of its own has a tab whose life `keep` is about. A persistent ritual's session is
+  # the ritual, not one run of it, and a reaper that closed its tab two hours after the last
+  # answer would be undoing the one thing `persistent` is for.
+  keep=''
+  [ "$RIT_target" = new ] && keep=$(rit_keep_secs "$RIT_keep")
+  slot=$(next_slot); rec=$RES_DIR/$id
   {
     printf 'slot=%s\nname=%s\ncwd=%s\nlaunched=%s\nargs=%s\nritual=%s\nprompt_file=%s\n' \
       "$slot" "$name" "$RIT_cwd" "$(now_epoch)" "$(ritual_args)" "$RIT_slug" "$pf"
     [ -n "$mode" ] && printf 'mode=%s\n' "$mode"
+    [ -n "$keep" ] && printf 'keep=%s\n' "$keep"
   } > "$rec"
   # `back` rather than a plain summon: a ritual fires while the owner is working in another tab,
   # and iTerm2 moves to a new tab whether it was asked to or not (lib/residents.sh).
   open_pane "$id" "$(resident_title "$slot" starting "$name")" back >/dev/null \
     || { rm -f "$rec"; return 1; }
+  # A persistent ritual keeps one session, and this is it from now on: written after the pane
+  # opened, so a launch that failed does not leave the ritual pointing at a session that never was.
+  [ "$RIT_target" = persistent ] &&
+    printf '%s\n' "$id" > "$(ritual_session_file "$RIT_slug")" 2>/dev/null
   return 0
 }
 
@@ -215,7 +290,7 @@ ritual_launch_pane() {
 # all, so it is asked only about a ritual that is actually about to run - a `0 0 30 2 *` would
 # otherwise pay for the full four-year search every sweep, inside the loop that draws the bar.
 ritual_sweep() {
-  local catch=${1:-} f reason why when problem
+  local catch=${1:-} f reason why when problem alongside
   # A quit is under way: the panes are going one after another and the server with them, so a
   # run summoned now would be a tab in a cockpit that is being taken down - and the stamp would
   # spend the minute, leaving the next start with nothing to catch up either.
@@ -230,20 +305,51 @@ ritual_sweep() {
       ritual_complain "$RIT_slug" "schedule: $RIT_schedule is not one gensokyo can read"
       continue
     fi
-    reason=$(ritual_reason "$catch") || { ritual_seen; continue; }
+    if reason=$(ritual_reason "$catch"); then
+      :
+    else
+      ritual_seen
+      # Nothing is due, which is the one moment a fire held behind a run gets its turn. Only for
+      # a ritual that is still queueing: one switched back to `skip` with something waiting has
+      # said what it wants, and the file goes with the next launch.
+      [ "$RIT_overlap" = queue ] || continue
+      reason=$(rit_queue_due "$RIT_slug") || continue
+    fi
     problem=$(ritual_problem)
     if [ -n "$problem" ]; then ritual_complain "$RIT_slug" "$problem"; continue; fi
     ritual_complaint_clear "$RIT_slug"
     why=${reason%% *}; when=${reason#* }
     # The stamp goes down before the run starts, not after: opening a window takes long enough
-    # for the next sweep to arrive inside the same minute, and a fire is once per minute.
-    ritual_stamp_set "$RIT_slug" "$when"
-    if ritual_busy "$RIT_slug"; then
-      ritual_note "$RIT_slug" "skipped ($why $(ritual_when "$when")): the last run is still going"
-      continue
+    # for the next sweep to arrive inside the same minute, and a fire is once per minute. A
+    # queued fire is left out of that, and it is belt and braces: a fire is only ever queued in
+    # the minute it was due, so the stamp already reads that minute and re-stamping it would do
+    # nothing today. What it is against is the day that stops being true - a stamp put back to an
+    # earlier minute makes catch-up count a run that has already happened as one that was missed,
+    # and that is a whole extra run of somebody's ritual for a reason nobody would find.
+    [ "$why" = queued ] || ritual_stamp_set "$RIT_slug" "$when"
+    alongside=''
+    # Only a target that starts a run of its own can have one of its own still going. A prompt
+    # sent to a resident that is already there is Claude Code's to queue if that resident is
+    # mid-turn, which is why `overlap` is a `new` setting (lib/rituals.sh says so out loud) - and
+    # a persistent ritual's session is a record of ours that is busy most of the time it is used.
+    if [ "$RIT_target" = new ] && ritual_busy "$RIT_slug"; then
+      case $RIT_overlap in
+        parallel) alongside=1 ;;
+        queue)
+          rit_queue_set "$RIT_slug" "$when"
+          ritual_note "$RIT_slug" "queued ($why $(ritual_when "$when")): the last run is still going"
+          continue ;;
+        *)
+          ritual_note "$RIT_slug" "skipped ($why $(ritual_when "$when")): the last run is still going"
+          continue ;;
+      esac
     fi
+    # A run starting now is what any waiting fire was waiting for, whichever fire it is: two runs
+    # of one ritual an hour apart are not what `queue` was asked for.
+    rit_queue_clear "$RIT_slug"
     if ritual_launch "$why $(ritual_when "$when")"; then
-      ritual_note "$RIT_slug" "ran ($why $(ritual_when "$when"))"
+      ritual_note "$RIT_slug" \
+        "ran ($why $(ritual_when "$when"))${alongside:+, alongside the run that was still going}"
     else
       ritual_note "$RIT_slug" "not run: tmux could not open a window"
       ritual_notify "$RIT_slug" 'could not open a window for the run'
@@ -266,6 +372,265 @@ ritual_seen() {
 
 # ritual_when <epoch>: a minute as the log and the listings write it.
 ritual_when() { date -r "$1" '+%Y-%m-%d %H:%M' 2>/dev/null; }
+
+# ------------------------------------------------- target: a resident that is already there
+# `target: <name>` sends the ritual's prompt to a resident the user manages themselves.
+# `target: persistent` gives the ritual one session of its own and sends into that, recalling it
+# when it has departed and starting it the first time. Neither is a fresh session per fire, which
+# is the whole difference: what they are for is a job that wants one ongoing conversation rather
+# than a clean context, and the user should expect compaction and a growing bill.
+#
+# Typing into somebody's input line is the same act a spell card performs, so it is the same
+# code: cast_type holds a multi-line prompt together with bracketed paste and waits for it to
+# appear before pressing Enter, and cast_blocked refuses the states where that Enter would answer
+# a dialog instead. Both were measured the hard way (lib/spellcards.sh - the one time it went
+# wrong the Enter granted a directory trust), and nothing here re-implements either.
+ritual_session_file() { printf '%s\n' "$(ritual_dir "$1")/session-id"; }
+
+# ritual_launch_send <why>: hand the fire to a job of the server's. cast_type waits up to five
+# seconds for the prompt to appear on screen, and a session that has to be recalled first takes
+# as long as claude takes to start - neither can happen inside the clock's own loop.
+#
+# `run-shell -b` and not the headless run's nohup: this types into a pane, so a cockpit that is
+# going away takes the whole point of it with it.
+ritual_launch_send() {
+  tmux_ run-shell -b "$(sq "$SELF") _send $(sq "$RIT_slug") $(sq "${1:-}") >/dev/null 2>&1"
+}
+
+# rit_wait_ready <session-id>: nothing at all once that resident can be typed into, else the
+# reason it cannot, as cast_blocked words it. Only "still starting up" is waited out - a session
+# that has just been recalled is exactly that for a second or two - because the other two states
+# are a dialog somebody has to answer, and a fire is worth reporting rather than sitting behind
+# one for a minute.
+#
+# The registry cache is dropped on each turn of the loop: it has a three-second life for the sake
+# of the bar, and a loop that read it would be answering with what was true before the recall.
+RITUAL_SEND_WAIT=60
+rit_wait_ready() {
+  local n=0 why
+  while :; do
+    rm -f "$REGISTRY"
+    load_registry
+    why=$(cast_blocked "$1")
+    [ -n "$why" ] || return 0
+    [ "$why" = 'is still starting up' ] || { printf '%s' "$why"; return 1; }
+    [ "$n" -lt "$RITUAL_SEND_WAIT" ] || { printf '%s' "$why"; return 1; }
+    nap 1; n=$((n + 1))
+  done
+}
+
+# rit_session_ready: the persistent ritual's own session, in a pane and ready to be typed into.
+# Prints its id; 2 means a fresh one was started and already has the prompt, so there is nothing
+# left to send; 1 means it could not be got to, and has said so.
+#
+# Four states, and they are all ordinary: it is running, it is sitting on its departed screen, it
+# belonged to a cockpit that has since stopped, or there has never been one.
+rit_session_ready() {
+  local id
+  id=$(sed -n 1p "$(ritual_session_file "$RIT_slug")" 2>/dev/null)
+  if [ -n "$id" ] && [ -f "$RES_DIR/$id" ]; then
+    rec_load "$RES_DIR/$id"
+    if [ -z "$R_departed" ] && pane_live "$R_pane"; then printf '%s\n' "$id"; return 0; fi
+  fi
+  if [ -n "$id" ] && { [ -f "$RES_DIR/$id" ] || [ -f "$DEPARTED_DIR/$id" ]; }; then
+    # It has left, or its cockpit has, and `resume` is the whole of bringing either back. In a
+    # subshell because it reports every refusal with `die`, and this process has no terminal to
+    # die to: what would be a message on somebody's screen has to become a line in the journal.
+    if ( cmd_resume "$id" >/dev/null 2>&1 ); then printf '%s\n' "$id"; return 0; fi
+    ritual_note "$RIT_slug" "not sent: could not recall the session this ritual keeps ($id)"
+    ritual_notify "$RIT_slug" 'could not recall the session it keeps, so the fire was skipped'
+    return 1
+  fi
+  # Nothing to recall: this fire starts the session, with the prompt as its first argument the
+  # way a `new` run gets it, and that session is the ritual's from then on.
+  ritual_launch_pane || {
+    ritual_note "$RIT_slug" 'not run: tmux could not open a window for the session it keeps'
+    ritual_notify "$RIT_slug" 'could not open a window for the session it keeps'
+    return 1
+  }
+  return 2
+}
+
+# rit_send_prompt <session-id> <why>: the prompt into that resident's input line, and what
+# happened either way written where somebody will find it.
+rit_send_prompt() {
+  local id=$1 why=${2:-} blocked rc
+  blocked=$(rit_wait_ready "$id") || {
+    rec_load "$RES_DIR/$id"
+    ritual_note "$RIT_slug" "not sent: ${R_name:-$id} $blocked"
+    ritual_notify "$RIT_slug" "${R_name:-$id} $blocked, so the fire was not delivered"
+    return 1
+  }
+  rec_load "$RES_DIR/$id"
+  cast_type "$R_pane" "$(ritual_prompt_text)"; rc=$?
+  case $rc in
+    0) # No notification: the prompt is sitting in a tab, and the resident's own chip says the
+       # rest. The journal keeps it, because that is where "did it fire?" is answered.
+       ritual_note "$RIT_slug" "sent to ${R_name:-$id}${why:+ ($why)}" ;;
+    2) ritual_note "$RIT_slug" "not sent: the prompt never reached ${R_name:-$id}'s input line"
+       ritual_notify "$RIT_slug" "the prompt never reached ${R_name:-$id}'s input line, so nothing was submitted"
+       return 1 ;;
+    *) ritual_note "$RIT_slug" "not sent: tmux would not type into ${R_name:-$id}'s pane"
+       ritual_notify "$RIT_slug" "could not type into ${R_name:-$id}'s pane"
+       return 1 ;;
+  esac
+  return 0
+}
+
+# `gensokyo _send <slug> [why]`: the fire that goes into a resident that is already there, in a
+# job of the server's - so with nobody to report to, and every way out of it ending in the
+# ritual's journal instead. The same shape as `_headless`, and the ritual is looked up again here
+# by its whole name for the same reason: find_ritual takes a part of one, and a ritual deleted in
+# the moment since the fire must not let a different one run under this name.
+cmd__send() {
+  local slug=${1:-} why=${2:-} path id f rc
+  [ -n "$slug" ] || return 1
+  # The panes are going one after another; a prompt typed into one of them now is a prompt into a
+  # session that is about to be told to leave.
+  quit_in_progress && return 0
+  path=$(find_ritual "$slug") && [ "${path##*/}" = "$slug.md" ] && ritual_load "$path" || {
+    ritual_note "$slug" 'not sent: the ritual was gone by the time its fire was sent'
+    ritual_notify "$slug" 'the ritual was gone by the time its fire was sent'
+    return 1
+  }
+  if [ "$RIT_target" = persistent ]; then
+    id=$(rit_session_ready); rc=$?
+    case $rc in
+      0) ;;
+      2) return 0 ;;   # a fresh session, started with the prompt already in it
+      *) return 1 ;;   # said so for itself
+    esac
+  else
+    f=$(find_resident "$RIT_target") || {
+      ritual_note "$slug" "not sent: there is no resident called $RIT_target"
+      ritual_notify "$slug" "$RIT_target is not here, so the fire was not delivered"
+      return 1
+    }
+    id=${f##*/}
+    rec_load "$f"
+    # A departed screen has no input line, and recalling somebody else's resident is not this
+    # ritual's business: the user chose to let it go.
+    [ -z "$R_departed" ] || {
+      ritual_note "$slug" "not sent: $RIT_target has left, and a departed screen has no prompt to type into"
+      ritual_notify "$slug" "$RIT_target has left, so the fire was not delivered (gensokyo resume $RIT_target brings it back)"
+      return 1
+    }
+  fi
+  rit_send_prompt "$id" "$why"
+}
+
+# ---------------------------------------------------------------- keep: the finished run's tab
+# A ritual that fires every morning leaves a tab every morning, and a run that has finished has
+# nothing left to say. `keep` is how long that tab stays afterwards, and this is what acts on it:
+# the same two things a person does by hand, in the same order - ask the resident to leave, then
+# take its tab - so the session ends the way every other one does. The record is archived rather
+# than deleted, which is the one difference from `close`: nobody was there to decide the
+# transcript was finished with, so it stays in the recall list under `resume`.
+#
+# What starts the clock is the run finishing and nothing happening since: the status file's
+# `since` while `pending` is `stopped`, which status_write moves whenever pending changes - so a
+# prompt typed into the tab this afternoon puts the tab's life back to the full `keep`. A run
+# sitting at a permission prompt is not finished and never expires, which is right and is also
+# the one thing `keep` cannot bound.
+#
+# `keep` is read from the record and never from the ritual file: ritual_launch_pane writes it
+# down at launch, so a ritual edited or deleted since cannot change what happens to a tab that
+# is already open, and a run whose ritual has gone still has a tab somebody has to close.
+
+# rit_take_tab <record> <pane> <ritual> <note>: the tab goes and the session stays recallable.
+rit_take_tab() {
+  # The record moves first and the line is written after it: a journal that says a tab was closed
+  # when the record could not be moved aside - and so the pane is still there - is worse than no
+  # line at all, and the clock will come round again.
+  archive_record "$1" || return 1
+  ritual_note "$3" "$4"
+  tmux_ kill-pane -t "$2" 2>/dev/null
+  return 0
+}
+
+# ritual_reap: every ritual run whose tab has outstayed its `keep`, dealt with. Called on the
+# sweep's beat, from the clock, because `keep` is written in minutes and hours and nothing here
+# needs to be noticed within three seconds.
+#
+# Records and not ritual files: a resident somebody summoned by hand has no `ritual` line and is
+# nobody's to reap, whatever the rituals say.
+ritual_reap() {
+  local f id now live
+  # The panes are going one after another and `quit` is watching these very records for the
+  # `departed` it asked for; a second /exit sent into the middle of that is nobody's idea of tidy.
+  quit_in_progress && return 0
+  live=$'\n'$(live_panes)$'\n'
+  [ "$live" != $'\n\n' ] || return 0
+  now=$(date +%s)
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    rec_load "$f"
+    [ -n "$R_ritual" ] || continue
+    [ -n "$R_keep" ] || continue            # keep: forever, and a tab that stays
+    [ -n "$R_pane" ] || continue            # no pane yet: a launch from a moment ago
+    case $live in *$'\n'"$R_pane"$'\n'*) ;; *) continue ;; esac
+    id=${f##*/}
+    # A resident that has already left is showing the departed screen, and there is nothing to
+    # ask it: the tab is all that is left, and taking it is two fast calls with no waiting in
+    # them. Its own clock is the moment it left, so `keep` is what the screen sits there for.
+    if [ -n "$R_departed" ]; then
+      [ $((now - R_departed)) -ge "$R_keep" ] || continue
+      rit_take_tab "$f" "$R_pane" "$R_ritual" \
+        "closed ${R_name:-the run}'s tab, $(fmt_age "$R_keep") after it left (keep)"
+      continue
+    fi
+    status_load "$id"
+    [ "$S_pending" = stopped ] || continue  # mid-turn, waiting on the user, or not started yet
+    [ -n "$S_since" ] || continue
+    [ $((now - S_since)) -ge "$R_keep" ] || continue
+    # Asking a resident to leave takes seconds and may have to be done twice, and this is the
+    # clock's own loop. `run-shell -b` and not the headless run's nohup: a tab belongs to the
+    # server, so there is nothing here worth outliving it for.
+    tmux_ run-shell -b "$(sq "$SELF") _reap $(sq "$id") >/dev/null 2>&1"
+  done
+  return 0
+}
+
+# `gensokyo _reap <session-id>`: one finished run's tab, taken. A job of the server's, so with
+# nobody to report to - `die` from here goes to /dev/null - and every way out of it ends in the
+# ritual's journal instead.
+#
+# Everything the clock just checked is checked again: this starts a moment later, and a resident
+# that has been given a prompt in between is not a finished run any more.
+cmd__reap() {
+  local id=${1:-} f now
+  [ -n "$id" ] || return 1
+  f=$RES_DIR/$id
+  [ -f "$f" ] || return 0
+  quit_in_progress && return 0
+  rec_load "$f"
+  [ -n "$R_ritual" ] || return 0
+  [ -n "$R_keep" ] || return 0
+  pane_live "$R_pane" || return 0
+  if [ -z "$R_departed" ]; then
+    status_load "$id"
+    [ "$S_pending" = stopped ] || return 0
+    now=$(date +%s)
+    [ -n "$S_since" ] && [ $((now - S_since)) -ge "$R_keep" ] || return 0
+    # The same gesture `close` makes, twice if the first one goes unheard, and for the same
+    # reason: send-keys says tmux wrote the /exit, never that the resident read it. A resident
+    # that will not leave keeps its tab - killing a session that is not answering is a decision
+    # for the person whose session it is - and the journal says so.
+    if ! ask_leave "$R_pane" "$id" && ! ask_leave "$R_pane" "$id"; then
+      # And that is the end of it: the `keep` line goes out of the record, so the clock does not
+      # come back in twenty seconds with another Ctrl-C and another /exit for a resident that is
+      # sitting right there - which is what "its tab stays" says to the person reading the log.
+      # Same shape as ritual_complain's `complained` file: said once, not every sweep.
+      rec_del "$f" keep
+      ritual_note "$R_ritual" \
+        "${R_name:-the run} did not answer /exit, so its tab stays (keep $(fmt_age "$R_keep"))"
+      return 1
+    fi
+    rec_load "$f"   # `departed` is in it now, and the name may have changed with a /rename
+  fi
+  rit_take_tab "$f" "$R_pane" "$R_ritual" \
+    "closed ${R_name:-the run}'s tab, idle $(fmt_age "$R_keep") since the run finished (keep)"
+}
 
 # ---------------------------------------------------------------- the headless run
 # `headless: true` is a run with no pane: no window, no tab, no resident, nothing to watch it

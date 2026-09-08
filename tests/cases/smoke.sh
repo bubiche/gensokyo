@@ -698,7 +698,7 @@ null'
   # record that is hours old and loses the race to it. What a fixed minute is for is the unit
   # tests; what this is for is a real launch on the real clock.
   {
-    printf -- '---\nschedule: "* * * * *"\ncwd: %s/work/ritual\nmodel: haiku\n' "$scratch"
+    printf -- '---\nschedule: "* * * * *"\ncwd: %s/work/ritual\nmodel: haiku\nkeep: 5m\n' "$scratch"
     printf 'allowed_tools: ["Read", "Bash(npm run test:*)"]\n---\ncheck the thing\n'
   } > "$CONFIG_DIR/rituals/nightly-checks.md"
   "$G" --detach >/dev/null
@@ -731,6 +731,29 @@ null'
   assert_eq "$(pane_current)" "$front"
   assert_match "$(cat "$STATE_DIR/rituals/nightly-checks/log")" \
     "ran (due $(ritual_when "$(ritual_stamp nightly-checks)"))"
+  # The tab's life went into the record at launch, in seconds, so that a ritual edited or deleted
+  # this afternoon cannot change what happens to a tab that is already open.
+  assert_eq "$(rec_get "$RES_DIR/$ritid" keep)" 300
+
+  t "smoke: and the tab goes when its keep runs out - the /exit, the window and the record"
+  # `keep: 5m` of nothing happening, written down rather than waited for: a tab's life is
+  # measured on the real clock, so five minutes of idling is a status file and not five minutes.
+  # The Stop hook first, through the binary, because "the run has finished" is what starts it.
+  payload "$ritid" Stop ',"last_assistant_message":"checked the thing"' | "$G" _hook
+  assert_eq "$(sed -n 's/^pending=//p' "$STATE_DIR/status/$ritid")" stopped
+  printf 'pending=stopped\ndetail=checked the thing\nsince=%s\nmode=\n' \
+    "$(( $(date +%s) - 301 ))" > "$STATE_DIR/status/$ritid"
+  # The job the clock starts, run here in the foreground: this is the whole gesture against a
+  # real pane - the interrupt, the /exit, and the tab only once the resident has answered it.
+  "$G" _reap "$ritid"
+  assert_ok wait_for 10 '! tm list-windows -t "=$SESSION" -F "#{window_name}" | grep -q nightly-checks'
+  assert_fails test -f "$RES_DIR/$ritid"
+  # Archived and not deleted: nobody was there to say the transcript was finished with.
+  assert_ok test -f "$STATE_DIR/departed/$ritid"
+  assert_eq "$("$G" resume --json | jq_ -r --arg id "$ritid" '.[] | select(.session_id == $id) | .in_pane')" false
+  assert_match "$(cat "$STATE_DIR/rituals/nightly-checks/log")" 'idle 5m since the run finished (keep)'
+  # And the owner's own tab is where it was: a tab closing itself does not move anybody.
+  assert_eq "$(pane_current)" "$front"
   rm -f "$CONFIG_DIR/rituals/nightly-checks.md"
 
   t "smoke: ritual add then ritual run - a ritual written by a command, fired by hand"
@@ -806,5 +829,79 @@ null'
   assert_match "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'done (headless,'
   assert_match "$(cat "$STATE_DIR"/rituals/quiet-one/runs/*.log)" 'stub -p ran in'
   rm -f "$CONFIG_DIR/rituals/quiet-one.md"
+  tm kill-server 2>/dev/null
+
+  t "smoke: a persistent ritual fires twice into one session, and both prompts are in it"
+  local keptid keptpane
+  fresh; rm -rf "$STATE_DIR/rituals" "$STATE_DIR/departed"; rm -f "$CONFIG_DIR/rituals"/*.md
+  mkdir -p "$CONFIG_DIR/rituals" "$scratch/work/kept"
+  printf -- '---\nschedule: "0 4 * * *"\ntarget: persistent\ncwd: %s/work/kept\n---\nmind the shop\n' \
+    "$scratch" > "$CONFIG_DIR/rituals/kept-one.md"
+  "$G" --detach >/dev/null
+  # The first fire has no session to join, so it starts one - with the prompt as its argument,
+  # the way a `new` run gets it - and that session is the ritual's from then on.
+  assert_match "$("$G" ritual run kept-one 2>&1)" "on its way to the session it keeps"
+  assert_ok wait_for 20 '[ -s "$STATE_DIR/rituals/kept-one/session-id" ]'
+  keptid=$(cat "$STATE_DIR/rituals/kept-one/session-id")
+  assert_ok test -f "$RES_DIR/$keptid"
+  assert_ok wait_for 15 '[ -n "$(rec_get "$RES_DIR/$keptid" pane)" ]'
+  keptpane=$(rec_get "$RES_DIR/$keptid" pane)
+  assert_match "$(pane_shows "$keptpane" 'mind the shop')" '> mind the shop'
+  # Its tab is not on a clock: `keep` is about one run's tab, and this session is the ritual.
+  assert_eq "$(rec_get "$RES_DIR/$keptid" keep)" ''
+  # The second fire has one to join, so the prompt is typed into it - and the first prompt is
+  # still there above it, which is the whole point of a session that is kept.
+  assert_match "$("$G" ritual run kept-one 2>&1)" "on its way to the session it keeps"
+  assert_ok wait_for 25 'grep -q "sent to" "$STATE_DIR/rituals/kept-one/log"'
+  out=$(cast_landed "$keptpane" 'Read them first')
+  # Two prompts submitted in one session, which is what a kept session is for. The stub echoes
+  # every prompt it is given behind a `> `, so counting those lines counts the fires - and it is
+  # a count rather than a pattern because the pane also holds the paste going in.
+  assert_eq "$(printf '%s\n' "$out" | grep -c '^> mind the shop$')" 2
+  assert_eq "$("$G" list --json | jq_ -r 'length')" 1            # and one resident, not two
+  assert_match "$(cat "$STATE_DIR/rituals/kept-one/log")" "sent to kept-one (by hand)"
+
+  t "smoke: and when that session has left, the fire recalls it and lands in it"
+  # `/exit` in the pane rather than `gensokyo close`, because what is being tested is the state
+  # the ritual finds - a departed screen where the input line used to be.
+  tm send-keys -t "$keptpane" -l '/exit' \; send-keys -t "$keptpane" Enter
+  assert_ok wait_for 15 '[ -n "$(rec_get "$RES_DIR/$keptid" departed)" ]'
+  : > "$STATE_DIR/rituals/kept-one/log"
+  assert_match "$("$G" ritual run kept-one 2>&1)" "on its way to the session it keeps"
+  assert_ok wait_for 40 'grep -q "sent to" "$STATE_DIR/rituals/kept-one/log"'
+  assert_eq "$(rec_get "$RES_DIR/$keptid" departed)" ''          # recalled, and in a pane again
+  assert_match "$(cast_landed "$(rec_get "$RES_DIR/$keptid" pane)" 'Read them first')" 'mind the shop'
+  assert_eq "$(cat "$STATE_DIR/rituals/kept-one/session-id")" "$keptid"   # the same session
+  rm -f "$CONFIG_DIR/rituals/kept-one.md"
+  tm kill-server 2>/dev/null
+
+  t "smoke: a ritual aimed at a resident by name types its prompt into that resident"
+  local namedid
+  fresh; rm -rf "$STATE_DIR/rituals"; rm -f "$CONFIG_DIR/rituals"/*.md
+  mkdir -p "$CONFIG_DIR/rituals"
+  "$G" --detach >/dev/null
+  "$G" new "$scratch/work/alpha" --name Suika >/dev/null 2>&1
+  assert_ok wait_for 20 'find_resident Suika >/dev/null'
+  namedid=$(find_resident Suika); namedid=${namedid##*/}
+  assert_ok wait_for 15 '[ -n "$(rec_get "$RES_DIR/$namedid" pane)" ]'
+  printf -- '---\nschedule: "0 4 * * *"\ntarget: Suika\n---\nlook at the cellar\n' \
+    > "$CONFIG_DIR/rituals/cellar.md"
+  assert_match "$("$G" ritual run cellar 2>&1)" "cellar's prompt is on its way to Suika"
+  assert_ok wait_for 30 'grep -q "sent to Suika" "$STATE_DIR/rituals/cellar/log"'
+  # The prompt and nothing else: a resident summoned by hand has no --add-dir for the ritual's
+  # directory, so the sentence naming the memory file would be a permission prompt every morning.
+  out=$(cast_landed "$(rec_get "$RES_DIR/$namedid" pane)" 'look at the cellar')
+  assert_match "$out" '> look at the cellar'
+  assert_nomatch "$out" 'Your notes from previous runs'
+  # Nobody was summoned for it, and Suika is still Suika: no record of the ritual's own.
+  assert_eq "$("$G" list --json | jq_ -r 'length')" 1
+  assert_eq "$("$G" list --json | jq_ -r '.[0].ritual')" null
+  # And a target that is not here is a fire that says so rather than one that goes missing.
+  printf -- '---\nschedule: "0 4 * * *"\ntarget: Nobody\n---\nwho?\n' \
+    > "$CONFIG_DIR/rituals/nowhere.md"
+  "$G" ritual run nowhere >/dev/null 2>&1
+  assert_ok wait_for 20 'grep -q "not sent" "$STATE_DIR/rituals/nowhere/log"'
+  assert_match "$(cat "$STATE_DIR/rituals/nowhere/log")" 'not sent: there is no resident called Nobody'
+  rm -f "$CONFIG_DIR/rituals/cellar.md" "$CONFIG_DIR/rituals/nowhere.md"
   tm kill-server 2>/dev/null
 }

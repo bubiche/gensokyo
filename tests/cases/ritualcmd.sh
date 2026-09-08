@@ -7,7 +7,7 @@
 
 ritual_cmd_tests() {
   local mine=$CONFIG_DIR/rituals out rc mon before id f
-  local was_share was_share_all was_now was_start was_pane was_visual was_srv was_live
+  local was_share was_share_all was_now was_start was_pane was_visual was_srv was_live was_tmux
   mkdir -p "$mine"; rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
 
   t "the rituals gensokyo ships: each one loads, each is paused, and no example is a surprise"
@@ -127,12 +127,12 @@ and a second line'
   assert_fails test -f "$mine/odd.md"
 
   t "ritual add: a line that could never fire takes the file with it; a cwd nobody can fix from here does not"
-  # The two halves of what `add` does about a problem. A target that is not wired up is a file
+  # The two halves of what `add` does about a problem. A target that names no resident is a file
   # that will not run on any day and there is no next fire to print, so nothing is left behind.
   out=$("$root/bin/gensokyo" ritual add --name unwired --schedule '@daily' --cwd "$scratch" \
-    --target persistent --prompt x 2>&1); rc=$?
+    --target 3 --prompt x 2>&1); rc=$?
   assert_eq "$rc" 1
-  assert_match "$out" 'target: persistent is not wired up yet'
+  assert_match "$out" "target: 3 is neither new, persistent, nor a resident's name"
   assert_match "$out" 'nothing was written'
   assert_fails test -f "$mine/unwired.md"
   # A directory that is not there yet, or that nobody has answered Claude Code's trust prompt
@@ -245,6 +245,32 @@ and a second line'
   assert_eq "$rc" 1
   assert_match "$out" '/no/such/place is not a directory'
   assert_match "$("$root/bin/gensokyo" ritual run nothing-of-the-sort 2>&1)" "no ritual called 'nothing-of-the-sort'"
+
+  t "ritual run: a fire into a resident already there says where it is going, not what it opened"
+  # Nothing is reset here: the run above left a record and a journal that the log and list tests
+  # below read, and this fire summons nobody, so what it must not do is add one.
+  before=$(ls "$RES_DIR" | wc -l | tr -d ' ')
+  was_tmux=$(declare -f tmux_)
+  tmux_() { printf '%s\n' "$*" >> "$scratch/rc-tmux"; return 0; }
+  : > "$scratch/rc-tmux"
+  printf -- '---\nschedule: "@daily"\ntarget: Reimu\n---\ntell Reimu\n' > "$mine/at-reimu.md"
+  out=$(cmd_ritual run at-reimu 2>&1)
+  assert_match "$out" "at-reimu's prompt is on its way to Reimu"
+  assert_match "$out" 'gensokyo ritual log at-reimu says where it landed'
+  assert_match "$(cat "$scratch/rc-tmux")" '_send at-reimu'
+  assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" "$before"   # nothing is summoned for it
+  assert_match "$(cat "$STATE_DIR/rituals/at-reimu/log")" 'ran (by hand)'
+  # And a second one is not refused: what would be busy is somebody else's session, and a prompt
+  # sent into a turn is Claude Code's to queue.
+  out=$(cmd_ritual run at-reimu 2>&1)
+  assert_match "$out" "on its way to Reimu"
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\ntarget: persistent\n---\nagain\n' "$scratch" \
+    > "$mine/kept-one.md"
+  out=$(cmd_ritual run kept-one 2>&1)
+  assert_match "$out" "kept-one's prompt is on its way to the session it keeps"
+  rm -f "$mine/at-reimu.md" "$mine/kept-one.md"
+  eval "$was_tmux"
+
   eval "$was_start"; eval "$was_pane"
   cmd_ritual enable slack-morning >/dev/null 2>&1
 
@@ -302,10 +328,13 @@ and a second line'
   assert_eq "$(cmd_ritual list --json | jq_ -r '.[] | select(.name == "from-file") | .last_run')" "$((mon + 120))"
   assert_eq "$(printf '%s' "$out" | jq_ -r 'map(.name) | join(" ")')" 'from-file from-stdin never-again no-dir relative-cwd slack-morning'
   assert_eq "$(printf '%s' "$out" | jq_ -r '.[] | select(.name == "slack-morning") | .path')" "$mine/slack-morning.md"
+  # The tab's life is in there as the ritual would have to write it, default and all: a resident
+  # asked why a run's tab went away has nowhere else to read it.
+  assert_eq "$(printf '%s' "$out" | jq_ -r '.[] | select(.name == "slack-morning") | .keep')" 2h
   # The shape itself, not just the values: this is what the skill will read, and a field renamed
   # later would otherwise break it with every assertion above still passing.
   assert_eq "$(printf '%s' "$out" | jq_ -r '.[0] | keys_unsorted | join(",")')" \
-    'name,enabled,schedule,next_fire,next_fire_local,last_run,target,headless,cwd,description,problem,path'
+    'name,enabled,schedule,next_fire,next_fire_local,last_run,target,headless,keep,overlap,cwd,description,problem,path'
   rm -f "$mine/never-again.md"
   # With nothing scheduled at all it is still a list, because a tool reading it should not have
   # to tell "none" from "something went wrong".

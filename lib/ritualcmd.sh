@@ -183,7 +183,7 @@ cmd_ritual() {
 # form deliberately leaves out (lib/rituals.sh): the next fire, the last real run, and the line
 # that is wrong. Each costs a walk through the schedule or a read of the log, which is why they
 # are worked out here - for a person asking - and never in the sweep.
-#   slug|on|schedule|next|next text|last run|target|headless|cwd|description|problem|path
+#   slug|on|schedule|next|next text|last run|target|headless|keep|overlap|cwd|description|problem|path
 ritual_cmd_rows() {
   local slug on sched target headless desc path next problem last
   while IFS='|' read -r slug on sched target headless desc path; do
@@ -194,9 +194,10 @@ ritual_cmd_rows() {
     last=$(ritual_last_run "$slug")
     # The columns are cut apart with IFS='|', so the fields a person writes prose (or a path)
     # into do not get to carry one.
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
       "$slug" "$on" "$sched" "$next" "${next:+$(ritual_when "$next")}" "$last" \
-      "$target" "$headless" "${RIT_cwd//|/ }" "${desc//|/ }" "${problem//|/ }" "$path"
+      "$target" "$headless" "$RIT_keep" "$RIT_overlap" "${RIT_cwd//|/ }" "${desc//|/ }" \
+      "${problem//|/ }" "$path"
   done <<EOF
 $(ritual_rows_sorted)
 EOF
@@ -209,7 +210,7 @@ EOF
 # tmux server, and this command has to answer the same way with the cockpit down.
 ritual_cmd_list() {
   local json='' rows='' n=0 f now
-  local slug on sched next nexttext last target headless cwd desc problem path
+  local slug on sched next nexttext last target headless keep overlap cwd desc problem path
   while [ $# -gt 0 ]; do
     case $1 in
       --json) json=1 ;;
@@ -228,12 +229,12 @@ ritual_cmd_list() {
       split("\n") | map(select(length > 0) | split("|"))
       | map({name: .[0], enabled: (.[1] == "yes"), schedule: .[2],
              next_fire: (.[3] | num), next_fire_local: (.[4] | opt), last_run: (.[5] | num),
-             target: .[6], headless: (.[7] == "true"), cwd: (.[8] | opt),
-             description: (.[9] | opt), problem: (.[10] | opt), path: .[11]})'
+             target: .[6], headless: (.[7] == "true"), keep: .[8], overlap: .[9],
+             cwd: (.[10] | opt), description: (.[11] | opt), problem: (.[12] | opt), path: .[13]})'
     return 0
   fi
   now=$(now_epoch)
-  while IFS='|' read -r slug on sched next nexttext last target headless cwd desc problem path; do
+  while IFS='|' read -r slug on sched next nexttext last target headless keep overlap cwd desc problem path; do
     [ -n "$slug" ] || continue
     [ "$n" -eq 0 ] && printf '  %-18s %-4s %-14s %-26s %s\n' ritual '' schedule 'next fire' 'what it does'
     n=$((n + 1))
@@ -443,6 +444,7 @@ ritual_cmd_run() {
     server_running && ritual_running "$RIT_slug" &&
       die "ritual run: a run of $RIT_slug is still going in a tab (gensokyo list), and both runs would write its notes"
     ritual_enabled || say "$RIT_slug is disabled: this run is by hand, and the schedule stays off"
+    rit_queue_clear "$RIT_slug"
     ritual_launch 'by hand' || die "ritual run: could not start a headless run of $RIT_slug"
     ritual_note "$RIT_slug" 'ran (by hand)'
     say "$RIT_slug is running headless in $(tilde "$RIT_cwd"): no pane, and nothing to watch"
@@ -452,9 +454,30 @@ ritual_cmd_run() {
   # Before the overlap check, not after: with no server there are no panes to be alive in, and a
   # record left by a cockpit that has since stopped would read as a run still going.
   start_server
+  # A fire into a resident that is already there is a different thing to report: nothing is
+  # summoned, there is no pane of its own to watch, and whether it landed is decided a second or
+  # two from now by a job of the server's. The overlap check is skipped for the same reason the
+  # sweep skips it - what is busy there is somebody else's session, and Claude Code queues a
+  # prompt sent into a turn.
+  if [ "$RIT_target" != new ]; then
+    ritual_enabled || say "$RIT_slug is disabled: this run is by hand, and the schedule stays off"
+    rit_queue_clear "$RIT_slug"
+    ritual_launch 'by hand' || die "ritual run: could not send $RIT_slug's prompt to $RIT_target"
+    ritual_note "$RIT_slug" 'ran (by hand)'
+    if [ "$RIT_target" = persistent ]; then
+      say "$RIT_slug's prompt is on its way to the session it keeps"
+    else
+      say "$RIT_slug's prompt is on its way to $RIT_target"
+    fi
+    say "  gensokyo ritual log $RIT_slug says where it landed, or why it did not"
+    return 0
+  fi
   ritual_running "$RIT_slug" &&
     die "ritual run: $RIT_slug is still running from last time (gensokyo list), and both runs would write its notes"
   ritual_enabled || say "$RIT_slug is disabled: this run is by hand, and the schedule stays off"
+  # A fire waiting behind the last run has just been superseded by this one: running it by hand
+  # and then again the moment the ritual is free is the job done twice.
+  rit_queue_clear "$RIT_slug"
   ritual_launch 'by hand' || die "ritual run: tmux could not open a window for $RIT_slug"
   ritual_note "$RIT_slug" 'ran (by hand)'
   say "$RIT_slug is running in $(tilde "$RIT_cwd")"
@@ -624,8 +647,9 @@ cwd: "$2"                   # the directory the run works in
 # effort: low
 # mode: acceptEdits         # a run nobody is watching should not have to be asked
 # allowed_tools: ["Read", "Grep"]
-# keep: 2h                  # how long the finished run stays in its tab
-# overlap: skip             # if the last run is still going
+# target: new               # or a resident's name, or persistent for one session it keeps
+# keep: 2h                  # how long the finished run stays in its tab (or forever)
+# overlap: skip             # or queue / parallel, if the last run is still going
 # headless: true            # no pane at all: it runs in the background and logs what it said
 # catch_up: true            # one run for a fire missed while the machine slept
 enabled: false              # true once you are happy with it

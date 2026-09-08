@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. A ritual can also run `headless`, with no pane at all, and log what it said. What is not there yet is the ritual settings that say so when you use them (`persistent`, `keep`, `overlap`).
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. A ritual fires into a fresh tab, into no tab at all (`headless`, which logs what it said), or into a resident that is already there.
 
 ## Requirements
 
@@ -222,11 +222,35 @@ answer to Claude Code's workspace-trust dialog either: `claude -p` never shows o
 gensokyo ritual log inbox-zero       # the journal, and the newest headless run's log under it
 ```
 
-Every run is a fresh session, so nothing accumulates a year of context - and every prompt is sent
-with a sentence naming the ritual's own `memory.md`, which is where the continuity lives: what it
-already handled, what it is waiting on. A fire missed while the machine slept is made up once, at
-the next start, for the most recent miss within a week; a fire that lands while the last run is
-still going is skipped and says so in the log.
+`target` decides where a fire lands. The default is `new`, a fresh session per run - a clean
+context, and it fails independently of every other run. `target: persistent` gives the ritual one
+session of its own instead: the first fire starts it, every later fire is typed into it, and if it
+has departed - or its cockpit stopped - the fire recalls it first. That is for a job where one
+ongoing conversation is the point, and the bill and the compaction come with it. `target: <name>`
+types the prompt into a resident you manage yourself, and gets the prompt alone: that session was
+summoned by hand, so gensokyo will not make it ask permission for a file outside its directory
+every morning. Either way, a fire that cannot be delivered - nobody of that name, a departed
+screen, a dialog holding the resident open - says so in the journal and in a notification instead
+of going missing.
+
+A finished run's tab does not stay for ever: `keep` is how long it sits there after the run
+ends, `2h` unless the ritual says otherwise, and when it runs out the resident is asked to leave
+and its tab goes - the journal says so, and the session is still in `gensokyo resume`. `keep`
+counts idle time, so anything you type in that tab puts its whole life back, and a run waiting
+on a permission prompt has not finished and is never taken. `keep: forever` leaves the tab to
+you.
+
+A default run is a fresh session, so nothing accumulates a year of context - and every prompt it
+is sent carries a sentence naming the ritual's own `memory.md`, which is where the continuity
+lives: what it already handled, what it is waiting on. A fire missed while the machine slept is
+made up once, at the next start, for the most recent miss within a week.
+
+A fire that lands while the last run is still going is skipped and says so in the log; `overlap`
+is how to say otherwise. `parallel` starts a second run beside the first, and `queue` holds the
+fire and runs it as soon as the ritual is free - one fire deep, newest wins, and a fire whose run
+took over an hour to get out of the way is dropped rather than started that late, with the log
+saying which. It is a `target: new` setting, since only a fresh run per fire can collide with
+itself: a prompt sent into a session that is mid-turn is queued by Claude Code.
 
 The shortest way to a ritual is to ask a resident for one: *"every weekday at 9:05 check Slack
 for messages to me and summarize them"*. It has a skill for exactly this, so it will say back

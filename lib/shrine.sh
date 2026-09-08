@@ -317,7 +317,33 @@ shrine_view_ritual() {
   last=$(ritual_last_run "$RIT_slug")
   [ -n "$last" ] && shrine_line "$(printf '  %-12s %s (%s ago)' 'last ran' \
     "$(ritual_when "$last")" "$(fmt_age $((now - last)))")"
-  shrine_line "$(printf '  %-12s %s' in "$(tilde "$RIT_cwd")")"
+  # Where it runs, for the targets that run somewhere of their own. A ritual that fires into a
+  # resident somebody else summoned runs wherever that resident was started, and a directory here
+  # would be a directory that means nothing.
+  case $RIT_target in
+    new)        shrine_line "$(printf '  %-12s %s' in "$(tilde "$RIT_cwd")")" ;;
+    persistent) shrine_line "$(printf '  %-12s %s' in "$(tilde "$RIT_cwd")")"
+                shrine_line "$(printf '  %-12s %s' target 'one session of its own, kept between fires and recalled if it leaves')" ;;
+    *)          shrine_line "$(printf '  %-12s %s' target "its prompt is typed into $RIT_target, wherever that resident is working")" ;;
+  esac
+  # What becomes of the tab once the run has finished. A tab that closes itself is worth saying
+  # before it happens rather than after - a tab going on its own is otherwise a thing that just
+  # happens - and a ritual whose tabs stay is how the tab bar fills up. Only for the target that
+  # opens a tab per run: the other two have no tab of their own to close.
+  if [ "$RIT_target" = new ] && ! rit_bool "$RIT_headless"; then
+    case $RIT_keep in
+      forever|until_banished)
+        shrine_line "$(printf '  %-12s %s' keep 'its tab stays until you close it')" ;;
+      *)
+        shrine_line "$(printf '  %-12s %s' keep "its tab closes $RIT_keep after the run finishes")" ;;
+    esac
+  fi
+  # And what happens to a fire that lands while the last run is still going - only when it is not
+  # the default, which is the answer nobody has to be told.
+  case $RIT_overlap in
+    parallel) shrine_line "$(printf '  %-12s %s' overlap 'a fire while the last run is going starts a second run')" ;;
+    queue)    shrine_line "$(printf '  %-12s %s' overlap 'a fire while the last run is going waits its turn')" ;;
+  esac
   # Only for the kind of run there is nothing to watch: a fire that opens a tab explains itself,
   # and a fire that opens nothing has to be told about - including while one is going, since the
   # timetable and the tab bar both have nothing to show for it.

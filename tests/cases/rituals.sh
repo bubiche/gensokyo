@@ -252,8 +252,30 @@ mcp__claude_ai_Slack__*'
   assert_ok dir_trusted "$scratch/kid"       # unanswerable, and never the thing that stops a run
   assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid")" ''
   rm -f "$CLAUDE_JSON"; rmdir "$scratch/kid" "$scratch/kid2"
-  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: persistent')" 'target: persistent is not wired up yet'
-  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: queue')" 'overlap: queue is not wired up yet'
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: persistent')" ''
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: Reimu')" ''
+  # A slot number is not a name: every cockpit hands slots out afresh, so a ritual naming one
+  # would fire into whoever happens to be there.
+  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: 3')" "target: 3 is neither new, persistent, nor a resident's name"
+  # A named target has no directory of its own, so nothing about cwd is its problem - and every
+  # other line still is.
+  assert_eq "$(probe_with 'schedule: "@daily"' 'target: Reimu')" ''
+  assert_eq "$(probe_with 'schedule: "@daily"' 'cwd: /no/such/place' 'target: Reimu')" ''
+  assert_match "$(probe_with 'schedule: "@daily"' 'target: Reimu' 'enabled: ture')" 'enabled: ture is neither'
+  assert_match "$(probe_with 'schedule: "@daily"' 'target: Reimu' 'schedul: "@daily"')" 'not a ritual setting: schedul'
+  # A persistent target does have one, so it is checked exactly as `new` is.
+  assert_match "$(probe_with 'schedule: "@daily"' 'target: persistent')" 'cwd: missing'
+  # `claude -p` is always a fresh session, so it cannot join one.
+  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'target: persistent' 'headless: true')" \
+    'headless: true is a claude -p of its own'
+  assert_match "$(probe_with 'schedule: "@daily"' 'target: Reimu' 'headless: true')" \
+    'goes with target: new and not with Reimu'
+  # overlap is about a second run of the ritual's own, which only `new` starts.
+  assert_match "$(probe_with 'schedule: "@daily"' 'target: Reimu' 'overlap: queue')" \
+    'overlap: queue is only about a target of new'
+  assert_eq "$(probe_with 'schedule: "@daily"' 'target: Reimu' 'overlap: skip')" ''
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: queue')" ''
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: parallel')" ''
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: sideways')" 'not a thing to do about a run'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'keep: 2 hours')" 'keep: 2 hours is not a length'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'enabled: ture')" 'enabled: ture is neither'

@@ -365,6 +365,7 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   # word to anybody; and with no server here every tmux_ call fails - so what is asserted is
   # that the refusal path still comes back.
   assert_ok cmd__menu-ritual someclient nothing-of-the-sort
+  assert_ok cmd__menu-ritual-rm someclient nothing-of-the-sort
   : > "$STATE_DIR/timetable"; touch -t 203001010000 "$STATE_DIR/timetable"
   assert_ok cmd__menu-timetable someclient
   rm -f "$STATE_DIR/timetable"

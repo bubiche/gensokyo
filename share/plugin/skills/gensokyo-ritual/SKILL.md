@@ -1,6 +1,6 @@
 ---
 name: gensokyo-ritual
-description: Required whenever the user asks for something to happen on a schedule or again and again - "every weekday at 9:05 check Slack", "run the tests nightly", "remind me every Monday", "do this daily", a cron line, "what have I got scheduled?", "pause that", "stop it running". Use it instead of the built-in schedule skill, CronCreate and scheduled tasks: on this machine a schedule is a gensokyo ritual, and this covers writing one, checking it, pausing it and reading what it has done.
+description: Required whenever the user asks for something to happen on a schedule or again and again - "every weekday at 9:05 check Slack", "run the tests nightly", "remind me every Monday", "do this daily", a cron line, "what have I got scheduled?", "pause that", "stop it running", "delete that ritual". Use it instead of the built-in schedule skill, CronCreate and scheduled tasks: on this machine a schedule is a gensokyo ritual, and this covers writing one, checking it, pausing it, deleting it and reading what it has done.
 ---
 
 # Scheduling work: rituals
@@ -95,6 +95,7 @@ gensokyo ritual disable slack-morning # "pause it" - the file stays, the schedul
 gensokyo ritual enable slack-morning  # and back on again
 gensokyo ritual log slack-morning     # every fire, every run skipped, every complaint
 gensokyo ritual edit slack-morning    # opens the file in the user's editor - for them, not for you
+gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and its journal, gone
 ```
 
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
@@ -105,6 +106,13 @@ That listing is the whole answer to what the user has scheduled - there is nowhe
 machine to look, and nothing else to ask. A ritual with `"enabled": false` is one the user has,
 paused: name it and say it is paused, because "you have nothing scheduled" is a different and
 wrong answer, and it is the one they will act on.
+
+`remove` is the one that does not come back: the file goes and the ritual's notes and journal
+go with it. Say what you are about to delete and get a yes for it, the way you would before
+creating one - and if "get rid of it" might only mean "not for now", `disable` is the verb they
+want, because it keeps the file. It takes the whole name and not a part of one, and it refuses
+the examples that ship with gensokyo: those are not the user's files and an update would put
+them back, so pausing one is what deleting it comes down to.
 
 To change what a ritual does, edit its file at the `path` the JSON gives - `add` refuses a name
 that already exists rather than overwriting somebody's file.

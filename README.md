@@ -58,7 +58,7 @@ bin/gensokyo               # attach the cockpit (--tty for the plain tmux client
 bin/gensokyo help          # command list; --json is the same for tools
 bin/gensokyo new ~/dev/x -n Marisa   # a resident in a tab of its own; also close <name>, list
 bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
-bin/gensokyo ritual                  # what is scheduled; also add, run, enable, disable, log, edit, new
+bin/gensokyo ritual                  # what is scheduled; also add, run, enable, disable, log, edit, new, remove
 bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: run the new code (Ctrl-Space l)
 bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
@@ -230,12 +230,14 @@ gensokyo ritual new nightly-checks   # a template in $EDITOR; it arrives disable
 gensokyo ritual run nightly-checks   # fire it now - which is how you approve its prompts once
 gensokyo ritual log nightly-checks   # every fire, skip and complaint
 gensokyo ritual disable slack-morning
+gensokyo ritual remove slack-morning # the file, its notes and its journal: gone, and not undone
 gensokyo ritual add --name x --schedule '@daily' --cwd . --prompt-file p.txt   # what the skill calls
 ```
 
 The shrine tab's `[ timetable t ]` is the same thing without the typing: every ritual with the
 minute it fires next, and clicking one gives you its schedule, its last run, what is wrong with
-it if anything, and the two buttons worth having there - `[ run now ]` and `[ pause ]`. The
+it if anything, and the buttons worth having there - `[ run now ]`, `[ pause ]` and a
+`[ remove ]` that asks before it deletes anything. The
 next fire is also on the shrine's main screen and in the status bar, so a schedule you set up
 this morning is visible without asking anything.
 

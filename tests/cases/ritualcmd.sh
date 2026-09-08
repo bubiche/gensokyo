@@ -7,7 +7,7 @@
 
 ritual_cmd_tests() {
   local mine=$CONFIG_DIR/rituals out rc mon before id f
-  local was_share was_share_all was_now was_start was_pane was_visual
+  local was_share was_share_all was_now was_start was_pane was_visual was_srv was_live
   mkdir -p "$mine"; rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
 
   t "the rituals gensokyo ships: each one loads, each is paused, and no example is a surprise"
@@ -326,6 +326,96 @@ and a second line'
   assert_eq "$rc" 1
   assert_match "$out" 'could not open'
   VISUAL=$was_visual
+
+  t "ritual remove: the file, its notes and its journal, and the whole name before any of it goes"
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\nenabled: true\n---\nwork\n' "$scratch" > "$mine/gone-soon.md"
+  ritual_note gone-soon 'ran (by hand)'          # which makes the directory its notes live in
+  printf 'what it learned last time\n' > "$(ritual_dir gone-soon)/memory.md"
+  # A part of a name reaches a ritual everywhere else and deliberately not here: `run slack`
+  # reaching slack-morning saves a word, and `remove slack` reaching it spends a file on a guess.
+  out=$("$root/bin/gensokyo" ritual remove gone 2>&1); rc=$?
+  assert_eq "$rc" 1
+  assert_match "$out" 'did you mean gone-soon?'
+  assert_ok test -f "$mine/gone-soon.md"
+  out=$(cmd_ritual remove gone-soon 2>&1)
+  assert_match "$out" "gone-soon is gone, and $(tilde "$mine/gone-soon.md") with it"
+  assert_match "$out" "its notes and its journal went too, from $(tilde "$(ritual_dir gone-soon)")"
+  assert_fails test -e "$mine/gone-soon.md"
+  assert_fails test -e "$(ritual_dir gone-soon)"
+  assert_eq "$(find_ritual gone-soon)" ''
+  assert_nomatch "$(cmd_ritual list 2>&1)" gone-soon   # and gone out of what is scheduled with it
+  # `delete` and `rm` are the same verb: which of the three a person types is not worth a lesson.
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\n---\nwork\n' "$scratch" > "$mine/twice-over.md"
+  assert_match "$(cmd_ritual delete twice-over 2>&1)" 'twice-over is gone'
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\n---\nwork\n' "$scratch" > "$mine/twice-over.md"
+  assert_match "$(cmd_ritual rm twice-over 2>&1)" 'twice-over is gone'
+  assert_fails test -e "$mine/twice-over.md"
+  # The one gensokyo cannot read is exactly the one worth deleting, so the name it reports comes
+  # off the file name and never out of a frontmatter that may not be there at all.
+  printf 'all prompt, no frontmatter\n' > "$mine/bare-gone.md"
+  assert_match "$(cmd_ritual remove bare-gone 2>&1)" 'bare-gone is gone'
+  assert_fails test -e "$mine/bare-gone.md"
+  assert_match "$("$root/bin/gensokyo" ritual remove nothing-of-the-sort 2>&1)" "no ritual called 'nothing-of-the-sort'"
+  assert_match "$("$root/bin/gensokyo" ritual remove a b 2>&1)" 'one ritual at a time'
+  assert_match "$("$root/bin/gensokyo" ritual remove 2>&1)" 'which one?'
+
+  t "ritual remove: an example gensokyo ships is not the user's to delete, and your copy of one is"
+  was_share=$SHARE
+  SHARE=$scratch/share-rm; mkdir -p "$SHARE/rituals"
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\nenabled: false\n---\nthe shipped one\n' "$scratch" \
+    > "$SHARE/rituals/example-gone.md"
+  out=$(cmd_ritual remove example-gone 2>&1); rc=$?
+  assert_eq "$rc" 1
+  assert_match "$out" 'one of the examples gensokyo ships'
+  assert_ok test -f "$SHARE/rituals/example-gone.md"
+  cmd_ritual disable example-gone >/dev/null 2>&1     # which is what takes the copy
+  assert_ok test -f "$mine/example-gone.md"
+  out=$(cmd_ritual remove example-gone 2>&1)
+  assert_fails test -e "$mine/example-gone.md"
+  assert_ok test -f "$SHARE/rituals/example-gone.md"  # the install tree, untouched
+  # And the example the copy was shadowing is back in the listing, which is said: a name still
+  # there after a delete reads as a delete that did not work, and the next thing tried is another.
+  assert_match "$out" 'is in the listing again'
+  assert_eq "$(find_ritual example-gone)" "$SHARE/rituals/example-gone.md"
+  SHARE=$was_share; rm -rf "$scratch/share-rm"
+
+  t "ritual remove: not while a run of it is going, which is about to write the notes it would take"
+  fresh; rm -rf "$STATE_DIR/rituals"
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\nenabled: true\n---\nwork\n' "$scratch" > "$mine/busy-one.md"
+  was_start=$(declare -f start_server); was_pane=$(declare -f open_pane)
+  was_srv=$(declare -f server_running)
+  start_server() { :; }
+  open_pane() { printf '%%7\n'; }
+  server_running() { :; }        # asked at all only with a cockpit up, so here there is one
+  cmd_ritual run busy-one >/dev/null 2>&1
+  out=$(cmd_ritual remove busy-one 2>&1); rc=$?
+  assert_eq "$rc" 1
+  assert_match "$out" 'busy-one is running now'
+  assert_ok test -f "$mine/busy-one.md"
+  # A run that has finished is a different answer: it waits in its tab until the owner closes
+  # it, so it does not stop the delete - but it was started with a prompt naming the notes file
+  # that just went, and anything typed there writes the directory back where nothing can see it
+  # again. So the delete goes ahead and the tab is named.
+  # The pane and the Stop hook by hand: what `_run` writes from inside the pane it lands in,
+  # and what the hook writes when the run finishes its turn (lib/residents.sh, lib/hooks.sh).
+  id=$(ls "$RES_DIR" | head -n 1)
+  rec_set "$RES_DIR/$id" pane '%7'
+  status_write "$id" stopped '' ''
+  was_live=$(declare -f live_panes)
+  live_panes() { printf '%%7\n'; }
+  assert_fails ritual_running busy-one        # finished, so it is not a run in progress
+  out=$(cmd_ritual remove busy-one 2>&1)
+  assert_match "$out" 'busy-one is gone'
+  assert_match "$out" 'a run of it is still in a tab: close busy-one'
+  assert_fails test -e "$mine/busy-one.md"
+  # And with no run of it anywhere, that line is not said at all.
+  fresh
+  printf -- '---\nschedule: "@daily"\ncwd: "%s"\n---\nwork\n' "$scratch" > "$mine/busy-one.md"
+  out=$(cmd_ritual remove busy-one 2>&1)
+  assert_match "$out" 'busy-one is gone'
+  assert_nomatch "$out" 'still in a tab'
+  eval "$was_live"
+  eval "$was_start"; eval "$was_pane"; eval "$was_srv"
 
   rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
   SHARE=$was_share_all; rm -rf "$scratch/share-none"

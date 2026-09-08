@@ -254,11 +254,12 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_TEXT" '  next fire    2026-09-08 09:03 (in 23h)'
   assert_match "$SHRINE_TEXT" '  last ran     2026-09-07 09:05 (0s ago)'
   assert_match "$SHRINE_TEXT" '  in           ~'
-  assert_match "$SHRINE_TEXT" '[ run now r ]  [ pause p ]  [ cancel q ]'
+  assert_match "$SHRINE_TEXT" '[ run now r ]  [ pause p ]  [ remove x ]  [ cancel q ]'
 
   t "shrine: and the letters on that screen are its own, not the shrine's behind it"
   assert_eq "$(shrine_letter r)" ritual-run
   assert_eq "$(shrine_letter p)" ritual-off
+  assert_eq "$(shrine_letter x)" ritual-remove
   assert_eq "$(shrine_letter q)" cancel
   assert_eq "$(shrine_letter n)" ''
 
@@ -268,7 +269,7 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_SAID" 'slack-morning'
   assert_eq "$(rit_value "$(grep '^enabled:' "$CONFIG_DIR/rituals/slack-morning.md" | head -n 1 | cut -d: -f2-)")" false
   shrine_render 100 24
-  assert_match "$SHRINE_TEXT" '[ run now r ]  [ unpause p ]  [ cancel q ]'
+  assert_match "$SHRINE_TEXT" '[ run now r ]  [ unpause p ]  [ remove x ]  [ cancel q ]'
   assert_match "$SHRINE_TEXT" '  next fire    nothing: it is paused'
   assert_eq "$(shrine_letter p)" ritual-on
 
@@ -277,6 +278,39 @@ nightly|no||@daily|the checks"
   shrine_render 100 24
   assert_match "$SHRINE_TEXT" 'there is no ritual called not-a-ritual any more'
   assert_match "$SHRINE_TEXT" '[ cancel q ]'
+
+  t "shrine: the remove button asks first, and only then does the file and its notes go"
+  SHRINE_VIEW=ritual; SHRINE_ARG=slack-morning
+  shrine_do ritual-remove
+  assert_eq "$SHRINE_VIEW" ritual-gone
+  shrine_render 100 24
+  assert_match "$SHRINE_TEXT" '  delete slack-morning?'
+  # The tail of the path, so that which file it is survives a narrow screen.
+  assert_match "$SHRINE_TEXT" "  Its file goes: $(tilde "$CONFIG_DIR/rituals/slack-morning.md" 60)"
+  assert_match "$SHRINE_TEXT" 'rituals/slack-morning.md'
+  assert_match "$SHRINE_TEXT" 'Its notes and its journal too, from'
+  # And at the width the shrine opens at, where a line too long is a line cut off mid-path.
+  shrine_render 80 24
+  # Anchored at the end of the line, which is what says the path was not cut off there: the
+  # width these are drawn with has to leave room for the file name on the narrow screen too.
+  assert_re "$SHRINE_TEXT" '^  Its file goes: ….*/rituals/slack-morning\.md$'
+  assert_re "$SHRINE_TEXT" '^  Its notes and its journal too, from ….*/rituals/slack-morning$'
+  assert_match "$SHRINE_TEXT" '  click, or press y or n'
+  assert_match "$SHRINE_TEXT" '[ yes y ]  [ no n ]'
+  # The letter that opened this screen is not on it. A second x, from a hand still on the key,
+  # would otherwise be the answer to the question the first one asked.
+  assert_eq "$(shrine_letter x)" ''
+  assert_eq "$(shrine_letter y)" ritual-remove-yes
+  assert_eq "$(shrine_letter n)" cancel
+  # And saying no leaves it exactly as it was.
+  shrine_do cancel
+  assert_ok test -f "$CONFIG_DIR/rituals/slack-morning.md"
+  SHRINE_VIEW=ritual; SHRINE_ARG=slack-morning
+  shrine_do ritual-remove-yes
+  assert_eq "$SHRINE_VIEW" main
+  assert_eq "$SHRINE_ARG" ''
+  assert_fails test -e "$CONFIG_DIR/rituals/slack-morning.md"
+  assert_fails test -e "$STATE_DIR/rituals/slack-morning"
 
   shrine_do cancel; SHRINE_SAID=''
   rm -f "$CONFIG_DIR/rituals"/*.md "$STATE_DIR/timetable"

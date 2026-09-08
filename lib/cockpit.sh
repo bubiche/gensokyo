@@ -383,6 +383,28 @@ cmd__menu-ritual() {
   else
     args=("${args[@]}" "let it fire on its schedule again" p "run-shell -b '$s ritual enable $(sq "$RIT_slug") >/dev/null 2>&1'")
   fi
+  args=("${args[@]}" "delete it, its notes and its journal" x \
+    "run-shell '$s _menu-ritual-rm $(sq "$client") $(sq "$RIT_slug")'")
   args=("${args[@]}" "" "cancel" q "")
   tmux_ display-menu -c "$client" -T " $RIT_slug " -x C -y C "${args[@]}"
+}
+
+# The delete, asked about first - the one thing on that menu that pressing the key again does
+# not undo. A menu is how a menu asks a question, for the reason _menu-banish gives: this
+# process blocks until it closes, which run-shell tolerates and confirm-before does not.
+cmd__menu-ritual-rm() {
+  local client=$1 slug=$2 s path
+  s=$(sq "$SELF")
+  path=$(find_ritual "$slug") || { tmux_ display-message -c "$client" "no ritual $slug"; return 0; }
+  # An example that ships with gensokyo is not the user's file and an update would put it back,
+  # so there is nothing here to delete; pausing takes a copy and turns the copy off.
+  case $path in
+    "$SHARE"/*)
+      tmux_ display-message -c "$client" \
+        "$slug is an example gensokyo ships: pause it instead, and gensokyo copies it to your own rituals"
+      return 0 ;;
+  esac
+  tmux_ display-menu -c "$client" -T " delete $slug? nothing brings it back " -x C -y C \
+    "yes, and its notes and its journal too" y \
+    "run-shell -b '$s ritual remove $(sq "$slug") >/dev/null 2>&1'" "no, keep it" n ""
 }

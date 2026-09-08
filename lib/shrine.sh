@@ -70,7 +70,22 @@ shrine_ritual_buttons() {
   else
     printf 'ritual-on|p|[ unpause p ]|let it fire on its schedule again\n'
   fi
+  printf 'ritual-remove|x|[ remove x ]|delete it, its notes and its journal\n'
   printf 'cancel|q|[ cancel q ]|back to the shrine\n'
+}
+
+# The delete's own question. Its keys are y and n and never x: a second x, from a hand still on
+# the letter that opened this, must land on a question rather than on the answer to it.
+shrine_ritual_gone_buttons() {
+  # One of the examples gensokyo ships has nothing of the user's to delete, and the screen says
+  # so - so there is no yes on it to press, only the way back.
+  case $(find_ritual "$SHRINE_ARG") in
+    "$SHARE"/*|'') shrine_cancel_buttons; return 0 ;;
+  esac
+  cat <<'EOF'
+ritual-remove-yes|y|[ yes y ]|delete it
+cancel|n|[ no n ]|keep it
+EOF
 }
 
 # The departed screen's, drawn by lib/residents.sh through the same walk in its own pane.
@@ -109,6 +124,7 @@ shrine_render() {
                shrine_ritual_rows "your rituals live in $(tilde "$CONFIG_DIR/rituals")" \
                '(nothing is scheduled: gensokyo ritual new <name>)' ;;
     ritual)  shrine_view_ritual ;;
+    ritual-gone) shrine_view_ritual_gone ;;
     confirm) shrine_view_confirm ;;
     quit)    shrine_view_quit ;;
     help)    shrine_view_help ;;
@@ -308,6 +324,50 @@ shrine_view_ritual() {
   shrine_draw_buttons shrine_ritual_buttons
   shrine_line '  click, or press its letter'
   [ -n "$SHRINE_SAID" ] && shrine_line "  $SHRINE_SAID"
+  return 0
+}
+
+# shrine_view_ritual_gone: the delete, asked about before it happens - the one thing the ritual
+# screen offers that pressing the letter again does not undo. Nothing on it is read out of the
+# ritual: the file worth deleting is often the one gensokyo cannot read, so the screen is drawn
+# from the name and the two places that name reaches on disk.
+shrine_view_ritual_gone() {
+  local path d
+  shrine_line ''
+  path=$(find_ritual "$SHRINE_ARG")
+  if [ -z "$path" ]; then
+    shrine_line "  there is no ritual called $SHRINE_ARG any more"
+    shrine_line ''
+    shrine_draw_buttons shrine_cancel_buttons
+    shrine_line '  click, or press q'
+    return 0
+  fi
+  case $path in
+    "$SHARE"/*)
+      shrine_line "  $SHRINE_ARG is one of the examples gensokyo ships"
+      shrine_line ''
+      shrine_line '  It lives in gensokyo, not in your rituals, and an update would put it'
+      shrine_line '  back - so there is nothing here to delete. Pause it instead, which takes'
+      shrine_line '  a copy of it into your own rituals and turns that copy off.'
+      shrine_line ''
+      shrine_draw_buttons shrine_cancel_buttons
+      shrine_line '  click, or press q'
+      return 0 ;;
+  esac
+  d=$(ritual_dir "$SHRINE_ARG")
+  shrine_line "  delete $SHRINE_ARG?"
+  shrine_line ''
+  # The tail of each path and not the head of it: the file name is the half that says which
+  # ritual this is, and a screen this narrow would chop it off the end.
+  shrine_line "  Its file goes: $(tilde "$path" 60)"
+  [ -d "$d" ] && shrine_line "  Its notes and its journal too, from $(tilde "$d" 40)"
+  shrine_line '  Nothing brings any of it back. To stop it firing and keep the file, say no'
+  shrine_line '  and pause it instead.'
+  [ -f "$SHARE/rituals/$SHRINE_ARG.md" ] &&
+    shrine_line '  The example gensokyo ships under that name is in the listing afterwards.'
+  shrine_line ''
+  shrine_draw_buttons shrine_ritual_gone_buttons
+  shrine_line '  click, or press y or n'
   return 0
 }
 
@@ -619,6 +679,7 @@ shrine_view_table() {
   case $SHRINE_VIEW in
     main)    shrine_buttons ;;
     ritual)  shrine_ritual_buttons ;;
+    ritual-gone) shrine_ritual_gone_buttons ;;
     confirm) shrine_confirm_buttons ;;
     quit)    shrine_quit_buttons ;;
     *)       shrine_cancel_buttons ;;
@@ -759,6 +820,13 @@ shrine_do() {
       SHRINE_VIEW=main; SHRINE_ARG='' ;;
     ritual-on)    SHRINE_SAID=$(shrine_run ritual enable "$SHRINE_ARG") ;;
     ritual-off)   SHRINE_SAID=$(shrine_run ritual disable "$SHRINE_ARG") ;;
+    # The one thing on this screen that cannot be undone by pressing the same letter again, so
+    # it is asked about first - and the delete itself hands the user back to the shrine, where
+    # the timetable is about to be one ritual shorter.
+    ritual-remove) SHRINE_VIEW=ritual-gone ;;
+    ritual-remove-yes)
+      SHRINE_SAID=$(shrine_run ritual remove "$SHRINE_ARG")
+      SHRINE_VIEW=main; SHRINE_ARG='' ;;
     # Handed over for the same reason as a reload, and more so: the quit kills the server this
     # pane belongs to, and it has residents to ask and to wait for before it gets there.
     quit-yes)

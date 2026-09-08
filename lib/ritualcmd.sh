@@ -5,7 +5,7 @@
 # shellcheck shell=bash
 
 RITUAL_USAGE='usage: gensokyo ritual [list [--json]] | add --name n --schedule c --cwd d --prompt-file f
-       gensokyo ritual run|enable|disable|edit <name> | log <name> [-n N] | new <name>'
+       gensokyo ritual run|enable|disable|edit <name> | log <name> [-n N] | new|remove <name>'
 
 # ---------------------------------------------------------------- the bits every verb wants
 # rit_no_such <verb> <name>: the refusal every verb that takes a name shares. find_ritual takes
@@ -45,6 +45,25 @@ rit_problem_line() {
     "$SHARE"/*) case $1 in cwd:*) printf '%s' "$RIT_EXAMPLE"; return 0 ;; esac ;;
   esac
   printf '! %s' "$1"
+}
+
+# rit_open_run <slug>: the name of a resident of that ritual still sitting in a tab, finished or
+# not. `remove` says so afterwards. A finished run is not a run in progress - it waits in its tab
+# until the owner closes it - so it does not stop the delete; but the prompt it was started with
+# names the notes file that just went, and anything typed in that pane writes the directory back
+# for a ritual that is no longer there, where no verb here can see it again.
+rit_open_run() {
+  local f live
+  live=$'\n'$(live_panes)$'\n'
+  for f in "$RES_DIR"/*; do
+    [ -f "$f" ] || continue
+    rec_load "$f"
+    [ "$R_ritual" = "$1" ] || continue
+    [ -z "$R_departed" ] || continue
+    [ -n "$R_pane" ] || continue
+    case $live in *$'\n'"$R_pane"$'\n'*) printf '%s\n' "${R_name:-$1}"; return 0 ;; esac
+  done
+  return 1
 }
 
 # rit_mine <path>: the user's own copy of that ritual, made from the shipped one if that is what
@@ -131,8 +150,8 @@ rit_open_editor() {
 }
 
 # ---------------------------------------------------------------- the command
-# ritual (schedule) [list|add|run|enable|disable|log|edit|new]: the scheduled work. Alone it
-# lists what is scheduled, which is what the question "what is scheduled?" wants.
+# ritual (schedule) [list|add|run|enable|disable|log|edit|new|remove]: the scheduled work. Alone
+# it lists what is scheduled, which is what the question "what is scheduled?" wants.
 cmd_ritual() {
   local sub=list
   if [ $# -gt 0 ]; then sub=$1; shift; fi
@@ -141,6 +160,7 @@ cmd_ritual() {
     add)              ritual_cmd_add "$@" ;;
     run)              ritual_cmd_run "$@" ;;
     enable|disable)   ritual_cmd_toggle "$sub" "$@" ;;
+    remove|delete|rm) ritual_cmd_remove "$@" ;;
     log)              ritual_cmd_log "$@" ;;
     edit)             ritual_cmd_edit "$@" ;;
     new)              ritual_cmd_new "$@" ;;
@@ -427,6 +447,55 @@ ritual_cmd_toggle() {
   ritual_load "$path"
   say "$RIT_slug is ${verb}d"
   [ "$verb" = enable ] && rit_report "$path"
+  return 0
+}
+
+# remove|delete|rm <name>: the ritual, its notes and its journal, gone. `disable` is the answer
+# for "not for now"; this is the answer for "never again", and it is the one verb here that
+# takes nothing back. There is no confirmation to type: `close` asks for none either, and the
+# question belongs on the screens a person clicks (lib/shrine.sh, lib/cockpit.sh) rather than in
+# front of a resident that was told to do this in words.
+ritual_cmd_remove() {
+  local name=${1:-} path slug d open_run=''
+  [ -n "$name" ] || die "ritual remove: which one? (gensokyo ritual lists them)"
+  [ $# -le 1 ] || die "ritual remove: one ritual at a time"
+  path=$(find_ritual "$name") || rit_no_such 'ritual remove' "$name"
+  # The slug from the file name and not from ritual_load: the ritual most worth deleting is the
+  # one gensokyo cannot read, and find_ritual only ever names a file whose name is a usable slug.
+  slug=${path##*/}; slug=${slug%.md}
+  # Every other verb takes a part of a name, and this one does not. `run slack` reaching
+  # slack-morning saves a word; `remove slack` reaching it spends a file, its notes and its
+  # journal on a guess, and the caller is often a resident working from a half-remembered name.
+  # So the near miss is named instead, and nothing is touched.
+  [ "$(lower "$slug")" = "$(lower "$name")" ] ||
+    die "ritual remove: no ritual called '$name' - did you mean $slug? (remove wants the whole name)"
+  # An example is not the user's file: it is in the install tree, an update would put it back,
+  # and the copy that shadows it is what enable and edit make. Pausing is what it comes down to.
+  case $path in
+    "$SHARE"/*) die "ritual remove: $slug is one of the examples gensokyo ships, and an update would put it back: 'gensokyo ritual disable $slug' is how you stop it firing" ;;
+  esac
+  # A run of it going right now is about to write the notes this would delete, and it would
+  # carry on afterwards against a ritual that is no longer there. Asked without a cockpit up
+  # there are no panes for a run to be alive in, so the question is only worth asking with one.
+  if server_running; then
+    ritual_running "$slug" &&
+      die "ritual remove: $slug is running now (gensokyo list), and that run writes its notes as it finishes - close it first, or wait for it"
+    open_run=$(rit_open_run "$slug") || open_run=''
+  fi
+  rm -f "$path" || die "ritual remove: could not delete $(tilde "$path")"
+  say "$slug is gone, and $(tilde "$path") with it"
+  d=$(ritual_dir "$slug")
+  if [ -d "$d" ]; then
+    rm -rf "$d" || die "ritual remove: could not delete $(tilde "$d")"
+    say "  its notes and its journal went too, from $(tilde "$d")"
+  fi
+  # The copy hid a shipped example of the same name, and the moment it goes the example is back
+  # in the listing. Said out loud: a name still there after a delete reads as a delete that did
+  # not work, and the next thing the user does about it is delete it again.
+  [ -f "$SHARE/rituals/$slug.md" ] &&
+    say "  the example gensokyo ships with that name is in the listing again"
+  [ -n "$open_run" ] &&
+    say "  a run of it is still in a tab: close $open_run, or what gets typed there writes its notes back"
   return 0
 }
 

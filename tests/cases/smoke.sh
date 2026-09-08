@@ -102,7 +102,27 @@ shrine_shows() {
   done
   printf '%s' "$out"
 }
-cleanup() { [ -n "${TMUX_BIN:-}" ] && tm kill-server 2>/dev/null; rm -rf "$scratch"; }
+# cleanup: the server goes, then the socket file it left behind, then the scratch directory.
+# tmux unlinks its socket neither on kill-server nor when its last session exits (measured), so a
+# suite that does not remove its own leaves one file per run in /tmp/tmux-<uid> for ever - a
+# couple of hundred of them by the time anyone looked. The server is killed before the file goes
+# and not after: a server whose socket has been removed under it is alive and unreachable, with
+# every stub in its panes still running.
+#
+# Its own answer for where that socket is while there is a server to ask, and tmux's own rule for
+# it when there is not (TMUX_TMPDIR, else /tmp, then tmux-<uid>/<name>) - a guessed path that is
+# wrong would leak in silence, which is the thing being fixed.
+cleanup() {
+  local sock=''
+  if [ -n "${TMUX_BIN:-}" ]; then
+    sock=$(tm display -p '#{socket_path}' 2>/dev/null)
+    tm kill-server 2>/dev/null
+  fi
+  [ -n "$sock" ] || [ -z "${GENSOKYO_SOCKET:-}" ] ||
+    sock=${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$GENSOKYO_SOCKET
+  [ -n "$sock" ] && rm -f "$sock"
+  rm -rf "$scratch"
+}
 trap cleanup EXIT
 
 smoke_tests() {

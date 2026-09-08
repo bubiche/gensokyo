@@ -27,8 +27,31 @@ rr_argv() {
   printf '%s' "${1:-}"
 }
 
+# rr_headless_wait <slug>: hold until that headless run is over. A headless run is a process of
+# its own, so its log and its journal line land when they land - waited for, never paused for.
+rr_headless_wait() {
+  local n=0
+  while ritual_headless_running "$1"; do
+    nap 0.1; n=$((n + 1))
+    [ "$n" -gt 100 ] && return 1
+  done
+  return 0
+}
+
+# rr_headless <slug> <why>: one headless run, in a subshell - `_headless` cd's into the ritual's
+# directory and scrubs the environment, which is a process's business and not this one's.
+rr_headless() { ( cmd__headless "$@" ); }
+
+# rr_runlog <slug>: the newest run log of that ritual, whole.
+rr_runlog() {
+  local f last=''
+  for f in "$STATE_DIR/rituals/$1"/runs/*.log; do [ -f "$f" ] && last=$f; done
+  [ -n "$last" ] && cat "$last"
+}
+
 ritual_run_tests() {
   local mine=$CONFIG_DIR/rituals mon tue out rec was_pane was_live was_now was_mode id
+  local was_keep i long
   mkdir -p "$mine"
   rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
   mon=$(rt_at '2026-09-07 09:05:00')   # a Monday, the Slack example's own minute
@@ -252,6 +275,167 @@ ritual_run_tests() {
     hook "$id" Notification ',"notification_type":"permission_prompt","message":"Claude needs your permission","tool_name":"Bash"'
     assert_eq "$(notifications)" 'slack-morning|⏲ slack-morning: needs your permission (Bash)'
   fi
+
+  # ---------------------------------------------------------------- headless
+  t "a headless run: no pane, no record, and everything it did written down three ways"
+  fresh; rm -rf "$STATE_DIR/rituals" "$STATE_DIR/status"; rm -f "$mine"/*.md
+  : > "$scratch/notify.log"
+  GENSOKYO_NOW=$mon
+  rr_load quiet-one 'schedule: "5 9 * * *"' 'headless: true' 'model: haiku' 'allowed_tools: ["Read"]'
+  rr_headless quiet-one 'due 2026-09-07 09:05'
+  assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" 0     # nobody was summoned for it
+  out=$(rr_runlog quiet-one)
+  assert_match "$out" 'ritual   quiet-one'
+  assert_match "$out" 'started  2026-09-07 09:05  (due 2026-09-07 09:05)'
+  assert_match "$out" "in       $HOME"
+  assert_match "$out" "notes    $STATE_DIR/rituals/quiet-one/memory.md"
+  assert_match "$out" 'stub -p ran in'                   # what the run itself said
+  assert_match "$out" 'claude --resume 11111111-2222-3333-4444-555555555555'
+  assert_match "$out" '2 turns'
+  assert_re "$out" 'done in [0-9]+s, \$0\.01'
+  # The journal keeps the first line of it, because the alert is gone in four seconds and this
+  # is what somebody reads the next morning.
+  assert_re "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'done \(headless, [0-9]+s, \$0\.01\): stub -p ran in'
+  assert_match "$(notifications)" 'quiet-one|⏲ quiet-one: done: stub -p ran in'
+  # The prompt it was asked, and the flags: a headless run gets the ritual's own, plus the memory
+  # file's directory, and none of the pane's hooks, plugin or system paragraph - it has no pane.
+  assert_match "$(cat "$STUB_STATE/print.prompt")" 'do the thing'
+  assert_match "$(cat "$STUB_STATE/print.prompt")" "$STATE_DIR/rituals/quiet-one/memory.md"
+  assert_match "$(cat "$STATE_DIR/rituals/quiet-one/prompt")" 'do the thing'
+  out=$(cat "$STUB_STATE/print.args")
+  assert_match "$out" '-p --output-format json'
+  assert_match "$out" '--disallowed-tools CronCreate CronList CronDelete'
+  assert_match "$out" '--model haiku'
+  assert_match "$out" "--add-dir $STATE_DIR/rituals/quiet-one"
+  assert_match "$out" '--allowedTools Read --'
+  assert_nomatch "$out" '--settings'
+  assert_nomatch "$out" '--plugin-dir'
+  assert_nomatch "$out" '--append-system-prompt'
+
+  t "a run whose tools were refused: it says so, with the line to add, since nobody was asked"
+  : > "$scratch/notify.log"
+  export STUB_P_DENY=Write
+  rr_headless quiet-one 'by hand'
+  unset STUB_P_DENY
+  assert_match "$(rr_runlog quiet-one)" "refused  Write - a run with nobody to ask needs it in the ritual's allowed_tools"
+  assert_match "$(notifications)" 'it needed Write and had nobody to ask'
+
+  t "a run that could not start at all: the log has what claude said, and the news says where"
+  : > "$scratch/notify.log"
+  export STUB_P_FAIL='no such model'
+  assert_fails rr_headless quiet-one 'by hand'
+  unset STUB_P_FAIL
+  out=$(rr_runlog quiet-one)
+  assert_match "$out" 'claude exited 1, and said:'
+  assert_match "$out" 'stub-claude: no such model'
+  assert_match "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'failed (headless,'
+  assert_match "$(notifications)" 'the headless run failed - gensokyo ritual log quiet-one'
+
+  t "a run of a ritual that has gone, and one whose directory has: both say so and neither runs"
+  : > "$scratch/notify.log"
+  assert_fails rr_headless nothing-of-the-sort 'due 2026-09-07 09:05'
+  assert_match "$(notifications)" 'the ritual was gone by the time its run started'
+  mkdir -p "$scratch/going"
+  { printf -- '---\nschedule: "@daily"\nheadless: true\ncwd: %s\n---\nwork\n' "$scratch/going"; } \
+    > "$mine/going.md"
+  rmdir "$scratch/going"
+  : > "$scratch/notify.log"
+  assert_fails rr_headless going 'by hand'
+  assert_match "$(notifications)" 'is not there, so the run could not start'
+  assert_match "$(rr_runlog going)" 'cwd is not there any more'
+  # And a ritual with no cwd line at all, which `cd ""` would have run in whatever directory the
+  # clock was started in.
+  : > "$scratch/notify.log"
+  printf -- '---\nschedule: "@daily"\nheadless: true\n---\nwork\n' > "$mine/nowhere.md"
+  assert_fails rr_headless nowhere 'by hand'
+  assert_match "$(notifications)" 'is not there, so the run could not start'
+  assert_match "$(cat "$STATE_DIR/rituals/nowhere/log")" 'not run: it names no directory is not there'
+  rm -f "$mine/going.md" "$mine/nowhere.md"
+
+  t "a headless run in progress has a pid and no pane, and both run and remove refuse it for that"
+  fresh; rm -rf "$STATE_DIR/rituals"
+  rr_load slow-one 'schedule: "5 9 * * *"' 'headless: true'
+  assert_fails ritual_headless_running slow-one
+  export STUB_P_SLEEP=2
+  assert_ok ritual_launch_headless 'by hand'
+  unset STUB_P_SLEEP
+  assert_ok ritual_headless_running slow-one     # by its pid: no server was started for this
+  assert_ok ritual_busy slow-one
+  assert_fails ritual_headless_running quiet-one # and it is that ritual's run, not any run
+  out=$(ritual_cmd_run slow-one 2>&1)
+  assert_match "$out" 'running headless right now'
+  out=$(cmd_ritual remove slow-one 2>&1)
+  assert_match "$out" 'running headless right now'
+  assert_ok test -f "$mine/slow-one.md"          # and nothing of it was deleted
+  assert_ok rr_headless_wait slow-one
+  assert_match "$(cat "$STATE_DIR/rituals/slow-one/log")" 'done (headless,'
+  # The pid file stays behind on purpose, and a dead pid is not a run.
+  assert_ok test -s "$STATE_DIR/rituals/slow-one/headless.pid"
+  assert_fails ritual_headless_running slow-one
+
+  t "a long name is still recognised: the whole command line, not as much of it as a terminal fits"
+  # `ps` sizes its output to a terminal unless told not to, and a clipped command line would read
+  # as "no run in progress" while one was going - which is `overlap: skip` not skipping, and two
+  # runs writing one memory file. The name here is at the long end of what a ritual may be called,
+  # and the reason text is appended after it, which is what pushes the line past any such limit.
+  long=a-very-long-ritual-name-of-the-sort-somebody-would-actually-write
+  rr_load "$long" 'schedule: "5 9 * * *"' 'headless: true'
+  export STUB_P_SLEEP=2
+  assert_ok ritual_launch_headless 'due 2026-09-07 09:05'
+  unset STUB_P_SLEEP
+  assert_ok ritual_headless_running "$long"
+  assert_ok rr_headless_wait "$long"
+  rm -f "$mine/$long.md"
+
+  t "a run of a name that is only part of another ritual's runs nothing at all"
+  # `_headless` looks the ritual up again in its own process, and find_ritual takes a part of a
+  # name when it picks out exactly one ritual. If this ritual's file went in the moment since the
+  # fire, the ritual whose name contains it must not run under this name, into these notes.
+  fresh; rm -rf "$STATE_DIR/rituals"; rm -f "$mine"/*.md
+  : > "$scratch/notify.log"
+  rr_load quiet-one-extended 'schedule: "@daily"' 'headless: true'
+  assert_eq "$(find_ritual quiet-one)" "$mine/quiet-one-extended.md"   # a partial hit, as ever
+  assert_fails rr_headless quiet-one 'due 2026-09-07 09:05'
+  assert_match "$(notifications)" 'the ritual was gone by the time its run started'
+  assert_fails test -e "$STATE_DIR/rituals/quiet-one-extended/runs"
+  rm -f "$mine"/*.md
+
+  t "the sweep fires a headless ritual the same way, and summons nobody to do it"
+  fresh; rm -rf "$STATE_DIR/rituals" "$STATE_DIR/status"; rm -f "$mine"/*.md
+  rr_load quiet-one 'schedule: "5 9 * * 1-5"' 'headless: true'
+  GENSOKYO_NOW=$mon
+  ritual_sweep 1
+  assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" 0
+  assert_eq "$(ritual_stamp quiet-one)" "$mon"
+  assert_match "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'ran (due 2026-09-07 09:05)'
+  assert_ok rr_headless_wait quiet-one
+  assert_match "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'done (headless,'
+  # The minute in the header is the run's own process's clock and not the sweep's, which is why
+  # this asks for the reason the sweep handed it rather than for the time beside it.
+  assert_match "$(rr_runlog quiet-one)" '(due 2026-09-07 09:05)'
+
+  t "and the run in progress is what the next fire skips: no pane to look for it in"
+  rm -f "$mine"/*.md
+  export STUB_P_SLEEP=2
+  rr_load slow-two 'schedule: "5 9 * * *"' 'headless: true'
+  GENSOKYO_NOW=$mon; ritual_sweep 1
+  unset STUB_P_SLEEP
+  assert_ok ritual_headless_running slow-two
+  GENSOKYO_NOW=$((mon + 86400)); ritual_sweep 1
+  assert_match "$(cat "$STATE_DIR/rituals/slow-two/log")" 'skipped (due 2026-09-08 09:05): the last run is still going'
+  assert_ok rr_headless_wait slow-two
+
+  t "the run logs are kept, but not for ever"
+  was_keep=$RITUAL_RUNS_KEEP
+  mkdir -p "$STATE_DIR/rituals/quiet-one/runs"
+  for i in 1 2 3 4 5; do : > "$STATE_DIR/rituals/quiet-one/runs/2026010$i-000000.1.log"; done
+  RITUAL_RUNS_KEEP=3
+  rit_runs_trim quiet-one
+  assert_eq "$(ls "$STATE_DIR/rituals/quiet-one/runs" | wc -l | tr -d ' ')" 3
+  assert_ok test -f "$STATE_DIR/rituals/quiet-one/runs/20260105-000000.1.log"   # the newest kept
+  assert_fails test -f "$STATE_DIR/rituals/quiet-one/runs/20260101-000000.1.log"
+  RITUAL_RUNS_KEEP=$was_keep
+  rit_runs_trim nothing-of-the-sort                                             # and no runs at all is fine
 
   rm -f "$mine"/*.md; rm -rf "$STATE_DIR/rituals"
   CFG_PERMISSION_MODE=$was_mode

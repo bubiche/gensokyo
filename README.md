@@ -4,7 +4,7 @@ A bash + tmux cockpit for running several Claude Code sessions side by side:
 named residents in a status bar, a tab each, click one to work in it, desktop notifications
 when one needs you, broadcast "spell cards", and scheduled "rituals".
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. What is not there yet is the ritual settings that say so when you use them (`headless`, `persistent`, `keep`, `overlap`).
+**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. A ritual can also run `headless`, with no pane at all, and log what it said. What is not there yet is the ritual settings that say so when you use them (`persistent`, `keep`, `overlap`).
 
 ## Requirements
 
@@ -209,6 +209,17 @@ enabled: true
 ---
 Check Slack for anything addressed to me since your last run, summarize what
 needs a reply, and list the open questions.
+```
+
+A ritual with `headless: true` gets no pane and no tab: the run is a `claude -p` in the
+background, and what it said lands in a log of its own beside the ritual's notes, with a
+notification when it finishes. That is the shape for work whose answer you want and whose working
+you do not - and because there is nobody to answer a permission prompt, a tool such a run needs
+belongs in its `allowed_tools`, which the log says by name when one was refused. It needs no
+answer to Claude Code's workspace-trust dialog either: `claude -p` never shows one.
+
+```sh
+gensokyo ritual log inbox-zero       # the journal, and the newest headless run's log under it
 ```
 
 Every run is a fresh session, so nothing accumulates a year of context - and every prompt is sent

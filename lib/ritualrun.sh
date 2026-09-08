@@ -129,6 +129,13 @@ ritual_running() {
   return 1
 }
 
+# ritual_busy <slug>: a run of it going right now, of either kind. Both are asked whichever the
+# ritual says today: a ritual switched from a pane to `headless: true` (or back) can have a run of
+# the other kind still going, and either one is about to write the notes a second run would write
+# too. The pane half needs a tmux server to answer, so this is for the sweep, which runs inside
+# one; a command with the cockpit down asks ritual_headless_running on its own.
+ritual_busy() { ritual_headless_running "$1" && return 0; ritual_running "$1"; }
+
 # ritual_reason <catch-up allowed>: the minute this ritual should run for and why - "due
 # <epoch>" for the minute that has just come round, "catch-up <epoch>" for the most recent one
 # missed - or nothing, which is the answer almost every sweep gets. Pure: it reads the loaded
@@ -156,14 +163,22 @@ ritual_reason() {
   printf 'catch-up %s\n' "$miss"
 }
 
-# ritual_launch: the resident that does the work. The same record cmd_new writes, plus the two
+# ritual_launch <why>: fire it, whichever way the ritual says. The two ways have almost nothing
+# in common - one opens a window and hands the prompt to a resident, the other is a process with
+# no terminal - so the decision is made once, here, and both callers just say what the run is for.
+ritual_launch() {
+  rit_bool "$RIT_headless" && { ritual_launch_headless "${1:-}"; return $?; }
+  ritual_launch_pane
+}
+
+# ritual_launch_pane: the resident that does the work. The same record cmd_new writes, plus the two
 # fields a run needs: `ritual`, which is how the notifications, the overlap check and the
 # cockpit know whose run this is, and `prompt_file`, because a ritual's prompt is many lines
 # and a record holds one line per key. `launched` is now and not the minute the run is for:
 # every reader of that field takes it for the time the resident started - `list` and the recall
 # rows print it, and prune_records drops a record that has no pane 30 s after it - so a
 # catch-up run stamped with a minute from last week would be born prunable.
-ritual_launch() {
+ritual_launch_pane() {
   local id slot rec name mode pf
   ensure_dirs
   pf=$(ritual_dir "$RIT_slug")/prompt
@@ -223,11 +238,11 @@ ritual_sweep() {
     # The stamp goes down before the run starts, not after: opening a window takes long enough
     # for the next sweep to arrive inside the same minute, and a fire is once per minute.
     ritual_stamp_set "$RIT_slug" "$when"
-    if ritual_running "$RIT_slug"; then
+    if ritual_busy "$RIT_slug"; then
       ritual_note "$RIT_slug" "skipped ($why $(ritual_when "$when")): the last run is still going"
       continue
     fi
-    if ritual_launch; then
+    if ritual_launch "$why $(ritual_when "$when")"; then
       ritual_note "$RIT_slug" "ran ($why $(ritual_when "$when"))"
     else
       ritual_note "$RIT_slug" "not run: tmux could not open a window"
@@ -251,3 +266,213 @@ ritual_seen() {
 
 # ritual_when <epoch>: a minute as the log and the listings write it.
 ritual_when() { date -r "$1" '+%Y-%m-%d %H:%M' 2>/dev/null; }
+
+# ---------------------------------------------------------------- the headless run
+# `headless: true` is a run with no pane: no window, no tab, no resident, nothing to watch it
+# with. `claude -p` is the whole of it - one process that prints one JSON object and exits - and
+# because nobody is watching, everything the run did has to be written where a person will find
+# it the next morning. That is three places, and they are meant to be read in this order: the
+# notification when it lands, the line it leaves in the ritual's journal, and the run's own log
+# under runs/, which holds what the run actually said.
+ritual_runs_dir() { printf '%s\n' "$(ritual_dir "$1")/runs"; }
+
+# The pid of the last headless run of that ritual, which is the only thing there is to recognise
+# a run with no pane by. Deliberately not deleted when a run ends: the file says which process it
+# was, and `kill -0` plus that process's own command line say whether it is still that run - so a
+# pid left by a run that was killed rather than finished answers "not running" by itself, with
+# nothing to tidy up after it.
+ritual_pidfile() { printf '%s\n' "$(ritual_dir "$1")/headless.pid"; }
+
+# rit_clip <text> <max>: the front of it, and a … for the rest. The other way round from `tilde`,
+# on purpose: for a path the file name at the end is what identifies it, and for a sentence the
+# beginning is.
+rit_clip() {
+  local t=$1
+  [ "${#t}" -le "$2" ] && { printf '%s' "$t"; return 0; }
+  printf '%s…' "${t:0:$(($2 - 1))}"
+}
+
+# ritual_headless_running <slug>: whether a headless run of that ritual is going right now. It
+# has no pane, so ritual_running cannot see it and this is asked instead - and answered with no
+# tmux server needed, which is what lets a hand run and `remove` refuse one with the cockpit down.
+#
+# The process's command line and not the pid alone: pids come round again, and a daily ritual
+# leaves its pid file sitting there for a day. The slug is matched where `_headless` puts it.
+ritual_headless_running() {
+  local pid cmd
+  pid=$(sed -n 1p "$(ritual_pidfile "$1")" 2>/dev/null)
+  case ${pid:-x} in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  # -ww: the whole command line, never as much of it as a terminal would fit. No truncation was
+  # observed without it on this macOS even at 161 characters, with a tty and without - but a `ps`
+  # that clipped the line would answer "no run in progress" while one was going, and then
+  # `overlap: skip` stops skipping and two runs write one memory file. One flag against that.
+  cmd=$(ps -ww -o command= -p "$pid" 2>/dev/null) || return 1
+  case $cmd in *"_headless $1"|*"_headless $1 "*) return 0 ;; esac
+  return 1
+}
+
+# ritual_launch_headless <why>: the run, started and then let go of. Nothing about it is decided
+# here: `_headless` loads the ritual itself and says everything it has to say in the log and the
+# notification, because the caller is either the clock's own loop, which has to be back at its
+# next tick in three seconds, or a command line that has to return.
+#
+# nohup, and no streams: the run outlives the cockpit on purpose. `quit` takes the panes and the
+# clock with it, and cutting a turn off halfway through would leave the ritual's notes half
+# written for nothing gained - the log is still written, and with no server to toast on the
+# desktop alert still lands.
+ritual_launch_headless() {
+  local pid
+  mkdir -p "$(ritual_runs_dir "$RIT_slug")" || return 1
+  nohup "$SELF" _headless "$RIT_slug" "${1:-}" </dev/null >/dev/null 2>&1 &
+  pid=$!
+  # Written here and not by the run itself: the next sweep is 20 s away, and a run that has not
+  # yet got as far as its first line of output would otherwise read as no run at all.
+  printf '%s\n' "$pid" > "$(ritual_pidfile "$RIT_slug")" 2>/dev/null
+  return 0
+}
+
+RITUAL_RUNS_KEEP=50
+# rit_runs_trim <slug>: the newest RITUAL_RUNS_KEEP run logs, and no more - a ritual that fires
+# daily would otherwise leave a file a day there for ever. Their names start with the minute, so
+# the glob's own order is oldest first and the ones to drop are at the front of it.
+rit_runs_trim() {
+  local dir drop
+  dir=$(ritual_runs_dir "$1")
+  set -- "$dir"/*.log
+  [ -f "$1" ] || return 0            # the glob matched nothing and is standing in for itself
+  drop=$(($# - RITUAL_RUNS_KEEP))
+  while [ "$drop" -gt 0 ]; do
+    rm -f "$1"; shift; drop=$((drop - 1))
+  done
+  return 0
+}
+
+# `gensokyo _headless <slug> [why]`: the headless run itself, in a process with no pane, no
+# terminal, and nobody to report to - `die` from here would go to /dev/null. So every way this
+# can end, the failures included, ends in the run's log and a notification instead.
+#
+# What it deliberately does not do, next to what a resident in a pane gets (lib/residents.sh):
+# no hooks and no --settings, because the chips and the "needs you" alerts they drive are about a
+# pane and there is none - this process watches the run itself and says so when it ends; no
+# --plugin-dir, because the skills are for a resident being talked to; and no system paragraph,
+# which would tell a run with no tab that it is a resident in one and name peers it cannot reach.
+# The three cron tools go, for the reason cmd__run gives: a schedule they appear to make dies
+# with the process that made it, and here that is a process nobody will even see exit.
+cmd__headless() {
+  local slug=${1:-} why=${2:-} d path log out err rc started t0 took prompt args
+  local meta cost session turns denials first
+  [ -n "$slug" ] || return 1
+  d=$(ritual_dir "$slug")
+  mkdir -p "$d/runs" 2>/dev/null
+  # The whole name and not a part of one: find_ritual takes a partial when it picks out exactly
+  # one ritual, and if this ritual's file has gone in the moment since the fire, a *different*
+  # ritual whose name contains this one would be the single hit - and its prompt would run under
+  # this name, into this ritual's notes. So the file it names has to be the file this is.
+  path=$(find_ritual "$slug") && [ "${path##*/}" = "$slug.md" ] && ritual_load "$path" || {
+    ritual_note "$slug" 'not run: the ritual was gone by the time its run started'
+    ritual_notify "$slug" 'the ritual was gone by the time its run started'
+    return 1
+  }
+  # Two clocks on purpose. When the run happened is gensokyo's clock, the one every other time in
+  # a log or a listing comes from and the one GENSOKYO_NOW moves; how long it took can only be the
+  # real one, since a frozen clock would make every run take no time at all.
+  started=$(now_epoch); t0=$(date +%s)
+  # The pid in the name as well as the minute: a fire and a hand run can land in the same second,
+  # and the second of them writing over the first one's log would lose the only copy of it.
+  log=$d/runs/$(date -r "$started" '+%Y%m%d-%H%M%S').$$.log
+  out=$d/.run.out.$$ err=$d/.run.err.$$
+  prompt=$(ritual_prompt_text)
+  printf '%s\n' "$prompt" > "$d/prompt" 2>/dev/null
+  args=$(ritual_args)
+  {
+    printf 'ritual   %s\n' "$slug"
+    printf 'started  %s%s\n' "$(ritual_when "$started")" "${why:+  ($why)}"
+    printf 'in       %s\n' "$RIT_cwd"
+    printf 'flags    %s\n' "$args"
+    printf 'notes    %s\n' "$d/memory.md"
+    printf '\nNo pane and nobody to answer a prompt: this run finishes on its own, and goes on\n'
+    printf 'doing so if the cockpit is quit under it.\n\n'
+  } > "$log" 2>/dev/null
+  # The directory is asked about rather than left to `cd` to notice, because `cd ""` succeeds and
+  # changes nothing: a ritual edited between the fire and the run can have lost its `cwd:` line,
+  # and a run in whatever directory the tmux server happened to start in is not this ritual's run.
+  [ -d "$RIT_cwd" ] && cd "$RIT_cwd" 2>/dev/null || {
+    printf 'cwd is not there any more, so nothing ran.\n' >> "$log"
+    ritual_note "$slug" "not run: ${RIT_cwd:-it names no directory} is not there"
+    ritual_notify "$slug" "${RIT_cwd:+$(tilde "$RIT_cwd") }is not there, so the run could not start"
+    return 1
+  }
+  scrub_env
+  eval "set -- $args"
+  # </dev/null and not just the redirect a background process would get anyway: `claude -p` reads
+  # stdin for a prompt to add to the one given, and waits three seconds for it before saying so on
+  # stderr. Measured against 2.1.263; without it every headless run starts three seconds late.
+  claude_ -p --output-format json --disallowed-tools CronCreate CronList CronDelete \
+    "$@" -- "$prompt" </dev/null >"$out" 2>"$err"
+  rc=$?
+  took=$(($(date +%s) - t0))
+  if [ "$rc" -ne 0 ]; then
+    # `claude -p` says what went wrong on stderr and prints nothing at all on stdout, so the log
+    # is where the sentence goes. The first lines of it: an error is a line, a stack trace is not.
+    {
+      printf -- '--- claude exited %s, and said:\n' "$rc"
+      sed -n '1,20p' "$err" 2>/dev/null
+      printf -- '---\nfailed after %s\n' "$(fmt_age "$took")"
+    } >> "$log" 2>/dev/null
+    rm -f "$out" "$err"
+    ritual_note "$slug" "failed (headless, $(fmt_age "$took")): claude exited $rc"
+    ritual_notify "$slug" "the headless run failed - gensokyo ritual log $slug says what it said"
+    rit_runs_trim "$slug"
+    return 1
+  fi
+  # One object, and every field of it optional as far as this is concerned: a gensokyo that
+  # refused to report a run because a field it wanted was missing would be the worse of the two.
+  # One field per line, and never a separator inside a line: the last of these is a sentence
+  # somebody's ritual wrote and can hold any character at all - a tab included, which is what
+  # made a @tsv row read as one field short the first time this was written, because `read`
+  # takes two tabs in a row for one.
+  meta=''
+  [ -n "$JQ_BIN" ] && meta=$(jq_ -r '
+    [ (.total_cost_usd // 0 | tostring),
+      (.session_id // ""),
+      (.num_turns // 0 | tostring),
+      ((.permission_denials // []) | map(.tool_name // "a tool") | unique | join(", ")),
+      ((.result // "") | split("\n") | map(select(length > 0)) | (.[0] // "")) ]
+    | .[]' "$out" 2>/dev/null)
+  if [ -n "$meta" ]; then
+    {
+      IFS= read -r cost; IFS= read -r session; IFS= read -r turns
+      IFS= read -r denials; IFS= read -r first
+    } <<EOF
+$meta
+EOF
+    jq_ -r '.result // ""' "$out" >> "$log" 2>/dev/null
+  else
+    # No jq, or an answer it could not read. The raw object is worth more than a summary of it
+    # that gensokyo had to guess at, so the log gets the whole thing and says which this is.
+    printf 'gensokyo could not read the result as JSON; it is here as claude printed it.\n\n' >> "$log"
+    cat "$out" >> "$log" 2>/dev/null
+    cost='' session='' turns='' denials='' first=''
+  fi
+  {
+    printf -- '\n---\ndone in %s' "$(fmt_age "$took")"
+    [ -n "$cost" ] && printf ', %s' "$(fmt_cost "$cost")"
+    [ -n "$turns" ] && printf ', %s turns' "$turns"
+    printf '\n'
+    # A headless run has nobody to ask, so a tool it needed and did not have is the way it comes
+    # to finish successfully having done none of what it was asked. Named, with the line to add.
+    [ -n "$denials" ] &&
+      printf "refused  %s - a run with nobody to ask needs it in the ritual's allowed_tools\n" "$denials"
+    [ -n "$session" ] && printf 'to read the whole transcript: claude --resume %s\n' "$session"
+  } >> "$log" 2>/dev/null
+  rm -f "$out" "$err"
+  # The result's first line goes in the journal as well as in the notification: the alert is gone
+  # in four seconds, and `ritual log` the next morning is where someone actually looks.
+  ritual_note "$slug" \
+    "done (headless, $(fmt_age "$took")${cost:+, $(fmt_cost "$cost")})${first:+: $(rit_clip "$first" 120)}"
+  ritual_notify "$slug" \
+    "done${first:+: $(rit_clip "$first" 90)}${denials:+ (it needed $denials and had nobody to ask)}"
+  rit_runs_trim "$slug"
+  return 0
+}

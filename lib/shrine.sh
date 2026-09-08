@@ -318,6 +318,16 @@ shrine_view_ritual() {
   [ -n "$last" ] && shrine_line "$(printf '  %-12s %s (%s ago)' 'last ran' \
     "$(ritual_when "$last")" "$(fmt_age $((now - last)))")"
   shrine_line "$(printf '  %-12s %s' in "$(tilde "$RIT_cwd")")"
+  # Only for the kind of run there is nothing to watch: a fire that opens a tab explains itself,
+  # and a fire that opens nothing has to be told about - including while one is going, since the
+  # timetable and the tab bar both have nothing to show for it.
+  if rit_bool "$RIT_headless"; then
+    if ritual_headless_running "$RIT_slug"; then
+      shrine_line "$(printf '  %-12s %s' headless 'a run of it is going right now, with no pane')"
+    else
+      shrine_line "$(printf '  %-12s %s' headless 'no pane: a claude -p per run, and a log of what it said')"
+    fi
+  fi
   problem=$(ritual_problem)
   [ -n "$problem" ] && shrine_line "  $(rit_problem_line "$problem" "$path")"
   shrine_line ''

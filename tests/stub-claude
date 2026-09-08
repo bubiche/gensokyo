@@ -5,6 +5,10 @@
 #   --version                 prints a version line
 #   agents --json             the registry: $STUB_REGISTRY (a fixture file) if set, else one
 #                             entry per running stub session, status from <id>.status
+#   -p / --print              one headless run: the JSON object gensokyo's `_headless` reads
+#                             (--output-format json), else the result as plain text. What it
+#                             answers is set by STUB_P_* (see below); every call leaves its
+#                             arguments in print.args and its prompt in print.prompt
 #   interactive (default)     honours --session-id, --name, --resume, swallows the other
 #                             launch flags, sets the pane title to "✳ <name>", echoes input,
 #                             /rename <name> renames, /exit exits 0 - unless <id>.eat-exit says
@@ -16,7 +20,11 @@ set -u
 STUB_STATE=${STUB_STATE:-${GENSOKYO_STATE_DIR:-${TMPDIR:-/tmp}}/stub}
 mkdir -p "$STUB_STATE"
 
-json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# A JSON string, newlines included: a headless run's `result` is prose and runs to several lines,
+# and the whole point of the field is that gensokyo puts it in a log for a person to read.
+json_str() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
 
 write_entry() {   # <id> <name> <status>
   printf '{"pid": %s, "cwd": "%s", "kind": "interactive", "startedAt": %s000, "sessionId": "%s", "name": "%s", "status": %s}\n' \
@@ -42,6 +50,50 @@ case ${1:-} in
     printf ']\n'
     exit 0 ;;
 esac
+
+# -p / --print: the headless run. Looked for before the `--`, because the prompt after it is
+# somebody's prose and may say anything at all.
+printing=''
+for a in "$@"; do
+  case $a in --) break ;; -p|--print) printing=1; break ;; esac
+done
+if [ -n "$printing" ]; then
+  fmt=text prompt=''
+  printf '%s\n' "$*" > "$STUB_STATE/print.args"
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --output-format) fmt=$2; shift ;;
+      --) shift; prompt=$*; break ;;
+    esac
+    shift
+  done
+  printf '%s' "$prompt" > "$STUB_STATE/print.prompt"
+  # The knobs a test turns. Every one of them is a real answer from `claude -p`: a run that
+  # worked, one whose tools were refused with nobody there to ask, one that failed before it
+  # started, and one still going when something else asks whether it is.
+  [ -n "${STUB_P_SLEEP:-}" ] && sleep "$STUB_P_SLEEP"
+  if [ -n "${STUB_P_FAIL:-}" ]; then
+    echo "stub-claude: $STUB_P_FAIL" >&2
+    exit 1
+  fi
+  result=${STUB_P_RESULT:-"stub -p ran in $PWD
+prompt was $(printf '%s' "$prompt" | grep -c '') lines"}
+  denials='[]'
+  [ -n "${STUB_P_DENY:-}" ] &&
+    denials="[{\"tool_name\": \"$STUB_P_DENY\", \"tool_use_id\": \"toolu_stub\", \"tool_input\": {}}]"
+  if [ "$fmt" = json ]; then
+    printf '{"type": "result", "subtype": "success", "is_error": false, "result": "%s", ' \
+      "$(json_str "$result")"
+    printf '"session_id": "%s", "total_cost_usd": %s, "num_turns": %s, "duration_ms": 12, ' \
+      "${STUB_P_SESSION:-11111111-2222-3333-4444-555555555555}" "${STUB_P_COST:-0.0123}" \
+      "${STUB_P_TURNS:-2}"
+    printf '"stop_reason": "end_turn", "terminal_reason": "completed", "permission_denials": %s}\n' \
+      "$denials"
+  else
+    printf '%s\n' "$result"
+  fi
+  exit 0
+fi
 
 # interactive
 ORIG_ARGS=$*

@@ -753,5 +753,38 @@ null'
   assert_match "$("$G" ritual log by-hand)" 'ran (by hand)'
   assert_match "$("$G" ritual list)" 'last ran'
   rm -f "$CONFIG_DIR/rituals/by-hand.md"
+
+  t "smoke: a headless fire opens no window, and the run outlives the cockpit that started it"
+  local hpid wins
+  # The one thing about a headless run that needs a real server: who its parent is. The clock is
+  # a `run-shell -b` child of the tmux server, and `quit` takes both down - so the sweep is left
+  # to the clock here rather than called from this process, which would make the run this test's
+  # child instead of the clock's and prove nothing about the promise below.
+  tm kill-server 2>/dev/null
+  fresh; rm -rf "$STATE_DIR/rituals"; rm -f "$CONFIG_DIR/rituals"/*.md
+  mkdir -p "$CONFIG_DIR/rituals" "$scratch/work/quiet"
+  printf -- '---\nschedule: "* * * * *"\nheadless: true\ncwd: %s/work/quiet\n---\ntake your time\n' \
+    "$scratch" > "$CONFIG_DIR/rituals/quiet-one.md"
+  # Slow enough to still be going when the cockpit is taken down under it, and exported before
+  # the server starts: the clock has the environment the server was started with, and nothing
+  # else reaches it.
+  export STUB_P_SLEEP=6
+  "$G" --detach >/dev/null
+  unset STUB_P_SLEEP
+  assert_ok wait_for 30 '[ -s "$STATE_DIR/rituals/quiet-one/headless.pid" ]'
+  hpid=$(cat "$STATE_DIR/rituals/quiet-one/headless.pid")
+  assert_ok ritual_headless_running quiet-one
+  assert_eq "$(ls "$RES_DIR" | wc -l | tr -d ' ')" 0            # nobody was summoned for it
+  wins=$(tm list-windows -t "=$SESSION" -F 1 | wc -l | tr -d ' ')
+  assert_eq "$wins" 1                                           # and no tab either: the shrine's
+  # Cutting a turn off halfway would leave the ritual's notes half written for nothing gained,
+  # so the run is meant to survive the quit - which is what its log header tells whoever reads it.
+  "$G" quit >/dev/null 2>&1
+  assert_fails tm has-session -t "=$SESSION"
+  assert_ok kill -0 "$hpid"
+  assert_ok wait_for 25 '! kill -0 "$hpid" 2>/dev/null'
+  assert_match "$(cat "$STATE_DIR/rituals/quiet-one/log")" 'done (headless,'
+  assert_match "$(cat "$STATE_DIR"/rituals/quiet-one/runs/*.log)" 'stub -p ran in'
+  rm -f "$CONFIG_DIR/rituals/quiet-one.md"
   tm kill-server 2>/dev/null
 }

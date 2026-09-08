@@ -210,7 +210,12 @@ ritual_problem() {
   # A directory Claude Code has not been trusted in stops the run at its trust dialog, and a
   # stalled run is worse than a refused one: it is alive, so `overlap: skip` counts it as still
   # going and every later fire is skipped without a word. Said here instead, with the answer.
-  dir_trusted "$RIT_cwd" || {
+  #
+  # A headless run is the exception, and not by our choice: `claude -p` skips the workspace trust
+  # dialog outright, which its own `--help` says of every non-interactive run. So there is no
+  # dialog to stall at and nothing to ask about, and a headless ritual in a directory nobody has
+  # opened by hand is fine. Skipped rather than reordered: every other `cwd` check still applies.
+  rit_bool "$RIT_headless" || dir_trusted "$RIT_cwd" || {
     say "cwd: nothing has answered Claude Code's trust prompt for $(tilde "$RIT_cwd") (open it once and accept, or the run stops at that dialog with nobody there to answer)"; return 0; }
   case $RIT_overlap in
     skip) ;;
@@ -224,7 +229,6 @@ ritual_problem() {
   esac
   rit_bool_word "$RIT_enabled"  || { say "enabled: $RIT_enabled is neither true nor false"; return 0; }
   rit_bool_word "$RIT_headless" || { say "headless: $RIT_headless is neither true nor false"; return 0; }
-  rit_bool "$RIT_headless" && { say 'headless: true is not wired up yet; every run gets a pane you can watch'; return 0; }
   rit_bool_word "$RIT_catch_up" || { say "catch_up: $RIT_catch_up is neither true nor false"; return 0; }
   [ -z "$RIT_unknown" ] || { say "not a ritual setting: $RIT_unknown"; return 0; }
   return 0
@@ -235,16 +239,21 @@ ritual_enabled() { rit_bool "$RIT_enabled"; }
 # ritual_rows: "slug|enabled|schedule|target|headless|description|path" per ritual, by name,
 # which is the order every listing shows. The next fire is not in here: it costs a walk per
 # row, and the caller that wants it has the schedule to ask cron_next with.
+#
+# `headless` is the answer and not the word the file used: `headless: yes` means the same thing
+# as `headless: true` to everything that fires a ritual, and a listing that called one of them
+# false would be telling a reader the run they are about to get is the other kind.
 ritual_rows() {
-  local f on
+  local f on hl
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     ritual_load "$f" || continue
     on=no; ritual_enabled && on=yes
+    hl=false; rit_bool "$RIT_headless" && hl=true
     # The columns are cut apart with IFS='|', so the one field a person writes prose into does
     # not get to carry one.
     printf '%s|%s|%s|%s|%s|%s|%s\n' \
-      "$RIT_slug" "$on" "$RIT_schedule" "$RIT_target" "$RIT_headless" "${RIT_description//|/ }" "$RIT_path"
+      "$RIT_slug" "$on" "$RIT_schedule" "$RIT_target" "$hl" "${RIT_description//|/ }" "$RIT_path"
   done <<EOF
 $(ritual_files)
 EOF

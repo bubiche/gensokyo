@@ -5,7 +5,7 @@
 # shellcheck disable=SC2154,SC2034,SC2016,SC2012,SC2013,SC2088  # functions and globals come from the sourced script; jq filters use $; ls on our own files
 
 shrine_tests() {
-  local f mon was_now
+  local f mon was_now was_hr
   # These tests say what a frame draws, so the timetable it draws from is written here rather
   # than read off whatever rituals this gensokyo ships: dated well ahead, so that nothing
   # rebuilds it from the files while a frame is being asserted on.
@@ -255,6 +255,9 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_TEXT" '  last ran     2026-09-07 09:05 (0s ago)'
   assert_match "$SHRINE_TEXT" '  in           ~'
   assert_match "$SHRINE_TEXT" '[ run now r ]  [ pause p ]  [ remove x ]  [ cancel q ]'
+  # Nothing about which kind of run it is, for the kind whose fire opens a tab: that explains
+  # itself, and a row saying so on every ritual would be a row that says nothing.
+  assert_nomatch "$SHRINE_TEXT" '  headless'
 
   t "shrine: and the letters on that screen are its own, not the shrine's behind it"
   assert_eq "$(shrine_letter r)" ritual-run
@@ -272,6 +275,22 @@ nightly|no||@daily|the checks"
   assert_match "$SHRINE_TEXT" '[ run now r ]  [ unpause p ]  [ remove x ]  [ cancel q ]'
   assert_match "$SHRINE_TEXT" '  next fire    nothing: it is paused'
   assert_eq "$(shrine_letter p)" ritual-on
+
+  t "shrine: a headless ritual says so on its own screen, and says when a run of it is going"
+  printf -- '---\nschedule: "@daily"\ncwd: %s\nheadless: true\n---\nquietly\n' "$HOME" \
+    > "$CONFIG_DIR/rituals/quiet-one.md"
+  SHRINE_ARG=quiet-one
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  headless     no pane: a claude -p per run, and a log of what it said'
+  # And a run in progress, which neither the tab bar nor the timetable has anything to show for.
+  mkdir -p "$STATE_DIR/rituals/quiet-one"
+  was_hr=$(declare -f ritual_headless_running)
+  ritual_headless_running() { [ "$1" = quiet-one ]; }
+  shrine_render 80 24
+  assert_match "$SHRINE_TEXT" '  headless     a run of it is going right now, with no pane'
+  eval "$was_hr"
+  rm -f "$CONFIG_DIR/rituals/quiet-one.md"; rm -rf "$STATE_DIR/rituals/quiet-one"
+  SHRINE_ARG=slack-morning
 
   t "shrine: a ritual that has gone since the timetable was drawn says so instead of drawing blanks"
   SHRINE_ARG=not-a-ritual

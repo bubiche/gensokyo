@@ -243,6 +243,11 @@ mcp__claude_ai_Slack__*'
   assert_fails dir_trusted /no/such/place    # no record at all
   assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch")" ''
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid")" "trust prompt for $(tilde "$scratch/kid")"
+  # Except headless, which has no dialog to stop at: `claude -p` skips the trust prompt, so an
+  # untrusted directory is a run that works rather than a run that stalls. Every other cwd check
+  # still applies to it, which is why this is a skip and not an earlier return.
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid" 'headless: true')" ''
+  assert_match "$(probe_with 'schedule: "@daily"' 'cwd: /no/such/place' 'headless: true')" 'is not a directory'
   printf 'not json at all\n' > "$CLAUDE_JSON"
   assert_ok dir_trusted "$scratch/kid"       # unanswerable, and never the thing that stops a run
   assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $scratch/kid")" ''
@@ -252,7 +257,8 @@ mcp__claude_ai_Slack__*'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'overlap: sideways')" 'not a thing to do about a run'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'keep: 2 hours')" 'keep: 2 hours is not a length'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'enabled: ture')" 'enabled: ture is neither'
-  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'headless: true')" 'headless: true is not wired up yet'
+  assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'headless: true')" ''
+  assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'headless: ture')" 'headless: ture is neither'
   assert_match "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'schedul: "@daily"')" 'not a ritual setting: schedul'
   assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'keep: forever')" ''
   assert_eq "$(probe_with 'schedule: "@daily"' "cwd: $HOME" 'keep: 90m')" ''
@@ -284,6 +290,13 @@ mcp__claude_ai_Slack__*'
   ritual_load "$(find_ritual plain)"
   assert_eq "$RIT_prompt" 'something'          # the user's file, not the shipped one
   assert_eq "$(ritual_rows_sorted | grep '^block|' | cut -d'|' -f2)" no
+  # The headless column is the answer and not the word the file wrote: `yes` means what `true`
+  # means to everything that fires a ritual, and a listing that read one of them as false would
+  # be promising a tab that is never going to open.
+  printf -- '---\nschedule: "@daily"\ncwd: %s\nheadless: yes\n---\nquietly\n' "$HOME" > "$mine/quiet.md"
+  assert_eq "$(ritual_rows_sorted | grep '^quiet|' | cut -d'|' -f5)" true
+  assert_eq "$(ritual_rows_sorted | grep '^plain|' | cut -d'|' -f5)" false
+  rm -f "$mine/quiet.md"
 
   t "find_ritual: the name, or enough of it to mean one ritual"
   assert_eq "$(find_ritual shipped-only)" "$SHARE/rituals/shipped-only.md"

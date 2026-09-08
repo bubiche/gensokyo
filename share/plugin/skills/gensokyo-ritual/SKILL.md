@@ -1,6 +1,6 @@
 ---
 name: gensokyo-ritual
-description: Required whenever the user asks for something to happen on a schedule or again and again - "every weekday at 9:05 check Slack", "run the tests nightly", "remind me every Monday", "do this daily", a cron line, "what have I got scheduled?", "pause that", "stop it running", "delete that ritual". Use it instead of the built-in schedule skill, CronCreate and scheduled tasks: on this machine a schedule is a gensokyo ritual, and this covers writing one, checking it, pausing it, deleting it and reading what it has done.
+description: Required whenever the user asks for something to happen on a schedule or again and again - "every weekday at 9:05 check Slack", "run the tests nightly", "remind me every Monday", "do this daily", a cron line, "what have I got scheduled?", "pause that", "stop it running", "delete that ritual", "do it in the background", "without opening a tab". Use it instead of the built-in schedule skill, CronCreate and scheduled tasks: on this machine a schedule is a gensokyo ritual, and this covers writing one, checking it, pausing it, deleting it and reading what it has done.
 ---
 
 # Scheduling work: rituals
@@ -59,11 +59,31 @@ gensokyo ritual add --name slack-morning --schedule '5 9 * * 1-5' \
   morning - so name the tools the prompt is going to need. `--mode acceptEdits` is the blunter
   way; `--model haiku` is worth it for anything that is only reading and summarising.
 - `--disabled` writes it without turning it on, for a ritual the user wants to look at first.
+- `--headless` is the run with no tab at all (see below).
 
 **Read what the command says back and pass it on.** It prints the next fire, and it warns -
 having written the file - when the directory is one Claude Code has never been trusted in. That
 warning matters: a run there stops at the trust dialog with nobody to answer it, and the fix is
 for the user to open that directory once themselves. Never leave it out of what you report.
+
+## A run with no tab: `--headless`
+
+`--headless` runs the ritual as a background `claude -p` instead: no tab, nothing to watch, and
+when it finishes gensokyo notifies the user and keeps what it said in a log of its own, which
+`gensokyo ritual log <name>` names. Offer it when the user wants the **answer** and not the
+working - "just tell me what came in overnight" - and leave it alone when they said they want to
+see it run, or when the run is going to want a decision from them.
+
+Two things change when you write one, and both belong in what you say back before you create it:
+
+- **Nobody can answer a permission prompt.** A tool the prompt needs and does not have is
+  refused, and the run finishes successfully having done nothing. Name every tool it needs in
+  `--allowed-tools` (or use `--mode acceptEdits`), and treat that as part of the ritual rather
+  than something to fix afterwards. The log names any tool that was refused.
+- **Where the answer goes has to be somewhere.** "Write in this pane" is the normal instruction
+  for a ritual and it means nothing here: the answer is the run's own result, which lands in the
+  log and in the notification, so ask for it short and say the user reads it in
+  `gensokyo ritual log <name>`. If the answer should be a file, say which file.
 
 ## Writing the prompt itself
 
@@ -71,7 +91,8 @@ The session that runs it has none of this conversation. It gets your text, the d
 notes file of its own that gensokyo names in the prompt for it. So:
 
 - write it to that session, in the second person, as a complete instruction;
-- say where the answer goes (its own pane is the normal answer, and the user reads it there);
+- say where the answer goes (its own pane is the normal answer, and the user reads it there; a
+  headless ritual has no pane, and the answer is what it says at the end);
 - say what it must **not** do. An unattended run that commits, pushes, sends mail or archives
   things is the way a ritual becomes a thing the user regrets;
 - tell it what to keep in its notes if a later run should know what an earlier one found.
@@ -122,9 +143,9 @@ that already exists rather than overwriting somebody's file.
 - **Rituals only fire while gensokyo is running.** A closed cockpit or a sleeping laptop means
   no fire; the next start runs what was missed once. Say so if the user is counting on
   something happening while the machine is off - that is a cloud routine, not a ritual.
-- Every run gets a tab you can watch. Runs with no pane, a ritual firing into a resident that
-  is already there, and expiry after a run are not wired up yet: `headless`, `target`,
-  `overlap` and `keep` are refused with a word about why rather than half-working.
+- A run gets a tab you can watch, or no tab at all with `--headless`. A ritual firing into a
+  resident that is already there, and expiry after a finished run, are not wired up yet:
+  `target`, `overlap` and `keep` are refused with a word about why rather than half-working.
 - A ritual is one prompt on a schedule. Anything that needs to talk to another resident is the
   `gensokyo-peers` skill, and anything the user wants to fire off by hand at several residents
   at once is a spell card (`gensokyo broadcast`).

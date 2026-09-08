@@ -79,6 +79,19 @@ mcp__claude_ai_Slack__*'
   assert_eq "$(rr_argv 12 "$(ritual_args)")" 'Bash(npm run test:*)'
   assert_eq "$(rr_argv 13 "$(ritual_args)")" 'mcp__claude_ai_Slack__*'
 
+  t "ritual add: --headless writes the line, and says there will be no tab to watch"
+  out=$(cmd_ritual add --name quiet-add --schedule '@daily' --cwd "$scratch" --headless \
+    --allowed-tools Read --prompt 'summarize and stop' 2>&1)
+  assert_match "$out" 'headless: no pane to watch and nobody to answer a prompt'
+  assert_match "$out" "$(tilde "$STATE_DIR/rituals/quiet-add/runs")"
+  ritual_load "$mine/quiet-add.md"
+  assert_eq "$RIT_headless" true
+  assert_eq "$(ritual_problem)" ''
+  assert_eq "$(ritual_cmd_rows | grep '^quiet-add|' | cut -d'|' -f8)" true
+  # And the plain listing says it too, since that ritual's fire is the one that shows nothing.
+  assert_match "$(cmd_ritual list 2>&1)" 'headless: no pane, and its own log of what each run said'
+  rm -f "$mine/quiet-add.md"
+
   t "ritual add: the prompt comes whole, from a file or from a pipe"
   printf 'first line\n\nthird line\n' > "$scratch/rit-prompt.txt"
   cmd_ritual add --name from-file --schedule '@daily' --cwd "$scratch" \

@@ -4,7 +4,7 @@
 # behind them. Sourced by bin/gensokyo; bash 3.2.
 # shellcheck shell=bash
 
-RITUAL_USAGE='usage: gensokyo ritual [list [--json]] | add --name n --schedule c --cwd d --prompt-file f
+RITUAL_USAGE='usage: gensokyo ritual [list [--json]] | add --name n --schedule c --cwd d --prompt-file f [--headless]
        gensokyo ritual run|enable|disable|edit <name> | log <name> [-n N] | new|remove <name>'
 
 # ---------------------------------------------------------------- the bits every verb wants
@@ -33,6 +33,16 @@ ritual_last_run() {
   d=$(ritual_dir "$1")
   [ -f "$d/log" ] || return 0
   awk -F'\t' '$2 ~ /^ran \(/ { v = $1 } END { if (v != "") print v }' "$d/log" 2>/dev/null
+}
+
+# rit_newest_run <slug>: the last headless run's own log, or nothing. Their names begin with the
+# minute they were written in, so the glob's order is the order they happened in.
+rit_newest_run() {
+  local f last=''
+  for f in "$(ritual_runs_dir "$1")"/*.log; do
+    [ -f "$f" ] && last=$f
+  done
+  printf '%s' "$last"
 }
 
 # rit_problem_line <problem> <path>: what a listing puts under a ritual with something wrong
@@ -234,6 +244,9 @@ ritual_cmd_list() {
       "$sched" "$([ "$on" = yes ] && printf '%s' "${next:+$nexttext (in $(fmt_age $((next - now))))}" || printf paused)" \
       "$desc"
     [ -n "$last" ] && printf '  %-18s %s\n' '' "last ran $(ritual_when "$last") ($(fmt_age $((now - last))) ago)"
+    # Which kind of run this is, said only of the kind that has nothing to watch: a ritual whose
+    # fire opens a tab needs no explaining, and one whose fire opens nothing at all does.
+    [ "$headless" = true ] && printf '  %-18s %s\n' '' 'headless: no pane, and its own log of what each run said'
     [ -n "$problem" ] && printf '  %-18s %s\n' '' "$(rit_problem_line "$problem" "$path")"
   done <<EOF
 $rows
@@ -266,7 +279,7 @@ EOF
 # messages say what to do - so it is written, warned about, and left for the user to sort out.
 ritual_cmd_add() {
   local name='' sched='' cwd='' desc='' model='' effort='' mode='' mcp='' target='' keep=''
-  local overlap='' catch='' tools='' more prompt='' pf='' enabled='' path problem t
+  local overlap='' catch='' tools='' more prompt='' pf='' enabled='' headless='' path problem t
   while [ $# -gt 0 ]; do
     case $1 in
       --name)          name=${2:-}; shift ;;
@@ -280,6 +293,9 @@ ritual_cmd_add() {
       --target)        target=${2:-}; shift ;;
       --keep)          keep=${2:-}; shift ;;
       --overlap)       overlap=${2:-}; shift ;;
+      # A flag and not a value: the file's `headless: false` is what leaving it out means, and a
+      # `--headless false` would be a third way of saying the same thing.
+      --headless)      headless=true ;;
       --catch-up)      catch=${2:-}; shift ;;
       --prompt)        prompt=${2:-}; shift ;;
       --prompt-file)   pf=${2:-}; shift ;;
@@ -363,6 +379,7 @@ EOF
     [ -n "$mcp" ]     && printf 'mcp_config: %s\n' "$(rit_q "$mcp")"
     [ -n "$keep" ]    && printf 'keep: %s\n' "$keep"
     [ -n "$overlap" ] && printf 'overlap: %s\n' "$overlap"
+    [ -n "$headless" ] && printf 'headless: %s\n' "$headless"
     [ -n "$catch" ]   && printf 'catch_up: %s\n' "$catch"
     [ -n "$enabled" ] && printf 'enabled: %s\n' "$enabled"
     printf -- '---\n%s\n' "$prompt"
@@ -393,6 +410,10 @@ EOF
   # %z, not %Z: the abbreviation is a zone's own business - Singapore has none and prints `+08`
   # while Tokyo prints `JST` - and the offset is the quantity a UTC conversion got wrong anyway.
   say "  $sched is this machine's clock, now $(date '+%H:%M %z') - a ritual is never in UTC"
+  # Which kind of run it is going to get, for the one kind that opens nothing: a person who
+  # agreed to a ritual is picturing a tab, and this is where they find out there will not be one.
+  [ -n "$headless" ] &&
+    say "  headless: no pane to watch and nobody to answer a prompt, so what it needs goes in allowed_tools; what each run says keeps in $(tilde "$(ritual_runs_dir "$name")")"
   say "  gensokyo ritual run $name   fires it now, so its prompts can be approved once"
   return 0
 }
@@ -411,13 +432,30 @@ ritual_cmd_run() {
   problem=$(ritual_problem)
   [ -z "$problem" ] || die "ritual run: $RIT_slug: $problem"
   ensure_dirs
+  # A headless run wants no cockpit at all: no pane to put it in, and nobody to answer a prompt
+  # it stops at, which is the whole of what `headless: true` means. It is asked about first for
+  # that reason - the question below starts a tmux server to be able to answer it.
+  ritual_headless_running "$RIT_slug" &&
+    die "ritual run: $RIT_slug is running headless right now, and both runs would write its notes - it has no pane to close, so wait for it (gensokyo ritual log $RIT_slug says when it started)"
+  if rit_bool "$RIT_headless"; then
+    # Still asked, and only if there is a server to ask: a ritual that was firing into panes
+    # until this morning can have one of those runs still going.
+    server_running && ritual_running "$RIT_slug" &&
+      die "ritual run: a run of $RIT_slug is still going in a tab (gensokyo list), and both runs would write its notes"
+    ritual_enabled || say "$RIT_slug is disabled: this run is by hand, and the schedule stays off"
+    ritual_launch 'by hand' || die "ritual run: could not start a headless run of $RIT_slug"
+    ritual_note "$RIT_slug" 'ran (by hand)'
+    say "$RIT_slug is running headless in $(tilde "$RIT_cwd"): no pane, and nothing to watch"
+    say "  gensokyo will say when it lands; what it said keeps in $(tilde "$(ritual_runs_dir "$RIT_slug")")"
+    return 0
+  fi
   # Before the overlap check, not after: with no server there are no panes to be alive in, and a
   # record left by a cockpit that has since stopped would read as a run still going.
   start_server
   ritual_running "$RIT_slug" &&
     die "ritual run: $RIT_slug is still running from last time (gensokyo list), and both runs would write its notes"
   ritual_enabled || say "$RIT_slug is disabled: this run is by hand, and the schedule stays off"
-  ritual_launch || die "ritual run: tmux could not open a window for $RIT_slug"
+  ritual_launch 'by hand' || die "ritual run: tmux could not open a window for $RIT_slug"
   ritual_note "$RIT_slug" 'ran (by hand)'
   say "$RIT_slug is running in $(tilde "$RIT_cwd")"
   [ "$(clients_in_mode cc)" -eq 0 ] && [ "$(clients_in_mode tty)" -eq 0 ] &&
@@ -475,8 +513,12 @@ ritual_cmd_remove() {
     "$SHARE"/*) die "ritual remove: $slug is one of the examples gensokyo ships, and an update would put it back: 'gensokyo ritual disable $slug' is how you stop it firing" ;;
   esac
   # A run of it going right now is about to write the notes this would delete, and it would
-  # carry on afterwards against a ritual that is no longer there. Asked without a cockpit up
-  # there are no panes for a run to be alive in, so the question is only worth asking with one.
+  # carry on afterwards against a ritual that is no longer there. A headless run is asked about
+  # whatever the cockpit is doing - it has a pid and not a pane, so the answer needs no server.
+  ritual_headless_running "$slug" &&
+    die "ritual remove: $slug is running headless right now, and that run writes its notes as it finishes - it has no pane to close, so wait for it (gensokyo ritual log $slug says when it started)"
+  # Asked without a cockpit up there are no panes for a run to be alive in, so the pane question
+  # is only worth asking with one.
   if server_running; then
     ritual_running "$slug" &&
       die "ritual remove: $slug is running now (gensokyo list), and that run writes its notes as it finishes - close it first, or wait for it"
@@ -502,7 +544,7 @@ ritual_cmd_remove() {
 # log <name> [-n N]: the ritual's own journal - every fire, every run skipped because the last
 # one was still going, and every complaint about a line gensokyo could not read.
 ritual_cmd_log() {
-  local name='' n=20 path d ts text
+  local name='' n=20 path d ts text newest
   while [ $# -gt 0 ]; do
     case $1 in
       -n|--lines) n=${2:-}; shift ;;
@@ -527,6 +569,10 @@ $(if [ "$n" -gt 0 ]; then tail -n "$n" "$d/log"; else cat "$d/log"; fi)
 EOF
   say
   say "  $(tilde "$d/log")   (its notes are beside it, in memory.md)"
+  # A headless run's own words are not in the journal - it keeps the first line of them - so the
+  # file that has all of it is named as well, and the newest is the one somebody asking means.
+  newest=$(rit_newest_run "$RIT_slug")
+  [ -n "$newest" ] && say "  $(tilde "$newest")   (what the last headless run said, in full)"
   return 0
 }
 
@@ -580,6 +626,7 @@ cwd: "$2"                   # the directory the run works in
 # allowed_tools: ["Read", "Grep"]
 # keep: 2h                  # how long the finished run stays in its tab
 # overlap: skip             # if the last run is still going
+# headless: true            # no pane at all: it runs in the background and logs what it said
 # catch_up: true            # one run for a fire missed while the machine slept
 enabled: false              # true once you are happy with it
 ---

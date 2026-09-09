@@ -1,0 +1,77 @@
+# Checks gensokyo on macOS, and publishes a release when a v* tag is pushed.
+#
+# Everything the release needs is built here: the three tarballs, their SHA256SUMS and the
+# one-line VERSION that `curl | sh` and `gensokyo update` read to find the newest release.
+# install.sh and uninstall.sh go up as assets of their own, which is what makes these work:
+#   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/uninstall.sh | sh
+#
+# macOS only, and one runner: gensokyo is a macOS product, and the x86_64 tarball carries
+# nothing that has to be built - the vendored binaries are downloaded for both architectures
+# and verified against vendor/SHA256SUMS.
+#
+# The test suite is deliberately not run here. It starts real tmux servers and drives them
+# through a stub claude, which is contention-sensitive: a slow runner could fail a tag for
+# reasons that have nothing to do with the release. Run `tests/run.sh` before you tag - what
+# this job checks is that the thing it is about to publish is well-formed and installs.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # the checks, by hand, without publishing anything
+
+permissions:
+  contents: write      # only the publish step needs it, and only for a tag
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          brew install shellcheck
+          shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude
+          shellcheck -s sh install.sh uninstall.sh scripts/vendor.sh scripts/release.sh
+
+      # /bin/bash, not whatever `bash` is on PATH: macOS ships 3.2 and that is the target, so a
+      # bash 4 or 5 on the runner would happily parse syntax the product cannot use.
+      - name: syntax
+        run: |
+          /bin/bash --version | head -n 1
+          for f in bin/gensokyo lib/*.sh tests/run.sh tests/stub-claude; do /bin/bash -n "$f"; done
+          for f in install.sh scripts/*.sh; do /bin/sh -n "$f"; done
+
+      - name: vendored binaries, downloaded and verified against the pins
+        run: |
+          scripts/vendor.sh --all
+          scripts/vendor.sh --status
+
+      - name: build the tarballs
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          [ "$GITHUB_REF_TYPE" = tag ] || version=$(sed -n 's/^VERSION=//p' bin/gensokyo | head -n 1)
+          scripts/release.sh --version "$version" --no-fetch
+          ls -l dist/
+          shasum -a 256 -c dist/SHA256SUMS
+
+      - name: the packaged copy installs and reports itself
+        run: |
+          version=$(cat dist/VERSION)
+          home=$(mktemp -d)
+          tar -xzf "dist/gensokyo-$version-macos-arm64.tar.gz" -C "$home"
+          ( cd "$home/gensokyo-$version" && ./install.sh --bin-dir "$home/bin" --no-fetch )
+          HOME=$home GENSOKYO_STATE_DIR=$home/state GENSOKYO_CONFIG_DIR=$home/config \
+            GENSOKYO_ITERM_DIR=$home/iterm "$home/bin/gensokyo" doctor
+
+      - name: publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "gensokyo $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/gensokyo-*.tar.gz dist/SHA256SUMS dist/VERSION install.sh uninstall.sh

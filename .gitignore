@@ -6,3 +6,4 @@ vendor/*/
 .tools/
 spikes/scratch/
 *.part
+dist/

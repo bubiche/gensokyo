@@ -38,7 +38,7 @@ the chips appear. `gensokyo iterm remove` deletes the file again; both refuse to
 
 | Tool | Why | Install |
 |---|---|---|
-| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh scripts/vendor.sh`; `-x` follows the `lib/*.sh` and `tests/cases/*.sh` sources) | `brew install shellcheck` |
+| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh uninstall.sh scripts/vendor.sh scripts/release.sh`; `-x` follows the `lib/*.sh` and `tests/cases/*.sh` sources) | `brew install shellcheck` |
 | `curl` | fetches the vendored binaries | preinstalled on macOS |
 | Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
 
@@ -63,22 +63,76 @@ bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: 
 bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
                                      # the harness lives there, the tests in tests/cases/*.sh
+scripts/release.sh --out /tmp/x      # build the release tarballs from this checkout (--help for the rest)
 ```
 
+Cutting a release: bump `VERSION` in `bin/gensokyo`, commit, then `git tag v0.1.0` and
+`git push --tags`. The tag runs `.github/workflows/release.yml` on a macOS runner — shellcheck,
+`bash -n`, the whole test suite, and the vendored binaries downloaded and verified against their
+pins — then `scripts/release.sh` builds the three tarballs and the run publishes them with
+`SHA256SUMS`, a one-line `VERSION` and `install.sh` as release assets. The `VERSION` asset is
+how `curl | sh` and `gensokyo update` find the newest release: GitHub serves
+`releases/latest/download/VERSION` for whatever release is newest, so neither has to ask the
+API, which rate-limits by address. Running the workflow by hand (`workflow_dispatch`) does the
+checks and publishes nothing.
+
 ## Installing
+
+```sh
+curl -fsSL https://github.com/bubiche/gensokyo/releases/latest/download/install.sh | sh
+                                # the release: into ~/.gensokyo, linked at ~/.local/bin/gensokyo
+gensokyo doctor                 # shows which copy is on PATH, the plugin dir and what resolved
+gensokyo iterm setup            # add the "gensokyo" iTerm2 profile (iterm remove takes it away)
+```
+
+From a checkout, or from a release tarball unpacked by hand, the same script installs what is
+already there instead of downloading anything:
 
 ```sh
 ./install.sh                    # links ~/.local/bin/gensokyo -> bin/gensokyo; fetches tmux + jq if needed
 ./install.sh --bin-dir ~/bin    # another link directory (or GENSOKYO_BIN_DIR)
 ./install.sh --no-fetch         # never download; needs vendored or system tmux >= 3.3 and jq >= 1.6
-gensokyo doctor                 # shows which copy is on PATH, the plugin dir and what resolved
-gensokyo iterm setup            # add the "gensokyo" iTerm2 profile (iterm remove takes it away)
 ```
 
-`install.sh` is POSIX `sh`, writes nothing outside the checkout except that one symlink, and
-prints the `export PATH=…` line if the link directory is not on your PATH. Running from the
-checkout without installing also works (`bin/gensokyo`); a resident's shell finds that copy as
-`$GENSOKYO_BIN`. Release tarballs and `curl | sh` come with the first release.
+`install.sh` is POSIX `sh`, writes nothing outside the gensokyo directory except that one
+symlink, and prints the `export PATH=…` line if the link directory is not on your PATH. It
+decides which of the two it is doing by looking beside itself: piped into `sh` there is no
+`bin/gensokyo` next to it, so it downloads the newest release for this Mac, checks it against
+the release's `SHA256SUMS` and refuses to unpack a tarball that does not match. Options go
+after `sh -s --` when it is piped (`… | sh -s -- --dir ~/opt/gensokyo`), and `--version 0.1.0`
+takes a particular release rather than the newest. Running from the checkout without installing
+also works (`bin/gensokyo`); a resident's shell finds that copy as `$GENSOKYO_BIN`.
+
+```sh
+gensokyo update                 # fetch the newest release and swap this install for it
+gensokyo update --check         # only say what is out there
+gensokyo uninstall              # remove the link and the profile, then ask about config and state
+```
+
+`update` replaces the install tree in one rename after it has verified the download, so an
+interrupted update leaves the old one working; your config, state and rituals live outside the
+tree and are not touched. In a git checkout it refuses and tells you to `git pull`. `uninstall`
+removes the symlinks that point at that copy and the `gensokyo.json` profile if gensokyo wrote
+it, then asks before deleting `~/.config/gensokyo`, `~/.local/state/gensokyo` and the install
+tree itself — `--yes` answers yes to both, `--keep-data` keeps the first. It refuses while the
+cockpit is running (`gensokyo quit` first), and it never deletes a git checkout. Neither command
+touches Claude Code, its settings or its sessions.
+
+If `gensokyo` itself is already gone — the tree deleted, or only the symlink removed — there is
+a standalone `uninstall.sh` beside `install.sh`, in the tarballs and as a release asset:
+
+```sh
+curl -fsSL https://github.com/bubiche/gensokyo/releases/latest/download/uninstall.sh | sh
+                                # says what is left; deletes nothing
+… | sh -s -- --yes              # delete all of it (--keep-data keeps config, rituals, records)
+```
+
+It asks no questions, so nothing is ever deleted without `--yes`, and it assumes nothing about
+the install tree. gensokyo writes in four places and nowhere else — its own tree,
+`~/.config/gensokyo`, `~/.local/state/gensokyo` and one iTerm2 dynamic profile of its own — and
+those four are what it looks for, plus a `gensokyo` symlink pointing into a tree and a tmux
+socket left behind by a stopped server. It refuses to remove anything while the cockpit is still
+running, and leaves alone a `gensokyo.json` that carries somebody else's Guid.
 
 `bin/gensokyo`
 reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its own tmux server

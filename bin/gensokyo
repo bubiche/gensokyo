@@ -171,6 +171,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/telemetry.sh" || exit 1
 # shellcheck source=../lib/iterm.sh
 . "$LIB/iterm.sh" || exit 1
+# shellcheck source=../lib/release.sh
+. "$LIB/release.sh" || exit 1
 
 # ---------------------------------------------------------------- doctor / help / version
 # plugin_skills: the skill names the resident plugin carries, for `doctor`. A skill costs every
@@ -301,6 +303,8 @@ quit|||ask every resident to /exit, then stop the cockpit: the shrine, the clock
 help||[--json]|this list; --json for tools
 doctor|||which tmux, jq and claude are in use, versions, server state
 iterm||setup / remove|add or delete the "gensokyo" iTerm2 profile that carries the chips
+update||[--check] [--version V]|swap this install for the latest release; --check only says what is out
+uninstall||[--yes] [--keep-data]|remove the link and the iTerm2 profile, then offer to delete config, state and this copy
 version|||print the version
 EOF
 }
@@ -330,9 +334,6 @@ EOF
   say "keys: $(legend_text)"
 }
 
-# ---------------------------------------------------------------- not yet
-cmd__not_yet() { warn "'$1' is not available yet"; exit 2; }
-
 # ---------------------------------------------------------------- main
 main() {
   load_config
@@ -343,6 +344,10 @@ main() {
     -h|help) shift; cmd_help "$@"; return 0 ;;
     doctor) cmd_doctor; return 0 ;;
     iterm) shift; cmd_iterm "$@"; return 0 ;;
+    # An install that is broken enough to have no tmux is exactly one you want to update or
+    # remove, so neither of these waits for need_bins.
+    update) shift; cmd_update "$@"; return 0 ;;
+    uninstall) shift; cmd_uninstall "$@"; return 0 ;;
   esac
   need_bins
   case $cmd in
@@ -356,7 +361,6 @@ main() {
     reload) shift; cmd_reload "$@" ;;
     quit) shift; cmd_quit "$@" ;;
     ritual|schedule) shift; cmd_ritual "$@" ;;
-    update|uninstall) cmd__not_yet "$cmd" ;;
     _shrine|_keys|_run|_hook|_statusline|_bar|_border|_tick|_focus|_reload|_menu-shrine|_menu-summon|_popup-summon|_menu-banish|_menu-recall|_menu-quit|_menu-spell|_menu-cast-target|_menu-cast-peer|_menu-timetable|_menu-ritual|_menu-ritual-rm|_headless|_reap|_send)
       shift; "cmd_$cmd" "$@" ;;
     *) die "unknown command: $cmd (see: gensokyo help)" ;;

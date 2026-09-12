@@ -20,7 +20,7 @@ iterm_tests() {
   out=$(cat "$scratch/rendered.json")
   assert_match "$out" '\(session.tmuxStatusLeft)'
   assert_match "$out" '\(session.tmuxStatusRight)'
-  assert_nomatch "$out" PARENT_PLACEHOLDER
+  assert_nomatch "$out" PLACEHOLDER          # the parent and all three colour components
   assert_nomatch "$out" /Users/
   assert_nomatch "$out" "$HOME"
   # The parent is the one thing filled in, and an & or a quote in a profile name must survive
@@ -29,6 +29,37 @@ iterm_tests() {
   assert_eq "$(plutil -extract 'Profiles.0.Name' raw -o - "$scratch/rendered.json")" gensokyo
   assert_eq "$(plutil -extract 'Profiles.0.Show Status Bar' raw -o - "$scratch/rendered.json")" true
   assert_eq "$(iterm_guid_of "$scratch/rendered.json")" "$ITERM_GUID"
+
+  t "the await component carries gensokyo's gold as three numbers, and outranks the chips"
+  # The second component holds the residents who need you and nothing else, which is the only
+  # way iTerm2 will colour one part of the bar differently: a colour belongs to a component.
+  local knobs='Profiles.0.Status Bar Layout.components.1.configuration.knobs'
+  assert_eq "$(plutil -extract "$knobs.expression" raw -o - "$scratch/rendered.json")" '\(session.tmuxStatusRight)'
+  assert_eq "$(plutil -extract "$knobs.shared text color.Color Space" raw -o - "$scratch/rendered.json")" sRGB
+  # #f1c40f: 241/255, 196/255, 15/255. Numbers, not the strings the template holds them as.
+  assert_re "$(plutil -extract "$knobs.shared text color.Red Component" raw -o - "$scratch/rendered.json")" '^0\.945'
+  assert_re "$(plutil -extract "$knobs.shared text color.Green Component" raw -o - "$scratch/rendered.json")" '^0\.768'
+  assert_re "$(plutil -extract "$knobs.shared text color.Blue Component" raw -o - "$scratch/rendered.json")" '^0\.058'
+  # Compression drops the lowest priority first, and this is the component that must be seen.
+  assert_re "$(plutil -extract "$knobs.base: priority" raw -o - "$scratch/rendered.json")" '^10'
+  assert_re "$(plutil -extract 'Profiles.0.Status Bar Layout.components.0.configuration.knobs.base: priority' raw -o - "$scratch/rendered.json")" '^5'
+
+  t "a colour set in config reaches the profile, and anything that is not one falls back"
+  assert_eq "$(iterm_await_color)" "$CFG_COLOR_AWAIT"
+  assert_eq "$(CFG_COLOR_AWAIT='#00FF80' iterm_await_color)" '#00FF80'
+  assert_eq "$(iterm_rgb '#00ff80' | tr '\n' ' ')" '0.000000 1.000000 0.501961 '
+  # ~/.config/gensokyo/config is the user's own text: it reaches here as typed, so a value that
+  # is not six hex digits takes the shipped gold rather than going into the JSON as it stands.
+  assert_eq "$(CFG_COLOR_AWAIT='"}{' iterm_await_color)" "$ITERM_AWAIT_DEFAULT"
+  assert_eq "$(CFG_COLOR_AWAIT='red' iterm_await_color)" "$ITERM_AWAIT_DEFAULT"
+  assert_eq "$(CFG_COLOR_AWAIT='#12345' iterm_await_color)" "$ITERM_AWAIT_DEFAULT"
+  assert_eq "$(CFG_COLOR_AWAIT='' iterm_await_color)" "$ITERM_AWAIT_DEFAULT"
+  CFG_COLOR_AWAIT='"}{' iterm_render 'p' > "$scratch/bad.json"
+  assert_ok iterm_parses "$scratch/bad.json"
+  assert_re "$(plutil -extract "$knobs.shared text color.Red Component" raw -o - "$scratch/bad.json")" '^0\.945'
+  CFG_COLOR_AWAIT='#00FF80' iterm_render 'p' > "$scratch/green.json"
+  assert_ok iterm_parses "$scratch/green.json"
+  assert_re "$(plutil -extract "$knobs.shared text color.Green Component" raw -o - "$scratch/green.json")" '^1'
 
   t "iterm setup writes the profile, says which profile it inherits, and runs again unchanged"
   out=$(cmd_iterm setup 2>&1)

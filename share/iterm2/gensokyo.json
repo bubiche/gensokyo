@@ -35,12 +35,19 @@
             "class": "iTermStatusBarSwiftyStringComponent",
             "configuration": {
               "knobs": {
-                "base: compression resistance": 1,
-                "base: priority": 5.0,
+                "base: compression resistance": 2,
+                "base: priority": 10.0,
                 "expression": "\\(session.tmuxStatusRight)",
                 "maxwidth": 1000000000.0,
                 "minwidth": "0",
-                "shared font": ""
+                "shared font": "",
+                "shared text color": {
+                  "Red Component": "AWAIT_R_PLACEHOLDER",
+                  "Green Component": "AWAIT_G_PLACEHOLDER",
+                  "Blue Component": "AWAIT_B_PLACEHOLDER",
+                  "Alpha Component": 1,
+                  "Color Space": "sRGB"
+                }
               },
               "layout advanced configuration dictionary value": {
                 "algorithm": 0,

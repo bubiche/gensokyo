@@ -345,8 +345,9 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   printf 'slack-morning|yes|%s|3 9 * * 1-5|check Slack\n' "$((mon + 3600))" > "$STATE_DIR/timetable"
   touch -t 203001010000 "$STATE_DIR/timetable"
   assert_eq "$(bar_ritual_text)" '⏲ 10:05 slack-morning'
-  assert_match "$(cmd__bar 2 '' plain)" '⏲ 10:05 slack-morning'
+  # Row 2 is the tty client's; iTerm2's row 2 is the await component, so its ritual rides in row 1.
   assert_match "$(cmd__bar 2 '')" '· ⏲ 10:05 slack-morning'
+  assert_match "$(cmd__bar 1 '' plain)" '⏲ 10:05 slack-morning'
   # A fire days away is not a time of day: the day it falls on is the part worth the columns.
   printf 'weekly-sweep|yes|%s|@weekly|\n' "$((mon + 86400 * 3))" > "$STATE_DIR/timetable"
   touch -t 203001010000 "$STATE_DIR/timetable"
@@ -356,9 +357,33 @@ f2fe56c9-466e-4333-bed0-4a89460dd0b8|waiting|Sakuya|/Users/me/dev/beta|85270
   printf 'nightly|no||@daily|\n' > "$STATE_DIR/timetable"
   touch -t 203001010000 "$STATE_DIR/timetable"
   assert_eq "$(bar_ritual_text)" ''
-  assert_eq "$(cmd__bar 2 '' plain)" "$(usage_text)"
+  assert_nomatch "$(cmd__bar 1 '' plain)" '⏲'
   rm -f "$STATE_DIR/timetable"
   GENSOKYO_NOW=$was_now
+
+  t "iTerm2's second row is the residents who need you, by name, and empty when none do"
+  # load_registry rewrites the cache as soon as it is three seconds old, from a `claude agents
+  # --json` that here is the stub and knows nothing about these two. So the fixture goes back
+  # before every read, and Sakuya is reliably the one the registry calls waiting.
+  reg_then() { cp "$here/fixtures/agents.json" "$REGISTRY"; "$@"; }
+  fresh; rm -rf "$STATE_DIR/status"
+  assert_eq "$(reg_then bar_awaiting)" ''         # no residents at all
+  rec ed82e343-81ce-4b9e-8fdb-9b32d8136a5c slot=1 name=Marisa cwd=/a pane=%1 window=@1   # idle
+  rec f2fe56c9-466e-4333-bed0-4a89460dd0b8 slot=2 name=Sakuya cwd=/b pane=%2 window=@1   # waiting
+  assert_eq "$(reg_then bar_awaiting)" '✦ Sakuya needs you '
+  status_write ed82e343-81ce-4b9e-8fdb-9b32d8136a5c question 'Delete the branch?'
+  assert_eq "$(reg_then bar_awaiting)" '✧ Marisa · ✦ Sakuya needs you '
+  assert_eq "$(reg_then cmd__bar 2 '' plain)" '✧ Marisa · ✦ Sakuya needs you '
+  # The count it replaces is gone from row 1, where a colour could not have reached it anyway.
+  assert_nomatch "$(reg_then cmd__bar 1 '' plain)" '✦ 2 '
+  assert_match "$(reg_then cmd__bar 1 '' plain)" '1 ✧ Marisa'
+  # (the styled row keeps its own ✦ count, which the smoke test reads off a real tmux server)
+  # Nobody waiting at all, and the component is empty: gold that never shows when it has
+  # nothing to say, which is the reason it is the text that is coloured and not the background.
+  fresh; rm -rf "$STATE_DIR/status"
+  assert_eq "$(reg_then bar_awaiting)" ''
+  assert_eq "$(reg_then cmd__bar 2 '' plain)" ''
+  cp "$here/fixtures/agents.json" "$REGISTRY"
 
   t "the tty ritual menus refuse what is not there rather than dying inside a run-shell"
   # Both run as children of the tmux server, where a `die` would take the job down without a

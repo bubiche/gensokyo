@@ -12,9 +12,10 @@
 # left. It therefore assumes nothing about the tree, and asks no questions - without --yes it
 # only says what it found, so a `curl | sh` of it can never delete anything by surprise.
 #
-# gensokyo writes in four places and nowhere else: its own install tree, ~/.config/gensokyo,
-# ~/.local/state/gensokyo and one iTerm2 dynamic profile of its own. Claude Code's settings and
-# sessions, ~/.tmux.conf and iTerm2's own preferences are read at most, never written.
+# gensokyo writes in five places and nowhere else: its own install tree, ~/.config/gensokyo,
+# ~/.local/state/gensokyo, one iTerm2 dynamic profile of its own, and - only if it was asked to -
+# one launchd agent of its own. Claude Code's settings and sessions, ~/.tmux.conf, launchd's own
+# configuration and iTerm2's own preferences are read at most, never written.
 
 set -eu
 
@@ -26,11 +27,15 @@ usage() { sed -n 's/^#   //p' "$0"; }
 # same name that somebody else wrote, which is never touched.
 GUID=1AB52449-8D89-4E6A-97B2-800C66B98CF6
 
+# Must match LOGIN_LABEL in lib/login.sh: the launchd agent that starts the cockpit at login.
+LABEL=io.github.bubiche.gensokyo
+
 yes=0 keep=0
 dir=${GENSOKYO_DIR:-$HOME/.gensokyo}
 config=${GENSOKYO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gensokyo}
 state=${GENSOKYO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/gensokyo}
 iterm=${GENSOKYO_ITERM_DIR:-$HOME/Library/Application Support/iTerm2/DynamicProfiles}
+agents=${GENSOKYO_LAUNCH_DIR:-$HOME/Library/LaunchAgents}
 socket=${GENSOKYO_SOCKET:-gensokyo}
 while [ $# -gt 0 ]; do
   case $1 in
@@ -114,6 +119,22 @@ if [ -f "$prof" ]; then
   fi
 fi
 
+# The launchd agent that starts the cockpit at login, only if it is one that runs a gensokyo.
+# Out of launchd first, then off the disk: a plist deleted from under a loaded agent leaves
+# launchd still holding the job until the next login.
+plist="$agents/$LABEL.plist"
+if [ -f "$plist" ]; then
+  prog=$(plutil -extract 'ProgramArguments.0' raw -o - "$plist" 2>/dev/null || echo '')
+  case $prog in
+    */bin/gensokyo)
+      # `bootout` says "3: No such process" for an agent that is not loaded, which is the
+      # state we wanted; under `set -e` an unignored 3 would end the uninstall here.
+      [ "$yes" = 1 ] && { launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || :; }
+      gone "login agent" "$plist" ;;
+    *) say "  left alone  $(tilde "$plist") does not run a gensokyo" ;;
+  esac
+fi
+
 # Your config and your rituals; the records, journals and run logs.
 if [ "$keep" = 1 ]; then
   for p in "$config" "$state"; do deletable "$p" && say "  kept  $(tilde "$p") (--keep-data)"; done
@@ -137,4 +158,4 @@ elif [ "$yes" != 1 ]; then
 else
   say "done."
 fi
-say "Claude Code, its settings and its sessions are untouched, and so are ~/.tmux.conf and iTerm2's own settings."
+say "Claude Code, its settings and its sessions are untouched, and so are ~/.tmux.conf, launchd and iTerm2's own settings."

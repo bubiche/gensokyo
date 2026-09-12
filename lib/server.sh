@@ -91,9 +91,12 @@ apply_status() {
   local s
   case $1 in
     cc)
+      # status-left carries the chips, the next ritual and the usage in one string (cmd__bar's
+      # plain half), and tmux truncates at the limit silently: ten residents with telemetry are
+      # well past 200, and the usage would be what fell off the end.
       tmux_ set -gu status-format \
         \; set -g status on \
-        \; set -g status-left-length 200 \; set -g status-right-length 200
+        \; set -g status-left-length 1000 \; set -g status-right-length 200
       ;;
     *)
       s=$(sq "$SELF")

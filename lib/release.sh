@@ -174,7 +174,16 @@ EOF
       say "  left $(tilde "$ITERM_DIR/gensokyo.json") alone: another Guid, so not the profile gensokyo wrote"
     fi
   fi
-  say "  iTerm2's own settings are yours and were never written to; the same for ~/.tmux.conf and ~/.claude"
+  # The launchd agent, if this copy is what it starts. Out of launchd before off the disk, or
+  # launchd goes on holding the job until the next login.
+  if [ -e "$(login_plist)" ] && login_is_ours; then
+    launchctl_ bootout "$(login_target)" >/dev/null 2>&1
+    if rm -f "$(login_plist)"; then say "  removed the login agent $(tilde "$(login_plist)")"
+    else warn "cannot remove $(tilde "$(login_plist)")"; fi
+  elif [ -e "$(login_plist)" ]; then
+    say "  left $(tilde "$(login_plist)") alone: it does not run a gensokyo, so it is not ours"
+  fi
+  say "  iTerm2's own settings are yours and were never written to; the same for ~/.tmux.conf, ~/.claude and launchd"
 
   # Your rituals, your config, the records of who has been summoned: offered, never assumed.
   if [ "$keep" = 1 ]; then

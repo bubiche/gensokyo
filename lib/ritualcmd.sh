@@ -5,7 +5,8 @@
 # shellcheck shell=bash
 
 RITUAL_USAGE='usage: gensokyo ritual [list [--json]] | add --name n --schedule c --cwd d --prompt-file f [--headless]
-       gensokyo ritual run|enable|disable|edit <name> | log <name> [-n N] | new|remove <name>'
+       gensokyo ritual run|enable|disable|edit <name> | log <name> [-n N] | new|remove <name>
+       gensokyo ritual login [setup | remove]   (start the cockpit at login, so rituals fire)'
 
 # ---------------------------------------------------------------- the bits every verb wants
 # rit_no_such <verb> <name>: the refusal every verb that takes a name shares. find_ritual takes
@@ -160,8 +161,10 @@ rit_open_editor() {
 }
 
 # ---------------------------------------------------------------- the command
-# ritual (schedule) [list|add|run|enable|disable|log|edit|new|remove]: the scheduled work. Alone
-# it lists what is scheduled, which is what the question "what is scheduled?" wants.
+# ritual (schedule) [list|add|run|enable|disable|log|edit|new|remove|login]: the scheduled work.
+# Alone it lists what is scheduled, which is what the question "what is scheduled?" wants.
+# `login` is the odd one out and belongs here anyway: nothing fires while the cockpit is down,
+# so whether it comes up by itself is a fact about the schedule (lib/login.sh).
 cmd_ritual() {
   local sub=list
   if [ $# -gt 0 ]; then sub=$1; shift; fi
@@ -174,6 +177,7 @@ cmd_ritual() {
     log)              ritual_cmd_log "$@" ;;
     edit)             ritual_cmd_edit "$@" ;;
     new)              ritual_cmd_new "$@" ;;
+    login)            cmd_ritual_login "$@" ;;
     -h|--help|help)   say "$RITUAL_USAGE" ;;
     *) die "ritual: nothing called '$sub' to do"$'\n'"$RITUAL_USAGE" ;;
   esac

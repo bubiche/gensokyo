@@ -171,6 +171,8 @@ LIB=$GENSOKYO_HOME/lib
 . "$LIB/telemetry.sh" || exit 1
 # shellcheck source=../lib/iterm.sh
 . "$LIB/iterm.sh" || exit 1
+# shellcheck source=../lib/login.sh
+. "$LIB/login.sh" || exit 1
 # shellcheck source=../lib/release.sh
 . "$LIB/release.sh" || exit 1
 
@@ -241,6 +243,7 @@ cmd_doctor() {
   else
     say "  profile    $(tilde "$v") has another Guid: not gensokyo's, so 'gensokyo iterm' leaves it alone"
   fi
+  say "  at login   $(login_status_line)"
   v=$(command -v gensokyo 2>/dev/null) || v=
   if [ -z "$v" ]; then
     say "  on PATH    no: run ./install.sh to link ~/.local/bin/gensokyo (residents get this copy on PATH either way)"
@@ -297,7 +300,7 @@ close|banish|<name or slot>|ask a resident to /exit; closes a departed pane
 resume|recall|[name or session id] [--json]|bring a departed resident back into a pane; alone: who can be recalled
 list|who|[--json] [--all]|residents: slot, state, name, directory; --all adds other sessions
 broadcast|spell|<card> <who> [--with peer]|cast a spell card at all, awaiting, idle or a resident; alone: the cards there are
-ritual|schedule|list [--json] / <verb> <name>|the scheduled work: what fires when; verbs are add, run, enable, disable, log, edit, new, remove
+ritual|schedule|list [--json] / <verb> <name>|the scheduled work: what fires when; verbs are add, run, enable, disable, log, edit, new, remove, login
 reload|||run the gensokyo code on disk again: options, keys, bar and shrine; residents keep running
 quit|||ask every resident to /exit, then stop the cockpit: the shrine, the clock and the tabs go
 help||[--json]|this list; --json for tools

@@ -28,6 +28,11 @@ export GENSOKYO_SOCKET=gtest$$ GENSOKYO_CLAUDE=$root/tests/stub-claude
 export CLAUDE_CONFIG_DIR=$scratch/cc   # a stand-in ~/.claude: the status line tests need a known settings.json
 export STUB_STATE=$scratch/stub
 export GENSOKYO_ITERM_DIR=$scratch/iterm   # never the real ~/Library/.../DynamicProfiles
+# ... and never the real ~/Library/LaunchAgents, nor the real launchctl: the stand-in writes
+# down what it was asked to do, so the tests can read that instead of loading an agent onto
+# whatever machine is running the suite.
+export GENSOKYO_LAUNCH_DIR=$scratch/launchagents
+export GENSOKYO_LAUNCHCTL=$scratch/fakebin/launchctl
 export HOME=${HOME:-/tmp}
 # Schedules are in local time, so the tests are in one local time: a fixed zone, and one
 # without daylight saving, keeps every asserted fire time the same on this laptop and on
@@ -42,6 +47,11 @@ export EDITOR=: VISUAL=:
 mkdir -p "$scratch/fakebin"
 printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${@: -2:1}" "${@: -1}" >> "%s"\n' "$scratch/notify.log" > "$scratch/fakebin/osascript"
 cp "$scratch/fakebin/osascript" "$scratch/fakebin/notify-send"; chmod +x "$scratch/fakebin"/*
+# The stand-in launchctl: logs its arguments, and answers `print` from a file the test writes,
+# so both "loaded" and "not loaded" can be asked for. 113 is what the real one returns for a
+# service the domain does not hold.
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/launchctl.log"\ncase ${1:-} in print) [ -f "%s/launchctl.loaded" ] || exit 113 ;; esac\nexit 0\n' "$scratch" "$scratch" > "$scratch/fakebin/launchctl"
+chmod +x "$scratch/fakebin/launchctl"
 # The stand-in user status line command: keeps the JSON it was given, prints one known line.
 printf '#!/bin/bash\ncat > "%s/sl.in"; echo "USER LINE"\n' "$scratch" > "$scratch/fakebin/userline"; chmod +x "$scratch/fakebin/userline"
 mkdir -p "$scratch/cc" "$scratch/cc-empty"
@@ -131,13 +141,15 @@ fresh() { rm -rf "$RES_DIR"; mkdir -p "$RES_DIR"; rm -f "$STATE_DIR/quitting"; }
 . "$here/cases/install.sh"
 # shellcheck source=cases/iterm.sh
 . "$here/cases/iterm.sh"
+# shellcheck source=cases/login.sh
+. "$here/cases/login.sh"
 # shellcheck source=cases/smoke.sh
 . "$here/cases/smoke.sh"
 
 case $what in
-  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests ;;
+  unit) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests; login_tests ;;
   smoke) smoke_tests ;;
-  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests; smoke_tests ;;
+  all) core_tests; shrine_tests; hook_tests; telemetry_tests; recall_tests; spellcard_tests; ritual_tests; ritual_run_tests; ritual_cmd_tests; install_tests; iterm_tests; login_tests; smoke_tests ;;
 esac
 printf '\n%s passed, %s failed, %s skipped\n' "$pass" "$fail" "$skipped"
 [ "$fail" -eq 0 ]

@@ -13,20 +13,32 @@
 rel_gensokyo() {
   HOME=$uh GENSOKYO_RELEASE_BASE=file://$rel2 GENSOKYO_SOCKET=$sock \
     GENSOKYO_CONFIG_DIR=$uh/.config/gensokyo GENSOKYO_STATE_DIR=$uh/.local/state/gensokyo \
-    GENSOKYO_ITERM_DIR=$uh/iterm "$uh/bin/gensokyo" "$@" 2>&1
+    GENSOKYO_ITERM_DIR=$uh/iterm GENSOKYO_LAUNCH_DIR=$uh/agents "$uh/bin/gensokyo" "$@" 2>&1
 }
 
 # leftovers <home>: everything gensokyo leaves on a Mac - an unpacked tree, the symlink to it,
-# a config with a ritual in it, a state directory, and gensokyo's own iTerm2 profile.
+# a config with a ritual in it, a state directory, gensokyo's own iTerm2 profile, and the
+# launchd agent that starts the cockpit at login.
 leftovers() {
   local h=$1
-  rm -rf "$h"; mkdir -p "$h/.local/bin" "$h/.config/gensokyo/rituals" "$h/.local/state/gensokyo/residents" "$h/iterm"
+  rm -rf "$h"; mkdir -p "$h/.local/bin" "$h/.config/gensokyo/rituals" "$h/.local/state/gensokyo/residents" "$h/iterm" "$h/Library/LaunchAgents"
   tar -xzf "$dist/$pre-$PLATFORM.tar.gz" -C "$h" && mv "$h/$pre" "$h/.gensokyo"
   ln -sfn "$h/.gensokyo/bin/gensokyo" "$h/.local/bin/gensokyo"
   printf 'PREFIX=C-a\n' > "$h/.config/gensokyo/config"
   : > "$h/.config/gensokyo/rituals/mine.md"
   : > "$h/.local/state/gensokyo/residents/abc"
   cp "$root/share/iterm2/gensokyo.json" "$h/iterm/gensokyo.json"
+  agent_plist "$h/.gensokyo/bin/gensokyo" > "$h/Library/LaunchAgents/$LOGIN_LABEL.plist"
+}
+
+# agent_plist <program>: a login agent naming that program, as lib/login.sh writes one. Written
+# here rather than by login_render so that a plist for somebody *else's* program is one line.
+agent_plist() {
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+    '<plist version="1.0"><dict><key>Label</key><string>'"$LOGIN_LABEL"'</string>' \
+    '<key>ProgramArguments</key><array><string>'"$1"'</string><string>--detach</string></array>' \
+    '<key>RunAtLoad</key><true/></dict></plist>'
 }
 
 # uninstall_sh <home> <args...>: the standalone uninstaller against that home and nothing else.
@@ -34,7 +46,11 @@ leftovers() {
 # find the real one on the real PATH, and this machine's own install is not the test's to touch.
 uninstall_sh() {
   local h=$1; shift
-  env -i PATH=/usr/bin:/bin "HOME=$h" "TMPDIR=${TMPDIR:-/tmp}" "GENSOKYO_ITERM_DIR=$h/iterm" \
+  # $scratch/fakebin comes first for one binary only: launchctl. uninstall.sh names it plainly,
+  # as a POSIX sh script with no install tree to find a seam in must, and a real `bootout` would
+  # take out the login agent of whoever is running the suite.
+  env -i "PATH=$scratch/fakebin:/usr/bin:/bin" "HOME=$h" "TMPDIR=${TMPDIR:-/tmp}" \
+    "GENSOKYO_ITERM_DIR=$h/iterm" "GENSOKYO_LAUNCH_DIR=$h/Library/LaunchAgents" \
     "GENSOKYO_SOCKET=$sock" sh "$root/uninstall.sh" "$@" 2>&1
 }
 
@@ -264,14 +280,17 @@ install_tests() {
     skip "cannot start a tmux server on socket $sock"
   fi
 
-  t "uninstall --keep-data takes the link and the profile and leaves the data and the tree"
-  mkdir -p "$uh/iterm"
+  t "uninstall --keep-data takes the link, the profile and the login agent, and leaves the data"
+  mkdir -p "$uh/iterm" "$uh/agents"
   cp "$root/share/iterm2/gensokyo.json" "$uh/iterm/gensokyo.json"
+  agent_plist "$uh/.gensokyo/bin/gensokyo" > "$uh/agents/$LOGIN_LABEL.plist"
   out=$(rel_gensokyo uninstall --keep-data)
   assert_match "$out" "gensokyo $ver2 in ~/.gensokyo"
   assert_match "$out" 'removed the link ~/bin/gensokyo'
   assert_match "$out" 'removed the iTerm2 profile ~/iterm/gensokyo.json'
   assert_match "$out" 'kept ~/.config/gensokyo and ~/.local/state/gensokyo (--keep-data)'
+  assert_match "$out" 'removed the login agent ~/agents/'
+  assert_fails test -e "$uh/agents/$LOGIN_LABEL.plist"
   assert_match "$out" 'never written to'
   assert_fails test -e "$uh/bin/gensokyo"
   assert_fails test -e "$uh/iterm/gensokyo.json"
@@ -309,6 +328,9 @@ install_tests() {
   t "uninstall.sh carries the same profile Guid as lib/iterm.sh, or it would leave the profile"
   assert_eq "$(sed -n 's/^GUID=//p' "$root/uninstall.sh")" "$ITERM_GUID"
 
+  t "uninstall.sh carries the same agent label as lib/login.sh, or it would leave the agent"
+  assert_eq "$(sed -n 's/^LABEL=//p' "$root/uninstall.sh")" "$LOGIN_LABEL"
+
   t "uninstall.sh with no arguments says what is there and deletes none of it"
   local uh2=$scratch/leftovers
   leftovers "$uh2"
@@ -319,14 +341,20 @@ install_tests() {
   assert_match "$out" 'found  iTerm2 profile: ~/iterm/gensokyo.json'
   assert_match "$out" 'found  config and rituals: ~/.config/gensokyo'
   assert_match "$out" 'found  records, journal and run logs: ~/.local/state/gensokyo'
+  assert_match "$out" 'found  login agent: ~/Library/LaunchAgents/'
   assert_match "$out" 'nothing was deleted. Add --yes'
   assert_match "$out" 'Claude Code, its settings and its sessions are untouched'
   assert_ok test -x "$uh2/.gensokyo/bin/gensokyo"
   assert_ok test -f "$uh2/.config/gensokyo/rituals/mine.md"
   assert_ok test -f "$uh2/iterm/gensokyo.json"
+  assert_ok test -f "$uh2/Library/LaunchAgents/$LOGIN_LABEL.plist"
 
-  t "uninstall.sh --yes removes the five, and says so on a home with nothing left"
+  t "uninstall.sh --yes removes the six, and says so on a home with nothing left"
   out=$(uninstall_sh "$uh2" --yes)
+  assert_match "$out" 'removed  login agent: ~/Library/LaunchAgents/'
+  assert_fails test -e "$uh2/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  # Out of launchd before off the disk, or launchd holds the job until the next login.
+  assert_match "$(cat "$scratch/launchctl.log")" "bootout gui/$(id -u)/$LOGIN_LABEL"
   assert_match "$out" 'removed  link: ~/.local/bin/gensokyo'
   assert_match "$out" 'removed  install tree: ~/.gensokyo'
   assert_match "$out" 'removed  iTerm2 profile: ~/iterm/gensokyo.json'
@@ -348,6 +376,17 @@ install_tests() {
   assert_ok test -f "$uh2/.config/gensokyo/rituals/mine.md"
   assert_ok test -f "$uh2/.local/state/gensokyo/residents/abc"
   assert_fails test -e "$uh2/.gensokyo"
+
+  t "uninstall.sh leaves alone an agent at that label that does not run a gensokyo"
+  leftovers "$uh2"
+  agent_plist /usr/bin/true > "$uh2/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  : > "$scratch/launchctl.log"
+  out=$(uninstall_sh "$uh2" --yes)
+  assert_match "$out" 'left alone  ~/Library/LaunchAgents/'
+  assert_match "$out" 'does not run a gensokyo'
+  assert_ok test -f "$uh2/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  assert_eq "$(cat "$scratch/launchctl.log")" ''   # never told launchd anything about it either
+  assert_match "$out" 'done.'                      # and the rest of the uninstall still ran
 
   t "uninstall.sh leaves alone a profile with another Guid, a gensokyo that is a real file, and a --dir that is not one"
   leftovers "$uh2"

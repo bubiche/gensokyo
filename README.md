@@ -29,7 +29,8 @@ setting, or any other iTerm2 preference.
 `gensokyo iterm setup` is the one file gensokyo may add: a *dynamic profile* named "gensokyo" in
 `~/Library/Application Support/iTerm2/DynamicProfiles/`, which iTerm2 picks up the moment it is
 written. It inherits everything — font, colours, keys — from your default profile and adds one
-thing to it, the status bar with the two components that show gensokyo's chips and your usage.
+thing to it, the status bar: one component for the chips, and one that holds only the residents
+who need you, drawn in gensokyo's gold so that it is the part of the bar your eye goes to.
 Start the cockpit from a tab using that profile (Profiles menu, or set it as the default) and
 the chips appear. `gensokyo iterm remove` deletes the file again; both refuse to touch a
 `gensokyo.json` they did not write.
@@ -346,6 +347,38 @@ a run nobody is there to answer just waits with a gold chip until you look at it
 Claude Code has never been trusted in is refused with the reason, because a run that stops at
 that dialog is alive - and would make every later fire skip itself as "still going".
 
+### Firing on a day you never opened a terminal
+
+Nothing fires while the cockpit is down: the clock that checks the schedules is a process in the
+tmux server, so a ritual set for nine in the morning wants gensokyo already running at nine. That
+is what `gensokyo --detach` is for - the server and the clock, no window, no attach - and this is
+how to have it run without remembering to:
+
+```sh
+gensokyo ritual login setup    # launchd starts the cockpit when you log in
+gensokyo ritual login          # whether it is on, which copy it starts, and what it last said
+gensokyo ritual login remove   # stop it; a cockpit already running keeps running
+```
+
+`setup` writes one launch agent of gensokyo's own to
+`~/Library/LaunchAgents/io.github.bubiche.gensokyo.plist` and hands it to launchd, which runs it
+then and there - so you find out it works now rather than at your next login. `gensokyo
+uninstall` and `uninstall.sh` take it away again, and launchd's own configuration is never
+touched. Anything the agent says goes to `login.log` in the state directory, which
+`gensokyo ritual login` reads back to you, and `gensokyo doctor` has a line for it.
+
+Two things are worth knowing. A login agent runs with almost no `PATH`
+(`/usr/bin:/bin:/usr/sbin:/sbin`), and `claude` is not on it, so `setup` records the `PATH` you
+ran it with and the agent uses that - meaning a `claude` that later moves somewhere your shell
+finds a different way wants a `setup` again. And there is one agent per Mac, not one per copy of
+gensokyo: two would race for the same tmux socket at login, so setting up from a second copy
+replaces the first. `gensokyo ritual login` always prints the copy in the agent, which is not
+necessarily the one you asked.
+
+This is still a machine that has to be awake and logged in. Rituals that must fire whatever the
+lid is doing belong in Claude Code's own `/schedule` cloud routines; `catch_up` covers a laptop
+that slept through one.
+
 ## When a resident needs you
 
 Every resident is launched with `--settings` carrying a few hooks (they merge with the user's
@@ -399,11 +432,18 @@ rate, cost, and on Pro/Max/Team accounts the 5-hour and weekly usage); gensokyo 
 report per resident under its state directory and shows it everywhere:
 
 - **Chips**: `1 ✦ Reimu Sonnet 42%`, model and context used. In iTerm2's status bar (left),
-  where a resident who needs you comes first; row 1 of the tmux bar under `--tty`, where it
-  turns gold instead. They follow a hook at once and are refreshed every three seconds.
+  where a resident who needs you comes first; row 1 of the tmux bar under `--tty`, where the
+  chip itself turns gold. They follow a hook at once and are refreshed every three seconds.
+- **Needs you**: `✦ Reimu · ✧ Marisa needs you`, in iTerm2's second status bar component and
+  in gold — the one thing in the bar with a colour of its own. An iTerm2 component's colour
+  covers all of its text, so the only way to say one thing more loudly than the rest is to give
+  it a component to itself; when nobody is waiting it holds nothing and no gold appears. Under
+  `--tty` there is no such thing: the chip is already gold there, with a `✦ 2` count at the
+  right of row 1. The colour is `COLOR_AWAIT` from your config, read when the profile is
+  written — change it and run `gensokyo iterm setup` again.
 - **Usage**: the account-wide numbers from the newest report,
-  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts), at the
-  right of iTerm2's status bar, or of row 2 under `--tty`.
+  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts), after the
+  chips in iTerm2's status bar, or at the right of row 2 under `--tty`.
 - **The shrine tab**: gensokyo's own first tab draws a line per resident - slot, state, name,
   directory, branch, the same telemetry as the border, and what a resident who needs you is
   waiting for. It redraws every three seconds and the moment a hook has news. Click a resident

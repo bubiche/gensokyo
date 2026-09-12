@@ -148,7 +148,7 @@ smoke_tests() {
   assert_eq "$(tm show -gv status)" on
   assert_nomatch "$(tm show -g status-format)" '_bar 1'
   assert_match "$(tm show -g status-format)" 'status-left'   # tmux's own format, which draws what we push
-  assert_eq "$(tm show -gv status-left-length)" 200
+  assert_eq "$(tm show -gv status-left-length)" 1000   # chips + ritual + usage in one string
   apply_status tty                    # the plain client gets the two rows gensokyo draws
   assert_eq "$(tm show -gv status)" 2
   assert_match "$(tm show -g status-format)" '_bar 1'
@@ -224,9 +224,13 @@ smoke_tests() {
   assert_match "$out" '#[align=right]#[bg='"$CFG_COLOR_AWAIT"',fg=black] ✦ 1 '
 
   t "smoke: the same chips in plain text, where the one who needs you comes first instead"
-  assert_eq "$("$G" _bar 1 "$pane1" plain)" ' 2 ✦ Beta │ 1 ○ Alpha   ✦ 1 '
+  assert_eq "$("$G" _bar 1 "$pane1" plain)" ' 2 ✦ Beta │ 1 ○ Alpha '
+  # iTerm2's second component is the gold one, so it holds the residents that need you by name
+  # and nothing else: no count in row 1 any more, and nothing at all when nobody is waiting.
+  assert_eq "$("$G" _bar 2 '' plain)" '✦ Beta needs you '
   rm -f "$STUB_STATE/$id2.status"; rm -f "$REGISTRY"
   assert_eq "$("$G" _bar 1 "$pane1" plain)" ' 1 ○ Alpha │ 2 ○ Beta '
+  assert_eq "$("$G" _bar 2 '' plain)" ''
   assert_match "$("$G" _border "$pane1" '✳ Alpha')" ' 1 Alpha · alpha '
 
   t "smoke: a Stop hook turns the chip gold, rings the bell and alerts the desktop; typing clears it"
@@ -294,14 +298,10 @@ null'
     done
     assert_match "$out" ' 1 ○ Alpha Sonnet 5%% '   # the percent doubled, so tmux hands iTerm2 one
     assert_nomatch "$out" '#['                     # one style would blank the whole bar
-    # status-right gets the same wait as status-left above: the clock writes the two in one
-    # pass, but the pass itself can land after the loop that was watching only the left.
-    for _ in 1 2 3 4 5 6 7 8; do
-      out=$(tm show -gv status-right)
-      case $out in *'36%% ↻'*) break ;; esac
-      pause 0.5
-    done
+    # The usage rides along in status-left now, so it is in the string the loop above waited
+    # for - and status-right is empty until somebody needs you, which nobody does here.
     assert_match "$out" '36%% ↻'
+    assert_eq "$(tm show -gv status-right)" ''
     assert_match "$("$G" doctor)" 'clock      ticking'
 
     t "smoke: a hook moves the chip within a second, without waiting for the next tick"
@@ -312,7 +312,14 @@ null'
       pause 0.25
     done
     assert_match "$out" ' 1 ✦ Alpha'
-    assert_match "$out" '  ✦ 1 '
+    assert_nomatch "$out" '✦ 1 '            # the count moved out of this row
+    # ... into the component of its own, which is the one iTerm2 draws in the await colour.
+    for _ in 1 2 3 4; do
+      out=$(tm show -gv status-right)
+      case $out in *'needs you'*) break ;; esac
+      pause 0.25
+    done
+    assert_eq "$out" '✦ Alpha needs you '
 
     t "smoke: and the tab title with it, so the tab bar says who needs you"
     assert_eq "$(tm display -p -t "$pane1" '#{window_name}')" '1 ✦ Alpha'
@@ -780,7 +787,7 @@ null'
   # for: the clock skips its render while nothing is attached, and nothing is attached to this
   # detached cockpit.
   push_bar
-  assert_match "$(tm show -gv status-right)" '⏲ 04:00 by-hand'
+  assert_match "$(tm show -gv status-left)" '⏲ 04:00 by-hand'
   # The stamp the sweep would have written for a minute that has not come round yet: a hand run
   # must not spend it, or the 04:00 fire would skip itself.
   ritual_stamp_set by-hand 1788000000; stamp=$(ritual_stamp by-hand)

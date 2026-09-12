@@ -101,17 +101,54 @@ EOF
 cmd__bar() {   # cmd__bar <row 1|2> [active pane] [styled|plain]
   local right rit
   case $1 in
-    1) bar_chips "${2:-}" "${3:-styled}" ;;
-    2)
-      right=$(usage_text)
-      rit=$(bar_ritual_text)
+    1)
       if [ "${3:-styled}" = plain ]; then
-        printf '%s%s' "${rit:+$rit   }" "$right"
+        # Everything except the one thing that has to stand out: iTerm2's row 2 is a component
+        # of its own and carries the gold, so the chips take the ritual and the usage with them
+        # rather than giving up a surface for them.
+        right=$(usage_text)
+        rit=$(bar_ritual_text)
+        printf '%s%s%s' "$(bar_chips "${2:-}" plain)" "${rit:+   $rit}" "${right:+   $right}"
       else
+        bar_chips "${2:-}" styled
+      fi ;;
+    2)
+      if [ "${3:-styled}" = plain ]; then
+        bar_awaiting
+      else
+        right=$(usage_text)
+        rit=$(bar_ritual_text)
         printf ' ⛩ %s   %s%s %s' "$(date +%H:%M)" "$(legend_text)" "${rit:+ · $rit}" \
           "${right:+#[align=right]$right }"
       fi ;;
   esac
+  return 0
+}
+
+# bar_awaiting: who needs you, by name, and nothing at all when nobody does. This is the whole
+# content of iTerm2's second status bar component, which is the one drawn in the await colour -
+# a component's colour covers all of its text, so the only way to have gold mean something is
+# for the component to hold nothing but the residents it is about. Empty is the common case and
+# has to cost nothing: empty text in the default background is invisible whatever iTerm2 does
+# with an empty component, which is why the colour is the text's and not the background's.
+#
+# The plain tmux client never reads this (it draws `status-format` itself, in style, where the
+# chip is already gold), so this text is iTerm2's alone.
+bar_awaiting() {
+  local rows out='' slot id name state rest
+  prune_records
+  load_registry
+  rows=$(resident_rows)
+  [ -n "$rows" ] || return 0
+  while IFS='|' read -r slot id name state rest; do
+    [ -n "$slot" ] || continue
+    case $state in
+      waiting|question) out="${out:+$out · }$(glyph_for "$state") ${name:0:14}" ;;
+    esac
+  done <<EOF
+$rows
+EOF
+  printf '%s' "${out:+$out needs you }"
   return 0
 }
 
@@ -170,8 +207,8 @@ EOF
   out="$first$out"
   n=$(outsider_count)
   if [ "$style" = plain ]; then
-    [ "$waiting" -gt 0 ] && right="✦ $waiting "
-    [ "$n" -gt 0 ] && right="$right+$n outside "
+    # No ✦ count here: in iTerm2 that is row 2, on its own and in its own colour (bar_awaiting).
+    [ "$n" -gt 0 ] && right="+$n outside "
     printf '%s%s' "${out%│}" "${right:+  $right}"
   else
     [ "$waiting" -gt 0 ] && right="#[bg=$CFG_COLOR_AWAIT,fg=black] ✦ $waiting #[default] "

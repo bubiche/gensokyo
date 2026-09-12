@@ -51,6 +51,35 @@ cmd_iterm() {
   esac
 }
 
+# ---------------------------------------------------------------- the await colour
+# The second status bar component holds the residents that need you and nothing else, and it is
+# drawn in this colour: a component's colour covers all of its text, so a component per signal
+# is the only way iTerm2 will say one thing more loudly than another. It is the text's colour
+# and not the background's on purpose - when nobody is waiting the component is empty, and empty
+# text is invisible whatever iTerm2 does with an empty component, where an empty gold *panel*
+# would depend on a rendering rule gensokyo cannot check from here.
+ITERM_AWAIT_DEFAULT=#f1c40f
+
+# iterm_await_color: CFG_COLOR_AWAIT when it is six hex digits, the shipped gold otherwise.
+# ~/.config/gensokyo/config is the user's own text and reaches this as it was typed; the same
+# precedent as a profile name that cannot go in a JSON string (iterm_default_profile).
+iterm_await_color() {
+  local c=${CFG_COLOR_AWAIT:-$ITERM_AWAIT_DEFAULT}
+  case $c in
+    '#'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+    *) c=$ITERM_AWAIT_DEFAULT ;;
+  esac
+  printf '%s' "$c"
+}
+
+# iterm_rgb <#rrggbb>: the three sRGB components iTerm2 stores a colour as, one per line,
+# each between 0 and 1.
+iterm_rgb() {
+  local h=${1#\#}
+  awk -v r="$((16#${h:0:2}))" -v g="$((16#${h:2:2}))" -v b="$((16#${h:4:2}))" \
+    'BEGIN { printf "%.6f\n%.6f\n%.6f\n", r / 255, g / 255, b / 255 }'
+}
+
 # iterm_render <parent profile>: the profile file as it is installed. The template ships with
 # everything but the parent, which is the user's own default profile and so cannot be shipped:
 # a dynamic profile inherits every key it does not name from `Dynamic Profile Parent Name`, and
@@ -58,10 +87,20 @@ cmd_iterm() {
 # other tabs. A profile can be named anything at all, so the name is escaped twice on its way
 # in - first for the JSON string it becomes, then for the sed replacement that puts it there -
 # and a name with a quote or a backslash in it comes out of iTerm2 again exactly as it went in.
+#
+# The colour placeholders carry their quotes into the pattern and leave without them: iTerm2
+# wants three numbers there, not three strings.
 iterm_render() {
-  local repl
+  local repl rgb r g b
   repl=$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[\\&|]/\\&/g')
-  sed "s|PARENT_PLACEHOLDER|$repl|" "$SHARE/iterm2/gensokyo.json"
+  rgb=$(iterm_rgb "$(iterm_await_color)")
+  r=$(printf '%s' "$rgb" | sed -n 1p)
+  g=$(printf '%s' "$rgb" | sed -n 2p)
+  b=$(printf '%s' "$rgb" | sed -n 3p)
+  sed -e "s|PARENT_PLACEHOLDER|$repl|" \
+      -e "s|\"AWAIT_R_PLACEHOLDER\"|$r|" \
+      -e "s|\"AWAIT_G_PLACEHOLDER\"|$g|" \
+      -e "s|\"AWAIT_B_PLACEHOLDER\"|$b|" "$SHARE/iterm2/gensokyo.json"
 }
 
 # iterm_default_profile: the name of the profile iTerm2 opens new tabs with, which is what the

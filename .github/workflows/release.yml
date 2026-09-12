@@ -55,14 +55,15 @@ jobs:
           [ "$GITHUB_REF_TYPE" = tag ] || version=$(sed -n 's/^VERSION=//p' bin/gensokyo | head -n 1)
           scripts/release.sh --version "$version" --no-fetch
           ls -l dist/
-          shasum -a 256 -c dist/SHA256SUMS
+          # SHA256SUMS lists basenames, so it only verifies from inside dist/.
+          ( cd dist && shasum -a 256 -c SHA256SUMS )
 
       - name: the packaged copy installs and reports itself
         run: |
           version=$(cat dist/VERSION)
           home=$(mktemp -d)
           tar -xzf "dist/gensokyo-$version-macos-arm64.tar.gz" -C "$home"
-          ( cd "$home/gensokyo-$version" && ./install.sh --bin-dir "$home/bin" --no-fetch )
+          ( cd "$home/gensokyo-$version" && HOME=$home ./install.sh --bin-dir "$home/bin" --no-fetch )
           HOME=$home GENSOKYO_STATE_DIR=$home/state GENSOKYO_CONFIG_DIR=$home/config \
             GENSOKYO_ITERM_DIR=$home/iterm "$home/bin/gensokyo" doctor
 

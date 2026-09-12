@@ -15,7 +15,7 @@
 # shellcheck source-path=SCRIPTDIR   # `shellcheck -x` then follows the lib/*.sh sources below
 set -u
 
-VERSION=0.1.0-dev
+VERSION=0.1.0
 
 # ---------------------------------------------------------------- where am I
 real_path() {   # follow symlinks to the real file (readlink -f is not on macOS bash 3.2 systems)

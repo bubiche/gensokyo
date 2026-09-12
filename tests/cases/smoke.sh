@@ -294,7 +294,14 @@ null'
     done
     assert_match "$out" ' 1 ○ Alpha Sonnet 5%% '   # the percent doubled, so tmux hands iTerm2 one
     assert_nomatch "$out" '#['                     # one style would blank the whole bar
-    assert_match "$(tm show -gv status-right)" '36%% ↻'
+    # status-right gets the same wait as status-left above: the clock writes the two in one
+    # pass, but the pass itself can land after the loop that was watching only the left.
+    for _ in 1 2 3 4 5 6 7 8; do
+      out=$(tm show -gv status-right)
+      case $out in *'36%% ↻'*) break ;; esac
+      pause 0.5
+    done
+    assert_match "$out" '36%% ↻'
     assert_match "$("$G" doctor)" 'clock      ticking'
 
     t "smoke: a hook moves the chip within a second, without waiting for the next tick"

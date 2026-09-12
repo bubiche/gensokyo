@@ -63,18 +63,22 @@ bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: 
 bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
 tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
                                      # the harness lives there, the tests in tests/cases/*.sh
+                                     # about 4 minutes, and SILENT until the end unless you pass -v:
+                                     # only failures print, so no output means nothing has failed yet.
+                                     # run one at a time - two at once fight over the same tmux sockets
 scripts/release.sh --out /tmp/x      # build the release tarballs from this checkout (--help for the rest)
 ```
 
 Cutting a release: bump `VERSION` in `bin/gensokyo`, commit, then `git tag v0.1.0` and
 `git push --tags`. The tag runs `.github/workflows/release.yml` on a macOS runner — shellcheck,
-`bash -n`, the whole test suite, and the vendored binaries downloaded and verified against their
-pins — then `scripts/release.sh` builds the three tarballs and the run publishes them with
-`SHA256SUMS`, a one-line `VERSION` and `install.sh` as release assets. The `VERSION` asset is
+`bash -n`, and the vendored binaries downloaded and verified against their pins — then
+`scripts/release.sh` builds the three tarballs and the run publishes them with `SHA256SUMS`,
+a one-line `VERSION` and `install.sh` as release assets. The `VERSION` asset is
 how `curl | sh` and `gensokyo update` find the newest release: GitHub serves
 `releases/latest/download/VERSION` for whatever release is newest, so neither has to ask the
 API, which rate-limits by address. Running the workflow by hand (`workflow_dispatch`) does the
-checks and publishes nothing.
+checks and publishes nothing. The suite is not part of the job, because it starts real tmux
+servers and wants a quiet machine: run `tests/run.sh` yourself before tagging.
 
 ## Installing
 

@@ -127,7 +127,9 @@ write_entry "$id" "$name" '"idle"'
 esc=$(printf '\033')
 leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$id.json"; }
 trap leave EXIT
-trap : INT
+# Ignored, not trapped: bash 3.2 can lose the last character of every later line when a trapped
+# SIGINT lands as `read` starts. The tty still throws away a half-typed line on Ctrl-C.
+trap '' INT
 case ${STUB_HUP:-exit} in
   exit) trap 'exit 129' HUP ;;
   ignore) trap : HUP ;;

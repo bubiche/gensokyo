@@ -1,0 +1,8 @@
+text "h"
+reply osc10 "\e]10;rgb:ffff/ffff/ffff\e\\"
+text "i"
+reply osc11 "\e]11;rgb:0000/0000/0000\x07"
+reply osc11 "\e]11;rgb:1e1e/1e1e/1e1e\e\\"
+text "j"
+reply osc11 "\e]11;rgb:2e2e/2e2e/2e2e\x07"
+text "k"

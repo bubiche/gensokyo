@@ -1,0 +1,17 @@
+key "\e[13;2u" 13+shift
+key "\e[13u" 13
+key "\e[99;5u" 99+ctrl
+key "\e[13;3u" 13+alt
+key "\e[13;2:3u" 13+shift release
+key "\e[13;2:2u" 13+shift repeat
+key "\e[97;1:1;97u" 97
+key "\e[13;2u" 13+shift
+key "\r" 13
+key "\x03" 99+ctrl
+key "\e\r" 13+alt
+key "\x7f" 127
+key "\t" 9
+key "\e[A"
+key "\e[1;2A"
+key "\eOP"
+key "\e[27;2;13~" 13+shift

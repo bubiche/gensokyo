@@ -1,0 +1,5 @@
+# libghostty-vt-sys builds Ghostty with Zig from GHOSTTY_SOURCE_DIR. Run scripts/ghostty.sh
+# first to fetch the pinned source. Zig's package cache stays under target/.
+[env]
+GHOSTTY_SOURCE_DIR = { value = "vendor/ghostty-739603b8a", relative = true }
+ZIG_GLOBAL_CACHE_DIR = { value = "target/zig-global", relative = true }

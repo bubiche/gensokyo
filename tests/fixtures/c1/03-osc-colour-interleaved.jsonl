@@ -1,0 +1,12 @@
+{"ev":"start","t":0.0,"argv":["c1","03-osc-colour-interleaved"],"env":{},"cols":200,"rows":60}
+{"ev":"out","t":0.0,"b":"G10xMDs/G1wbXTExOz8bXA=="}
+{"ev":"in","t":1.0,"b":"aA=="}
+{"ev":"in","t":2.0,"b":"G10xMDtyZ2I6ZmZmZi9mZmZmL2ZmZmYbXGk="}
+{"ev":"in","t":3.0,"b":"G10xMTtyZ2I6MDAwMC8="}
+{"ev":"in","t":4.0,"b":"MDAwMC8wMDAwBw=="}
+{"ev":"out","t":10.0,"b":"G10xMTs/Bw=="}
+{"ev":"in","t":11.0,"b":"G10xMTtyZ2I6MWUxZS8xZTFlLzFlMWUb"}
+{"ev":"in","t":12.0,"b":"XGo="}
+{"ev":"out","t":20.0,"b":"G10xMTs/Bw=="}
+{"ev":"in","t":21.0,"b":"Gw=="}
+{"ev":"in","t":60.0,"b":"XTExO3JnYjoyZTJlLzJlMmUvMmUyZQdr"}

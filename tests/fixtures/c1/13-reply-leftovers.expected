@@ -1,0 +1,5 @@
+reply other "\e[?62;22c"
+reply other "\eP>|iTerm2 3.6.6\e\\"
+reply other "\e[?2026;2$y"
+dropped "\e]11;rgb:00"
+text "q"

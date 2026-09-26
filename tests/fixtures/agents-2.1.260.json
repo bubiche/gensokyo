@@ -1,0 +1,56 @@
+[
+  {
+    "pid": 74525,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788529967524,
+    "sessionId": "ed82e343-81ce-4b9e-8fdb-9b32d8136a5c",
+    "name": "Marisa",
+    "status": "idle"
+  },
+  {
+    "pid": 85270,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788530130342,
+    "sessionId": "f2fe56c9-466e-4333-bed0-4a89460dd0b8",
+    "name": "Sakuya",
+    "status": "idle"
+  },
+  {
+    "pid": 7150,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788530402884,
+    "sessionId": "e2fe79d7-189f-4692-853f-d173c335e50d",
+    "name": "Alice",
+    "status": "idle"
+  },
+  {
+    "pid": 16520,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788530525914,
+    "sessionId": "22cfde1b-57b6-437c-a25a-b71d2056c597",
+    "name": "Alice2",
+    "status": "idle"
+  },
+  {
+    "pid": 22369,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788530597936,
+    "sessionId": "5dd4d24a-46c6-40b0-8a3b-5364fb885496",
+    "name": "Reisen",
+    "status": "idle"
+  },
+  {
+    "pid": 24883,
+    "cwd": "/private/tmp/claude-501/-Users-someone-dev-gensokyo/7414e947-060b-479f-bb5a-2060a2d5009b/scratchpad/spike/proj",
+    "kind": "interactive",
+    "startedAt": 1788530630579,
+    "sessionId": "3126f897-606d-493b-a822-31e98ea80218",
+    "name": "Youmu",
+    "status": "idle"
+  }
+]

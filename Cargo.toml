@@ -1,0 +1,12 @@
+[package]
+name = "gensokyo"
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Built from the Ghostty source scripts/ghostty.sh fetches; see .cargo/config.toml.
+libghostty-vt = { version = "=0.2.1", default-features = false }
+
+[profile.release]
+strip = true

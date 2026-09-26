@@ -1,0 +1,4 @@
+focus in "\e[I"
+text "a"
+focus out "\e[O"
+focus in "\e[I"

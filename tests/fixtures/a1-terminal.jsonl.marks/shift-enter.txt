@@ -1,0 +1,58 @@
+✻ Crunched for 2s · done 10:42 PM
+
+❯ /tui fullscreen                                                                                                                                                                                       
+
+✻ Stewing… 
+  ⎿  Tip: Run claude --continue or claude --resume to resume a conversation
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5 → ⚖ Opus] scratch_repo  ▓▓▓░░░░░░░ 31%  ⎇ main  ⚡99% cached/turn  $0.0934
+  5h ▓░░░░░░░░░ 16% (↻4h17m)   wk ▓▓▓▓▓░░░░░ 55% (↻17h17m)
+  ⏸ manual mode on · ← for agents
+▗ ▗   ▖ ▖  Claude Code v2.1.282
+           Haiku 4.5 · Claude Team
+ ▘▘   ▝▝   ~/dev/scratch_repo
+
+  Switched back to the classic renderer
+
+
+❯ Use the Bash tool to run exactly this command: python3 -c 'print(40+2)'                                                                                                                               
+
+⏺ Bash(python3 -c 'print(40+2)')
+  ⎿  42
+
+⏺ The command executed successfully and output 42.
+
+✻ Crunched for 4s · done 10:42 PM
+
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: do I prefer red or blue? Then repeat my answer.                                                                                 
+
+⏺ User answered Claude's questions:
+  ⎿  · Do you prefer red or blue? → Red
+
+⏺ You answered Red — you prefer the color red!
+
+✻ Baked for 4s · done 10:42 PM
+
+❯ Without using any tools, reply with only a markdown table of 3 rows, columns Word, Emoji, Meaning, using the Japanese words 日本語, 東京 and 寿司 and emoji like 🎉 and 🍣.                           
+
+⏺ ┌────────┬───────┬───────────────────┐
+  │  Word  │ Emoji │      Meaning      │
+  ├────────┼───────┼───────────────────┤
+  │ 日本語 │ 🗣️     │ Japanese language │
+  ├────────┼───────┼───────────────────┤
+  │ 東京   │ 🗼    │ Tokyo             │
+  ├────────┼───────┼───────────────────┤
+  │ 寿司   │ 🍣    │ Sushi             │
+  └────────┴───────┴───────────────────┘
+
+✻ Crunched for 2s · done 10:42 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ← for agents                                                                                                 
+
+

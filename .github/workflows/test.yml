@@ -1,0 +1,34 @@
+# cargo test on macOS, including the libghostty-vt runtime smoke test (tests/ghostty_smoke.rs):
+# the binding's C API can drift from the vendored Ghostty without any build error.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version comes from .tool-versions; there is no rust-toolchain.toml on purpose.
+      - name: rust
+        run: |
+          v=$(awk '$1 == "rust" { print $2 }' .tool-versions)
+          rustup toolchain install "$v" --profile minimal
+          rustup default "$v"
+
+      # Exactly 0.16.0, the Zig the pinned Ghostty's build.zig is written for; Zig's build API
+      # changes between minor versions.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: ghostty source
+        run: scripts/ghostty.sh
+
+      - name: cargo test
+        run: cargo test --locked

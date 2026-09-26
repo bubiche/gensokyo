@@ -1,0 +1,58 @@
+
+▗ ▗   ▖ ▖  Claude Code v2.1.282
+           Haiku 4.5 · Claude Team
+ ▘▘   ▝▝   ~/dev/scratch_repo
+
+  ✔ Using flicker-free rendering · if you want to go back, use /tui default
+    · Click to move your cursor in the text input
+    · Click to expand collapsed tool results
+    · By default, text auto-copies when you select it (/config to change)
+    · Hold Fn while selecting to use your terminal's native copy instead
+
+
+❯ Use the Bash tool to run exactly this command: python3 -c 'print(40+2)'                                                                                                                               
+
+  Ran 1 shell command 
+
+⏺ The command executed successfully and output 42.
+
+✻ Crunched for 4s · done 10:42 PM
+
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: do I prefer red or blue? Then repeat my answer.                                                                                 
+
+⏺ User answered Claude's questions:
+  ⎿  · Do you prefer red or blue? → Red
+
+⏺ You answered Red — you prefer the color red!
+
+✻ Baked for 4s · done 10:42 PM
+
+❯ Without using any tools, reply with only a markdown table of 3 rows, columns Word, Emoji, Meaning, using the Japanese words 日本語, 東京 and 寿司 and emoji like 🎉 and 🍣.                           
+
+⏺ ┌────────┬───────┬───────────────────┐
+  │  Word  │ Emoji │      Meaning      │
+  ├────────┼───────┼───────────────────┤
+  │ 日本語 │ 🗣️     │ Japanese language │
+  ├────────┼───────┼───────────────────┤
+  │ 東京   │ 🗼    │ Tokyo             │
+  ├────────┼───────┼───────────────────┤
+  │ 寿司   │ 🍣    │ Sushi             │
+  └────────┴───────┴───────────────────┘
+
+✻ Crunched for 2s · done 10:42 PM
+
+
+
+
+
+
+
+
+
+                                                                                                                                  Advisor Tool (experimental) is on and may use more tokens · /advisor
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏸ manual mode on · ← for agents
+

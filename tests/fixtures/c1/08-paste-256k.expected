@@ -1,0 +1,2 @@
+paste len=262144 head="abcdefghijklm\eop" tail="ijklmn\rpqrstuvwx"
+text "z"

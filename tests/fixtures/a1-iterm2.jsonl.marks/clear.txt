@@ -1,0 +1,166 @@
+Last login: Fri Sep 25 22:33:08 on ttys021 
+➜  gensokyo git:(main) cd ~/dev/scratch_repo && clear && /Users/someone/dev/gensokyo-spike/target/a/release/record --out /Users/someone/dev/gensokyo/spikes/rebuild-spike/fixtures/a1-iterm2.jsonl --ctl
+ /Users/someone/dev/gensokyo/spikes/rebuild-spike/fixtures/.a1-iterm2.ctl -- /Users/someone/dev/gensokyo/spikes/rebuild-spike/bin/claude-clean 
+ ▐▛███▛█   Claude Code v2.1.282 
+▝▜██████▀  Haiku 4.5 · Claude Team 
+ ▝▝   ▝▝   ~/dev/scratch_repo 
+ 
+ 
+❯ Use the Bash tool to run ls in the current directory.                                                                                                                                                 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The directory appears to be empty. Let me check if there are any hidden files: 
+ 
+ 
+ 
+❯ Use the Bash tool to run ls in the current directory.                                                                                                                                                 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The directory appears to be empty. Let me check if there are any hidden files: 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The /Users/someone/dev/scratch_repo directory is a git repository with no regular files. It only contains hidden directories: 
+  - .claude/ — Claude Code configuration 
+  - .git/ — Git repository metadata 
+ 
+  This is an empty git repository ready for work. 
+ 
+✻ Cogitated for 7s · done 10:33 PM 
+ 
+❯ Use the Bash tool to run exactly this command: python3 -c 'print(40+2)'                                                                                                                               
+ 
+⏺ Bash(python3 -c 'print(40+2)') 
+  ⎿  42 
+ 
+⏺ The command executed successfully and printed 42. 
+ 
+❯ Use the Bash tool to run ls in the current directory.                                                                                                                                                 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The directory appears to be empty. Let me check if there are any hidden files: 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The /Users/someone/dev/scratch_repo directory is a git repository with no regular files. It only contains hidden directories: 
+  - .claude/ — Claude Code configuration 
+  - .git/ — Git repository metadata 
+ 
+  This is an empty git repository ready for work. 
+ 
+✻ Cogitated for 7s · done 10:33 PM 
+ 
+❯ Use the Bash tool to run exactly this command: python3 -c 'print(40+2)'                                                                                                                               
+ 
+⏺ The command executed successfully and printed 42. 
+ 
+✻ Cooked for 3s · done 10:34 PM 
+ 
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: do I prefer red or blue? Then repeat my answer.                                                                                 
+ 
+⏺ User answered Claude's questions: 
+  ⎿  · Do you prefer red or blue? → Red 
+ 
+⏺ You answered: Red. You prefer red. 
+ 
+✻ Sautéed for 4s · done 10:34 PM 
+ 
+❯ Without using any tools, reply with only a markdown table of 3 rows, columns Word, Emoji, Meaning, using the Japanese words 日本語, 東京 and 寿司 and emoji like 🎉 and 🍣.                           
+ 
+⏺ ┌────────┬───────┬───────────────────┐ 
+  │  Word  │ Emoji │      Meaning      │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 日本語 │ 🎌    │ Japanese language │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 東京   │ 🗼    │ Tokyo             │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 寿司   │ 🍣    │ Sushi             │ 
+  └────────┴───────┴───────────────────┘ 
+ 
+✻ Cooked for 2s · done 10:34 PM 
+ 
+❯ /tui fullscreen                                                                                                                                                                                       
+ 
+✻ Calculating… 
+  ⎿  Tip: Paste images into Claude Code using control+v (not cmd+v!) 
+ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5 → ⚖ Opus] scratch_repo  ▓▓▓░░░░░░░ 31%  ⎇ main  ⚡99% cached/turn  $0.1493 
+  5h ▓░░░░░░░░░ 13% (↻4h24m)   wk ▓▓▓▓▓░░░░░ 55% (↻17h24m) 
+  ⏸ manual mode on · ← for agents 
+ ▐▛███▛█   Claude Code v2.1.282 
+▝▜██████▀  Haiku 4.5 · Claude Team 
+ ▝▝   ▝▝   ~/dev/scratch_repo 
+ ▐▛███▛█   Claude Code v2.1.282 
+▝▜██████▀  Haiku 4.5 · Claude Team 
+ 
+  Switched back to the classic renderer 
+ 
+ 
+❯ Use the Bash tool to run ls in the current directory.                                                                                                                                                 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The directory appears to be empty. Let me check if there are any hidden files: 
+ 
+  Listed 1 directory (ctrl+o to expand) 
+ 
+⏺ The /Users/someone/dev/scratch_repo directory is a git repository with no regular files. It only contains hidden directories: 
+  - .claude/ — Claude Code configuration 
+  - .git/ — Git repository metadata 
+ 
+  This is an empty git repository ready for work. 
+ 
+✻ Cogitated for 7s · done 10:33 PM 
+ 
+❯ Use the Bash tool to run exactly this command: python3 -c 'print(40+2)'                                                                                                                               
+ 
+⏺ Bash(python3 -c 'print(40+2)') 
+  ⎿  42 
+ 
+⏺ The command executed successfully and printed 42. 
+ 
+✻ Cooked for 3s · done 10:34 PM 
+ 
+❯ Use your AskUserQuestion tool to ask me one multiple-choice question: do I prefer red or blue? Then repeat my answer.                                                                                 
+ 
+⏺ User answered Claude's questions: 
+  ⎿  · Do you prefer red or blue? → Red 
+ 
+⏺ You answered: Red. You prefer red. 
+ 
+✻ Sautéed for 4s · done 10:34 PM 
+ 
+❯ Without using any tools, reply with only a markdown table of 3 rows, columns Word, Emoji, Meaning, using the Japanese words 日本語, 東京 and 寿司 and emoji like 🎉 and 🍣.                           
+ 
+⏺ ┌────────┬───────┬───────────────────┐ 
+  │  Word  │ Emoji │      Meaning      │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 日本語 │ 🎌    │ Japanese language │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 東京   │ 🗼    │ Tokyo             │ 
+  ├────────┼───────┼───────────────────┤ 
+  │ 寿司   │ 🍣    │ Sushi             │ 
+  └────────┴───────┴───────────────────┘ 
+ 
+✻ Cooked for 2s · done 10:34 PM 
+ 
+❯ /clear                                                                                                                                                                                                
+ 
+⏺ Conversation cleared. 
+ 
+✻ Worked for 1s · done 10:48 PM 
+ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  [Haiku 4.5 → ⚖ Opus] scratch_repo  ▓▓▓░░░░░░░ 31%  ⎇ main  ⚡99% cached/turn  $0.1560 
+  5h ▓░░░░░░░░░ 18% (↻4h11m)   wk ▓▓▓▓▓░░░░░ 56% (↻17h11m) 
+  ⏸ manual mode on · ← for agents 
+ 
+

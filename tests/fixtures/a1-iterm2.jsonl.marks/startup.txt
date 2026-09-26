@@ -1,0 +1,61 @@
+Last login: Fri Sep 25 22:33:08 on ttys021 
+➜  gensokyo git:(main) cd ~/dev/scratch_repo && clear && /Users/someone/dev/gensokyo-spike/target/a/release/record --out /Users/someone/dev/gensokyo/spikes/rebuild-spike/fixtures/a1-iterm2.jsonl --ctl
+ /Users/someone/dev/gensokyo/spikes/rebuild-spike/fixtures/.a1-iterm2.ctl -- /Users/someone/dev/gensokyo/spikes/rebuild-spike/bin/claude-clean 
+ ▐▛███▛█   Claude Code v2.1.282 
+▝▜██████▀  Haiku 4.5 · Claude Team 
+ ▝▝   ▝▝   ~/dev/scratch_repo 
+ 
+ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "refactor <filepath>" 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ← for agents                                                                                                 Advisor Tool (experimental) is on and may use more tokens · /advisor 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+

@@ -1,0 +1,4 @@
+reply cpr=12;40 "\e[12;40R"
+key "\e[1;2R"
+text "a"
+reply cpr=1;1 "\e[1;1R"

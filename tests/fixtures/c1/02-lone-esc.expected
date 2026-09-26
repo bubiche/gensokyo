@@ -1,0 +1,6 @@
+key "\e" 27
+text "a"
+key "\ea" 97+alt
+key "\e" 27
+key "\e" 27
+key "\e" 27

@@ -1,0 +1,5 @@
+text "x"
+reply kitty-flags=7 "\e[?7u"
+text "y"
+reply kitty-flags=0 "\e[?0u"
+reply kitty-flags=15 "\e[?15u"

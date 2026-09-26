@@ -18,8 +18,10 @@
 #   STUB_DESCENDANT=1         start `sleep 600` in its own session with no tty, as a detached
 #                             Bash-tool command is: only a parent-pid walk can find it. Its pid
 #                             goes to <id>.descendant
-# Every session keeps its registry entry in $STUB_STATE/<session-id>.json and its launch
-# arguments in <session-id>.args so tests can assert on them. bash 3.2 compatible.
+# Every session keeps its registry entry in $STUB_STATE/<session-id>.json, its launch arguments
+# in <session-id>.args and its environment in <session-id>.env so tests can assert on them;
+# <session-id>.ready appears once its traps are set and it reads input.
+# bash 3.2 compatible.
 
 set -u
 STUB_STATE=${STUB_STATE:-${GENSOKYO_STATE_DIR:-${TMPDIR:-/tmp}}/stub}
@@ -117,6 +119,7 @@ done
 [ -n "$resume" ] && [ -f "$STUB_STATE/$id.name" ] && name=$(cat "$STUB_STATE/$id.name")
 STARTED=$(date +%s)
 printf '%s\n' "$ORIG_ARGS" > "$STUB_STATE/$id.args"
+env > "$STUB_STATE/$id.env"
 printf '%s\n' "$name" > "$STUB_STATE/$id.name"
 rm -f "$STUB_STATE/$id.status"
 write_entry "$id" "$name" '"idle"'
@@ -159,6 +162,7 @@ echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
 pstart="${esc}[200~" pend="${esc}[201~"
 printf '%s[?2004h' "$esc"
 pasted='' pastes=0
+: > "$STUB_STATE/$id.ready"   # traps set, reading input
 while :; do
   IFS= read -r line; rc=$?
   if [ "$rc" -ne 0 ]; then [ "$rc" -gt 128 ] && continue; break; fi   # a trapped signal: keep going

@@ -5,11 +5,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
+libc = "0.2.189"
 # Built from the Ghostty source scripts/ghostty.sh fetches; see .cargo/config.toml.
 libghostty-vt = { version = "=0.2.1", default-features = false }
+pty-process = { version = "=0.5.3", features = ["async"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53", features = ["rt", "net", "io-util", "time", "macros", "signal", "process", "sync"] }
 
 [profile.release]
 strip = true
-
-[dev-dependencies]
-serde_json = "1.0.151"

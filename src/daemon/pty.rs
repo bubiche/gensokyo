@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 pub use pty_process::{OwnedReadPty, OwnedWritePty, Pty, Size};
 
 /// open + spawn run one at a time: macOS cannot open the master close-on-exec in one call, so a
-/// fork between `posix_openpt` and `fcntl(FD_CLOEXEC)` would leak it into another child.
+/// fork between `posix_openpt` and `fcntl(FD_CLOEXEC)` would leak it into another child. Any
+/// other fork in the daemon has to hold it too.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 const RESET: [libc::c_int; 10] = [

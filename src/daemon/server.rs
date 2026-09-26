@@ -382,7 +382,8 @@ async fn banish(shrine: &Shared, who: &str) -> Result<String, String> {
 }
 
 /// Ctrl-C (clears a half-typed prompt or interrupts the turn), a pause for that to land, then
-/// `/exit` and Enter. True once the resident has left.
+/// `/exit` and Enter. True once the resident has left. Plain bytes rather than encoded keys:
+/// Claude Code takes them in kitty mode too.
 async fn ask_leave(h: &Handle, wait: Duration) -> bool {
     h.input(b"\x03").await;
     h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;

@@ -43,9 +43,9 @@ pub fn claude(path: Option<&OsStr>) -> Option<PathBuf> {
 /// changes. Claude Code merges this over the user's and the project's own settings.
 pub fn settings(p: &Paths, id: &str) -> String {
     let exe = sh_quote(&p.exe.to_string_lossy());
-    let hook = json!([{"hooks": [{"type": "command", "command": format!("{exe} _hook")}]}]);
-    let ask = json!([{"matcher": "AskUserQuestion",
-                      "hooks": [{"type": "command", "command": format!("{exe} _hook")}]}]);
+    let cmd = json!({"type": "command", "command": format!("{exe} _hook")});
+    let hook = json!([{"hooks": [cmd]}]);
+    let ask = json!([{"matcher": "AskUserQuestion", "hooks": [cmd]}]);
     json!({
         "hooks": {
             "SessionStart": hook, "SessionEnd": hook, "UserPromptSubmit": hook,
@@ -74,7 +74,7 @@ pub fn argv(p: &Paths, o: &Options) -> Vec<OsString> {
         a.extend(["--resume".into(), o.id.into()]);
     } else {
         a.extend(["--session-id".into(), o.id.into(), "--name".into(), o.name.into()]);
-        // `--` is mandatory before the prompt: --allowedTools is variadic and would swallow it.
+        // `--` keeps a prompt that starts with `-` from being read as a flag.
         if let Some(prompt) = o.prompt {
             a.extend(["--".into(), prompt.into()]);
         }
@@ -149,18 +149,15 @@ pub fn env(
         .iter()
         .find_map(|k| get(&env, k).filter(|v| !v.is_empty()))
         .is_some_and(|v| v.to_ascii_lowercase().replace('-', "").contains("utf8"));
-    let bin = bin.as_os_str().to_owned();
-    let path = match get(&env, "PATH") {
-        Some(p) if std::env::split_paths(&p).any(|d| d.as_os_str() == bin) => p.into(),
-        Some(p) => {
-            let mut v = bin;
-            v.push(":");
-            v.push(p);
-            v
+    // Joined by hand: `join_paths` refuses the whole list over one entry holding a `:`.
+    let mut path = bin.as_os_str().to_owned();
+    let old = env.iter().position(|(k, _)| k == "PATH").map(|i| env.remove(i).1);
+    for d in old.iter().flat_map(std::env::split_paths) {
+        if !d.as_os_str().is_empty() && d != bin {
+            path.push(":");
+            path.push(d);
         }
-        None => bin,
-    };
-    env.retain(|(k, _)| k != "PATH");
+    }
     if !utf8 {
         env.retain(|(k, _)| !["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|n| k == n));
         env.push(("LANG".into(), "en_US.UTF-8".into()));

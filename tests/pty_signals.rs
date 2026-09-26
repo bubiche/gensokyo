@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use gensokyo::daemon::pty::{self, Size, Spawn};
+use gensokyo::daemon::pty::{self, Spawn};
 
 /// Prints each signal's disposition as perl sees it (IGNORE or DEFAULT) and whether it is
 /// blocked, into the file named by its argument.
@@ -46,7 +46,8 @@ async fn child_gets_default_dispositions_and_empty_mask() {
         args: &args,
         env: &[],
         cwd: Path::new(env!("CARGO_TARGET_TMPDIR")),
-        size: Size::new(24, 80),
+        cols: 80,
+        rows: 24,
     })
     .unwrap();
     assert!(child.wait().await.unwrap().success());

@@ -47,13 +47,14 @@ pub struct Spawn<'a> {
     /// The whole environment: nothing is inherited.
     pub env: &'a [(OsString, OsString)],
     pub cwd: &'a Path,
-    pub size: Size,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 pub fn spawn(s: Spawn) -> pty_process::Result<(Pty, tokio::process::Child)> {
     let _g = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pty, pts) = pty_process::open()?;
-    pty.resize(s.size)?;
+    pty.resize(Size::new(s.rows.max(1), s.cols.max(1)))?;
     let cmd = pty_process::Command::new(s.program)
         .args(s.args)
         .env_clear()
@@ -65,16 +66,17 @@ pub fn spawn(s: Spawn) -> pty_process::Result<(Pty, tokio::process::Child)> {
     Ok((pty, child))
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Proc {
-    pub pid: i32,
-    pub ppid: i32,
-    pub pgid: i32,
-    pub sid: i32,
+struct Proc {
+    pid: i32,
+    ppid: i32,
+    sid: i32,
 }
 
-pub fn processes() -> Vec<Proc> {
-    let mut pids = vec![0i32; 8192];
+fn processes() -> Vec<Proc> {
+    // SAFETY: a null buffer asks only for the count.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) }.max(0) as usize;
+    // Room for the processes started since the count was taken.
+    let mut pids = vec![0i32; count + 256];
     let bytes = (pids.len() * 4) as libc::c_int;
     // SAFETY: the buffer is `bytes` long; the call writes at most that many.
     let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
@@ -82,21 +84,21 @@ pub fn processes() -> Vec<Proc> {
     pids.into_iter()
         .filter(|&p| p > 0)
         .filter_map(|pid| {
-            // SAFETY: proc_bsdinfo is plain data; proc_pidinfo writes at most `size` bytes.
-            let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-            let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-            let got = unsafe {
-                libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
-            };
+            let info = bsdinfo(pid)?;
+            // SAFETY: plain getsid(2).
             let sid = unsafe { libc::getsid(pid) };
-            (got == size && sid >= 0).then_some(Proc {
-                pid,
-                ppid: info.pbi_ppid as i32,
-                pgid: info.pbi_pgid as i32,
-                sid,
-            })
+            (sid >= 0).then_some(Proc { pid, ppid: info.pbi_ppid as i32, sid })
         })
         .collect()
+}
+
+fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
+    // SAFETY: proc_bsdinfo is plain data; proc_pidinfo writes at most `size` bytes.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    (got == size).then_some(info)
 }
 
 /// Every live pid in the leader's session, plus every descendant of the leader by ppid (which
@@ -118,7 +120,7 @@ pub fn snapshot(leader: i32) -> BTreeSet<i32> {
     }
 }
 
-pub fn alive(pid: i32) -> bool {
+fn alive(pid: i32) -> bool {
     // SAFETY: signal 0 only checks that the pid exists and may be signalled.
     unsafe { libc::kill(pid, 0) == 0 }
 }
@@ -164,10 +166,5 @@ pub async fn sweep(leader: i32, grace: Duration) -> (BTreeSet<i32>, SweepLog) {
 /// succeeds on a zombie, and proc_pidinfo fails on one (ESRCH), so a live pid it cannot
 /// describe is a zombie.
 pub fn gone(pid: i32) -> bool {
-    // SAFETY: as in `processes`.
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let got =
-        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
-    !alive(pid) || got != size
+    !alive(pid) || bsdinfo(pid).is_none()
 }

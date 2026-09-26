@@ -66,10 +66,10 @@ impl Handle {
 }
 
 /// Spawns the child on a fresh PTY and starts its actor on the current `LocalSet`.
-pub fn start(spawn: pty::Spawn, cols: u16, rows: u16) -> std::io::Result<Handle> {
-    let size = Size::new(rows.max(1), cols.max(1));
-    let (pty, child) = pty::spawn(pty::Spawn { size, ..spawn }).map_err(std::io::Error::other)?;
-    let pid = child.id().map_or(-1, |p| p as i32);
+pub fn start(spawn: pty::Spawn) -> std::io::Result<Handle> {
+    let (cols, rows) = (spawn.cols, spawn.rows);
+    let (pty, child) = pty::spawn(spawn).map_err(std::io::Error::other)?;
+    let pid = child.id().expect("a child just spawned has a pid") as i32;
     let (r, w) = pty.into_split();
     let (out, out_rx) = mpsc::channel(QUEUE);
     let (resize, resize_rx) = mpsc::channel(4);
@@ -119,20 +119,22 @@ impl Actor {
                     _ => eof = true,
                 },
                 st = child.wait() => break st,
+                // Both sizes change or neither: a resize dropped on a full queue is dropped here too.
                 Some((cols, rows)) = resize.recv() => {
-                    self.vt.resize(cols, rows);
-                    let _ = self.out.try_send(Out::Resize(Size::new(rows.max(1), cols.max(1))));
+                    if self.out.try_send(Out::Resize(Size::new(rows.max(1), cols.max(1)))).is_ok() {
+                        self.vt.resize(cols, rows);
+                    }
                 }
             }
         };
-        // A setsid'd descendant may hold the slave open for good, so EOF may never come: take
-        // what is already there and stop.
+        // Take what is already there, but no longer than that: the read end is not ours to wait on.
         if !eof {
-            while let Ok(Ok(n @ 1..)) =
-                tokio::time::timeout(Duration::from_millis(50), r.read(&mut buf)).await
-            {
-                self.feed(&buf[..n]);
-            }
+            let _ = tokio::time::timeout(Duration::from_millis(100), async {
+                while let Ok(n @ 1..) = r.read(&mut buf).await {
+                    self.feed(&buf[..n]);
+                }
+            })
+            .await;
         }
         let (code, signal) = match status {
             Ok(s) => (s.code(), s.signal()),

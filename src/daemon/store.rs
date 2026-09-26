@@ -17,16 +17,13 @@ pub struct Record {
     pub program: String,
     /// The full launch argv after the program, `--settings` json included.
     pub argv: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ritual: Option<String>,
     pub launched: i64,
-    #[serde(default)]
     pub departed: Option<i64>,
-    #[serde(default)]
     pub exit: Option<i32>,
-    #[serde(default)]
     pub signal: Option<i32>,
 }
 
@@ -53,22 +50,25 @@ impl Store {
         remove(&self.residents().join(format!("{}.json", r.id)))
     }
 
-    /// Every record in `residents/`, oldest launch first; unreadable files are skipped.
-    pub fn load(&self) -> Vec<Record> {
-        let mut v: Vec<Record> = std::fs::read_dir(self.residents())
+    /// Every record in `residents/`, or why one could not be read.
+    pub fn load(&self) -> Vec<Result<Record, String>> {
+        let read = |p: &Path| {
+            let b = std::fs::read(p).map_err(|e| e.to_string())?;
+            serde_json::from_slice(&b).map_err(|e| e.to_string())
+        };
+        std::fs::read_dir(self.residents())
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
-            .collect();
-        v.sort_by_key(|r| r.launched);
-        v
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .map(|p| read(&p).map_err(|e| format!("{}: {e}", p.display())))
+            .collect()
     }
 }
 
 fn to_json(r: &Record) -> Vec<u8> {
-    let mut b = serde_json::to_vec_pretty(r).unwrap_or_default();
+    let mut b = serde_json::to_vec_pretty(r).expect("a record serializes");
     b.push(b'\n');
     b
 }
@@ -86,7 +86,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut f = std::fs::File::create(&tmp)?;
     f.write_all(bytes)?;
     f.sync_all()?;
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    // The rename is durable only once the directory is.
+    std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()
 }
 
 /// A random (v4) UUID, which Claude Code takes as `--session-id`.

@@ -50,7 +50,6 @@ struct Shrine {
     exe: PathBuf,
     share: Option<PathBuf>,
     socket: PathBuf,
-    size: (u16, u16),
     quitting: bool,
 }
 
@@ -89,6 +88,12 @@ pub fn main() -> std::process::ExitCode {
 
 async fn serve(store: Store) -> std::process::ExitCode {
     let path = proto::socket_path();
+    // A socket that answers belongs to a daemon for another state dir (one started from inside a
+    // resident, which inherits `GENSOKYO_SOCKET`): never take it over.
+    if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+        log(json!({"ev": "exit", "why": format!("{} is in use", path.display())}));
+        return std::process::ExitCode::FAILURE;
+    }
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
@@ -101,9 +106,14 @@ async fn serve(store: Store) -> std::process::ExitCode {
     let ino = std::fs::metadata(&path).map(|m| m.ino()).unwrap_or(0);
     let exe = std::env::current_exe().unwrap_or_else(|_| "gensokyo".into());
     // Nobody from before this start is still running: their masters closed with that daemon.
-    for mut r in store.load() {
-        r.departed.get_or_insert(store::now());
-        let _ = store.retire(&r);
+    for r in store.load() {
+        match r {
+            Ok(mut r) => {
+                r.departed.get_or_insert(store::now());
+                let _ = store.retire(&r);
+            }
+            Err(e) => log(json!({"ev": "record", "error": e})),
+        }
     }
     let shrine = Rc::new(RefCell::new(Shrine {
         entries: Vec::new(),
@@ -111,7 +121,6 @@ async fn serve(store: Store) -> std::process::ExitCode {
         share: share_dir(&exe),
         socket: std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
         exe,
-        size: SIZE,
         quitting: false,
     }));
     log(
@@ -257,17 +266,15 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     if s.prompt.as_deref().is_some_and(|p| p.contains('\n')) {
         return Err("a prompt is a single line".into());
     }
-    let taken =
-        |sh: &Shrine, n: &str| sh.entries.iter().any(|e| e.rec.name.eq_ignore_ascii_case(n));
+    let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
     let name = match s.name {
         Some(n) if !valid_name(&n) => {
             return Err("a name starts with a letter and uses letters, digits, _ . - only".into());
         }
         Some(n) if taken(&sh, &n) => return Err(format!("{n} is already here")),
         Some(n) => n,
-        None => pick_name(&sh, sh.share.as_deref()),
+        None => pick_name(&sh, &share),
     };
-    let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
     let path = std::env::var_os("PATH");
     let program = launch::claude(path.as_deref()).ok_or("claude not found on PATH")?;
     let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
@@ -285,15 +292,9 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     let argv = launch::argv(&paths, &opts);
     let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
     let env = launch::env(std::env::vars_os(), &id, &bin, &sh.socket);
-    let (cols, rows) = sh.size;
-    let spawn = pty::Spawn {
-        program: &program,
-        args: &argv,
-        env: &env,
-        cwd: &cwd,
-        size: pty::Size::new(rows, cols),
-    };
-    let handle = resident::start(spawn, cols, rows)
+    let (cols, rows) = SIZE;
+    let spawn = pty::Spawn { program: &program, args: &argv, env: &env, cwd: &cwd, cols, rows };
+    let handle = resident::start(spawn)
         .map_err(|e| format!("could not start {}: {e}", program.display()))?;
     let rec = Record {
         id: id.clone(),
@@ -320,19 +321,25 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     Ok(info(sh.entries.last().expect("just pushed")))
 }
 
-fn pick_name(sh: &Shrine, share: Option<&Path>) -> String {
-    let names = share.and_then(|s| std::fs::read_to_string(s.join("names.txt")).ok());
-    let free: Vec<&str> = names
-        .as_deref()
-        .unwrap_or("")
-        .lines()
-        .map(str::trim)
-        .filter(|n| valid_name(n) && !sh.entries.iter().any(|e| e.rec.name.eq_ignore_ascii_case(n)))
-        .collect();
+fn taken(sh: &Shrine, n: &str) -> bool {
+    sh.entries.iter().any(|e| e.rec.name.eq_ignore_ascii_case(n))
+}
+
+fn pick_name(sh: &Shrine, share: &Path) -> String {
+    let names = std::fs::read_to_string(share.join("names.txt")).unwrap_or_default();
+    let free: Vec<&str> =
+        names.lines().map(str::trim).filter(|n| valid_name(n) && !taken(sh, n)).collect();
     match free.len() {
-        0 => format!("Resident{}", sh.entries.len() + 1),
+        0 => (1..).map(|n| format!("Resident{n}")).find(|n| !taken(sh, n)).expect("unbounded"),
         n => free[store::random(n)].to_string(),
     }
+}
+
+/// Departed now, with the status `wait()` gave if it gave one.
+fn depart(r: &mut Record, x: Option<resident::Exit>) {
+    r.departed = Some(store::now());
+    r.exit = x.and_then(|x| x.code);
+    r.signal = x.and_then(|x| x.signal);
 }
 
 /// The record follows the exit: departed, with the status `wait()` gave.
@@ -341,9 +348,7 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     let mut sh = shrine.borrow_mut();
     let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id) else { return };
     e.handle = None;
-    e.rec.departed = Some(store::now());
-    e.rec.exit = exit.code;
-    e.rec.signal = exit.signal;
+    depart(&mut e.rec, Some(exit));
     let rec = e.rec.clone();
     let _ = sh.store.save(&rec);
     log(
@@ -356,8 +361,8 @@ fn live(shrine: &Shared, who: &str) -> Result<(String, Rc<Handle>), String> {
     let i = find(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
     let e = &sh.entries[i];
     match &e.handle {
-        Some(h) => Ok((e.rec.name.clone(), h.clone())),
-        None => Err(format!("{} has already departed", e.rec.name)),
+        Some(h) if h.exit().is_none() => Ok((e.rec.name.clone(), h.clone())),
+        _ => Err(format!("{} has already departed", e.rec.name)),
     }
 }
 
@@ -387,6 +392,12 @@ async fn ask_leave(h: &Handle, wait: Duration) -> bool {
     tokio::time::timeout(wait, h.exited()).await.is_ok()
 }
 
+/// A keystroke that went missing would leave the resident sitting there, so the gesture is
+/// repeated once when nothing comes of it.
+async fn ask_twice(h: &Handle) -> bool {
+    ask_leave(h, EXIT_WAIT).await || ask_leave(h, EXIT_WAIT).await
+}
+
 async fn close(shrine: &Shared, who: &str) -> Result<String, String> {
     let (name, h) = {
         let mut sh = shrine.borrow_mut();
@@ -400,9 +411,9 @@ async fn close(shrine: &Shared, who: &str) -> Result<String, String> {
             }
         }
     };
-    // A keystroke that went missing would leave the resident sitting there, so the gesture is
-    // repeated once when nothing comes of it.
-    if ask_leave(&h, EXIT_WAIT).await || ask_leave(&h, EXIT_WAIT).await {
+    // Bounded as a whole: a resident that stopped reading its tty blocks the keystrokes too.
+    let most = 2 * (EXIT_WAIT + Duration::from_secs(3));
+    if tokio::time::timeout(most, ask_twice(&h)).await.unwrap_or(false) {
         Ok(format!("{name} has left (/exit)"))
     } else {
         Err(format!("{name} did not answer /exit in {}s, twice", EXIT_WAIT.as_secs()))
@@ -420,9 +431,9 @@ async fn leave_all(shrine: &Shared) {
         .iter()
         .map(|h| {
             let h = h.clone();
-            tokio::task::spawn_local(tokio::time::timeout_at(deadline, async move {
-                ask_leave(&h, EXIT_WAIT).await || ask_leave(&h, EXIT_WAIT).await
-            }))
+            tokio::task::spawn_local(async move {
+                tokio::time::timeout_at(deadline, ask_twice(&h)).await
+            })
         })
         .collect();
     for a in asks {
@@ -446,10 +457,7 @@ async fn leave_all(shrine: &Shared) {
     let mut sh = shrine.borrow_mut();
     for mut e in std::mem::take(&mut sh.entries) {
         if let Some(h) = &e.handle {
-            let x = h.exit();
-            e.rec.departed = Some(store::now());
-            e.rec.exit = x.and_then(|x| x.code);
-            e.rec.signal = x.and_then(|x| x.signal);
+            depart(&mut e.rec, h.exit());
         }
         let _ = sh.store.retire(&e.rec);
     }

@@ -25,7 +25,8 @@ impl Daemon {
     }
 
     fn new(name: &str, env: &[(&str, &str)]) -> Daemon {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("d-{name}"));
+        let dir =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("d-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut all = vec![
@@ -127,7 +128,8 @@ fn alive(pid: i64) -> bool {
 
 #[test]
 fn summon_launches_claude_with_our_argv_and_env() {
-    let d = Daemon::start("summon", &[]);
+    // A locale that is not UTF-8 is replaced, not kept.
+    let d = Daemon::start("summon", &[("LC_ALL", "C"), ("LANG", "C")]);
     let r = d.summon(json!({"name": "Reimu", "prompt": "hello there", "model": "haiku"}));
     assert_eq!((r["name"].as_str(), r["slot"].as_u64()), (Some("Reimu"), Some(1)));
     assert!(alive(r["pid"].as_i64().unwrap()));
@@ -174,12 +176,10 @@ fn summon_launches_claude_with_our_argv_and_env() {
     assert_eq!(var("CLAUDE_CONFIG_DIR"), Some(d.dir.join("claude").to_str().unwrap()));
     assert_eq!((var("TERM"), var("COLORTERM")), (Some("xterm-256color"), Some("truecolor")));
     assert_eq!(var("GENSOKYO_RESIDENT"), id.as_str());
-    assert_eq!(var("GENSOKYO_SOCKET"), d.socket().to_str());
+    assert_eq!(var("GENSOKYO_SOCKET").map(PathBuf::from), Some(real));
     let bin = Path::new(BIN).parent().unwrap().to_str().unwrap();
     assert!(var("PATH").unwrap().starts_with(&format!("{bin}:")));
-    assert!(
-        var("LANG").or(var("LC_ALL")).or(var("LC_CTYPE")).unwrap().to_lowercase().contains("utf")
-    );
+    assert_eq!((var("LC_ALL"), var("LANG")), (None, Some("en_US.UTF-8")));
     assert_eq!(
         var("PWD").map(|p| std::fs::canonicalize(p).unwrap()),
         Some(std::fs::canonicalize(&d.dir).unwrap())

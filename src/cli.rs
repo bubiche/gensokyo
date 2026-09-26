@@ -65,6 +65,10 @@ pub fn request(req: Request, start: bool) -> Result<Reply, String> {
         Reply::Welcome { .. } => next(),
         other => Ok(other),
     }
+    .and_then(|r| match r {
+        Reply::Error { error, .. } => Err(error),
+        r => Ok(r),
+    })
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -99,7 +103,6 @@ fn say(r: Result<Reply, String>) -> Result<(), String> {
             println!("{message}");
             Ok(())
         }
-        Reply::Error { error, .. } => Err(error),
         other => Err(format!("unexpected reply {other:?}")),
     }
 }
@@ -108,7 +111,6 @@ fn list(args: &[String]) -> Result<(), String> {
     let json = args.iter().any(|a| a == "--json");
     let residents = match request(Request::List, true)? {
         Reply::List { residents, .. } => residents,
-        Reply::Error { error, .. } => return Err(error),
         other => return Err(format!("unexpected reply {other:?}")),
     };
     if json {
@@ -150,7 +152,6 @@ fn new(args: &[String]) -> Result<(), String> {
             println!("summoned {}{slot} in {}", r.name, r.cwd);
             Ok(())
         }
-        Reply::Error { error, .. } => Err(error),
         other => Err(format!("unexpected reply {other:?}")),
     }
 }

@@ -6,6 +6,7 @@ use super::pty;
 use super::resident::{self, Handle};
 use super::store::{self, Record, Store};
 use crate::proto::{self, Envelope, Reply, Request, Summon};
+use crate::vt::{Frame, KeyEvent, Modes};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
@@ -16,8 +17,10 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::task::AbortHandle;
 
 /// From HUP to TERM: how long a leader gets to leave on its own. Claude Code on haiku took
 /// 0.74-1.35 s over 20 banishes, idle and mid-turn; this is about twice the slowest.
@@ -28,6 +31,10 @@ const EXIT_WAIT: Duration = Duration::from_secs(6);
 const QUIT_WAIT: Duration = Duration::from_secs(20);
 /// Until a client says how big it is.
 const SIZE: (u16, u16) = (80, 24);
+/// A viewer gets at most one screen per this, about 60 a second.
+const FRAME_GAP: Duration = Duration::from_millis(16);
+/// How long a child's synchronized-output block may hold its screen back.
+const SYNC_HOLD: Duration = Duration::from_millis(150);
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -51,6 +58,10 @@ struct Shrine {
     share: Option<PathBuf>,
     socket: PathBuf,
     quitting: bool,
+    /// Every resident's size: the last client's grid.
+    size: (u16, u16),
+    /// Bumped whenever the shrine changes, for `watch`.
+    changed: watch::Sender<u64>,
 }
 
 type Shared = Rc<RefCell<Shrine>>;
@@ -118,10 +129,12 @@ async fn serve(store: Store) -> std::process::ExitCode {
     let shrine = Rc::new(RefCell::new(Shrine {
         entries: Vec::new(),
         store,
-        share: share_dir(&exe),
+        share: proto::share_dir(&exe),
         socket: std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
         exe,
         quitting: false,
+        size: SIZE,
+        changed: watch::channel(0).0,
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -154,88 +167,278 @@ async fn serve(store: Store) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// `share/` beside the binary or up to three levels above it (a build tree), or
-/// `$GENSOKYO_SHARE`.
-fn share_dir(exe: &Path) -> Option<PathBuf> {
-    if let Some(s) = std::env::var_os("GENSOKYO_SHARE") {
-        return Some(s.into());
-    }
-    exe.ancestors().skip(1).take(4).map(|d| d.join("share")).find(|s| s.join("names.txt").is_file())
+/// One line for the writer, and a word back once it is written.
+type Line = (Vec<u8>, Option<oneshot::Sender<()>>);
+type Out = mpsc::Sender<Line>;
+
+fn encode(r: &Reply) -> Vec<u8> {
+    let mut b = serde_json::to_vec(r).expect("a reply serializes");
+    b.push(b'\n');
+    b
 }
 
+async fn send(out: &Out, r: &Reply) -> bool {
+    out.send((encode(r), None)).await.is_ok()
+}
+
+/// Returns once the line is written, so a caller that waits on it never has two in flight.
+async fn send_written(out: &Out, r: &Reply) -> bool {
+    let (tx, rx) = oneshot::channel();
+    out.send((encode(r), Some(tx))).await.is_ok() && rx.await.is_ok()
+}
+
+async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
+    while let Some((b, done)) = rx.recv().await {
+        if w.write_all(&b).await.is_err() {
+            return;
+        }
+        if let Some(d) = done {
+            let _ = d.send(());
+        }
+    }
+}
+
+/// Requests are read in order. Banish, close and quit run on their own, so a long one holds up
+/// neither the rest nor the screen; their replies come when they finish.
 async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
     // SAFETY: getuid cannot fail.
     if s.peer_cred().map(|c| c.uid()).ok() != Some(unsafe { libc::getuid() }) {
         return;
     }
-    let (r, mut w) = s.into_split();
+    let (r, w) = s.into_split();
+    let (out, rx) = mpsc::channel(64);
+    tokio::task::spawn_local(write_lines(w, rx));
     let mut lines = BufReader::new(r).lines();
     let mut greeted = false;
+    let (mut watching, mut viewing): (Option<AbortHandle>, Option<AbortHandle>) = (None, None);
+    let mut viewed = false;
     while let Ok(Some(line)) = lines.next_line().await {
-        let (reply, stop) = match serde_json::from_str::<Envelope>(&line) {
-            Err(e) => (Reply::Error { id: 0, error: format!("bad request: {e}") }, !greeted),
-            Ok(Envelope { req: Request::Hello { proto, .. }, id }) => {
-                greeted = proto == proto::PROTO;
-                let reply = if greeted {
-                    Reply::Welcome { proto: proto::PROTO, pid: std::process::id() }
-                } else {
-                    Reply::Error { id, error: format!("protocol {proto}, want {}", proto::PROTO) }
-                };
-                (reply, !greeted)
+        let Envelope { id, req } = match serde_json::from_str::<Envelope>(&line) {
+            Ok(e) => e,
+            Err(e) => {
+                send(&out, &Reply::Error { id: 0, error: format!("bad request: {e}") }).await;
+                match greeted {
+                    true => continue,
+                    false => break,
+                }
             }
-            Ok(Envelope { id, .. }) if !greeted => {
-                (Reply::Error { id, error: "say hello first".into() }, true)
-            }
-            Ok(Envelope { id, req: Request::Quit }) => {
-                leave_all(&shrine).await;
-                (Reply::Done { id, message: "the shrine is empty; the daemon stops".into() }, true)
-            }
-            Ok(Envelope { id, req }) => (handle(&shrine, id, req).await, false),
         };
-        let mut out = serde_json::to_vec(&reply).unwrap_or_default();
-        out.push(b'\n');
-        let sent = w.write_all(&out).await.is_ok();
-        // After a quit the daemon stops whether or not the asker is still there to hear it.
-        if stop && matches!(reply, Reply::Done { .. }) {
-            quit.notify_one();
+        let fail = move |error: String| Reply::Error { id, error };
+        let reply = match req {
+            Request::Hello { proto, .. } => {
+                greeted = proto == proto::PROTO;
+                let reply = match greeted {
+                    true => Reply::Welcome { proto: proto::PROTO, pid: std::process::id() },
+                    false => fail(format!("protocol {proto}, want {}", proto::PROTO)),
+                };
+                send(&out, &reply).await;
+                match greeted {
+                    true => continue,
+                    false => break,
+                }
+            }
+            _ if !greeted => {
+                send(&out, &fail("say hello first".into())).await;
+                break;
+            }
+            Request::List { all } => Some(Reply::List { id, residents: list(&shrine, all) }),
+            Request::Summon(s) => Some(
+                summon(&shrine, s).map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+            ),
+            Request::Recall { who } => Some(
+                recall(&shrine, &who)
+                    .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+            ),
+            Request::Banish { .. } | Request::Close { .. } => {
+                let (shrine, out) = (shrine.clone(), out.clone());
+                tokio::task::spawn_local(async move {
+                    let r = match req {
+                        Request::Banish { who } => banish(&shrine, &who).await,
+                        Request::Close { who } => close(&shrine, &who).await,
+                        _ => unreachable!("matched above"),
+                    };
+                    send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
+                });
+                None
+            }
+            Request::Quit => {
+                let (shrine, out, quit) = (shrine.clone(), out.clone(), quit.clone());
+                tokio::task::spawn_local(async move {
+                    leave_all(&shrine).await;
+                    let message = "the shrine is empty; the daemon stops".into();
+                    send_written(&out, &Reply::Done { id, message }).await;
+                    // Whether or not the asker is still there to hear it.
+                    quit.notify_one();
+                });
+                None
+            }
+            Request::Watch => {
+                if watching.is_none() {
+                    let task = tokio::task::spawn_local(watch(shrine.clone(), out.clone()));
+                    watching = Some(task.abort_handle());
+                }
+                None
+            }
+            Request::View { who } => match live(&shrine, &who) {
+                Ok((rid, _, h)) => {
+                    viewing.take().inspect(AbortHandle::abort);
+                    let task = tokio::task::spawn_local(view(
+                        shrine.clone(),
+                        h,
+                        rid,
+                        out.clone(),
+                        !viewed,
+                    ));
+                    viewing = Some(task.abort_handle());
+                    viewed = true;
+                    None
+                }
+                Err(e) => Some(fail(e)),
+            },
+            Request::Unview => {
+                viewing.take().inspect(AbortHandle::abort);
+                None
+            }
+            Request::Input { who, bytes, key } => {
+                input(&shrine, &who, bytes, key).await.err().map(fail)
+            }
+            Request::Resize { cols, rows } => {
+                resize(&shrine, cols, rows);
+                None
+            }
+        };
+        if let Some(r) = reply {
+            send(&out, &r).await;
         }
-        if stop || !sent {
+    }
+    for t in [watching, viewing].into_iter().flatten() {
+        t.abort();
+    }
+}
+
+/// A `residents` event now and whenever the shrine changes after.
+async fn watch(shrine: Shared, out: Out) {
+    let mut rx = shrine.borrow().changed.subscribe();
+    loop {
+        rx.borrow_and_update();
+        if !send(&out, &Reply::Residents { residents: list(&shrine, false) }).await {
+            return;
+        }
+        if rx.changed().await.is_err() {
             return;
         }
     }
 }
 
-async fn handle(shrine: &Shared, id: u64, req: Request) -> Reply {
-    let r = match req {
-        Request::List => Ok(Reply::List { id, residents: list(shrine) }),
-        Request::Summon(s) => summon(shrine, s).map(|resident| Reply::Summoned { id, resident }),
-        Request::Banish { who } => {
-            banish(shrine, &who).await.map(|message| Reply::Done { id, message })
+/// Streams one resident's screen: a whole frame, then the rows that changed. Each is computed
+/// when the last has been written, against what this client was last sent, so a slow client
+/// skips screens rather than queueing them.
+async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, mut nudge: bool) {
+    let mut changes = h.changes();
+    let mut sent: Option<(Frame, Modes)> = None;
+    let mut rev = 0;
+    loop {
+        // A child inside its own synchronized-output block is mid-draw.
+        let held = Instant::now();
+        while h.in_sync() && held.elapsed() < SYNC_HOLD {
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        Request::Close { who } => {
-            close(shrine, &who).await.map(|message| Reply::Done { id, message })
+        changes.borrow_and_update();
+        let (frame, modes) = (h.frame(), h.modes());
+        let reply = match &sent {
+            Some((prev, m)) if prev.cols == frame.cols && prev.rows.len() == frame.rows.len() => {
+                let rows = frame.damage(prev);
+                (!rows.is_empty() || prev.cursor != frame.cursor || *m != modes).then(|| {
+                    let rows = rows.into_iter().map(|y| (y as u16, frame.rows[y].clone()));
+                    Reply::Damage {
+                        who: who.clone(),
+                        base: rev,
+                        rev: rev + 1,
+                        rows: rows.collect(),
+                        cursor: frame.cursor,
+                        modes,
+                    }
+                })
+            }
+            _ => Some(Reply::Frame { who: who.clone(), rev: rev + 1, frame: frame.clone(), modes }),
+        };
+        if let Some(r) = reply {
+            if !send_written(&out, &r).await {
+                return;
+            }
+            rev += 1;
+            sent = Some((frame, modes));
         }
-        Request::Hello { .. } | Request::Quit => Err("unexpected".into()),
-    };
-    r.unwrap_or_else(|error| Reply::Error { id, error })
+        // A client coming back gets the screen it missed, then a SIGWINCH, which makes Claude
+        // Code draw everything again. On its own task: a view dropped midway must not leave the
+        // resident a row short.
+        let (cols, rows) = h.size();
+        if std::mem::take(&mut nudge) && rows > 1 {
+            let (shrine, h) = (shrine.clone(), h.clone());
+            tokio::task::spawn_local(async move {
+                h.resize(cols, rows - 1);
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                let (cols, rows) = shrine.borrow().size;
+                h.resize(cols, rows);
+            });
+        }
+        tokio::time::sleep(FRAME_GAP).await;
+        if changes.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
-fn info(e: &Entry) -> proto::Resident {
-    let r = &e.rec;
+async fn input(
+    shrine: &Shared,
+    who: &str,
+    mut bytes: Vec<u8>,
+    key: Option<proto::Key>,
+) -> Result<(), String> {
+    let (_, name, h) = live(shrine, who)?;
+    if let Some(k) = key {
+        let ev = KeyEvent::from_kitty(k.code, k.mods, k.event).ok_or("no such key")?;
+        bytes.extend(h.encode(ev));
+    }
+    if !bytes.is_empty() && !h.input(&bytes).await {
+        return Err(format!("{name} is not reading"));
+    }
+    Ok(())
+}
+
+fn resize(shrine: &Shared, cols: u16, rows: u16) {
+    let mut sh = shrine.borrow_mut();
+    sh.size = (cols.max(1), rows.max(1));
+    for h in sh.entries.iter().filter_map(|e| e.handle.as_ref()) {
+        h.resize(cols, rows);
+    }
+}
+
+fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
     proto::Resident {
         id: r.id.clone(),
         name: r.name.clone(),
         slot: r.slot,
         cwd: r.cwd.clone(),
-        pid: e.handle.as_ref().map(|h| h.pid),
+        pid,
         departed: r.departed,
         exit: r.exit,
         signal: r.signal,
     }
 }
 
-fn list(shrine: &Shared) -> Vec<proto::Resident> {
-    shrine.borrow().entries.iter().map(info).collect()
+/// The shrine in order; with `all`, then everyone in `departed/`, newest first and slotless.
+fn list(shrine: &Shared, all: bool) -> Vec<proto::Resident> {
+    let sh = shrine.borrow();
+    let mut v: Vec<_> =
+        sh.entries.iter().map(|e| info(&e.rec, e.handle.as_ref().map(|h| h.pid))).collect();
+    if all {
+        let mut gone = sh.store.load_departed();
+        gone.retain(|r| !sh.entries.iter().any(|e| e.rec.id == r.id));
+        gone.sort_by_key(|r| std::cmp::Reverse(r.departed));
+        v.extend(gone.iter().map(|r| proto::Resident { slot: None, ..info(r, None) }));
+    }
+    v
 }
 
 /// By name (any case), slot or id.
@@ -252,6 +455,31 @@ fn valid_name(n: &str) -> bool {
     // A letter first, so a name can never be mistaken for a slot.
     n.starts_with(|c: char| c.is_ascii_alphabetic())
         && n.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+}
+
+/// Starts `claude` for a resident: the argv, the environment and the PTY at the shrine's size,
+/// with the record following its exit. Gives the program and argv for the record.
+fn launch(
+    shrine: &Shared,
+    sh: &Shrine,
+    o: &launch::Options,
+    cwd: &Path,
+) -> Result<(String, Vec<String>, Rc<Handle>), String> {
+    let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
+    let path = std::env::var_os("PATH");
+    let program = launch::claude(path.as_deref()).ok_or("claude not found on PATH")?;
+    let paths = launch::Paths { exe: &sh.exe, share: &share, socket: &sh.socket };
+    let argv = launch::argv(&paths, o);
+    let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let env = launch::env(std::env::vars_os(), o.id, &bin, &sh.socket);
+    let (cols, rows) = sh.size;
+    let spawn = pty::Spawn { program: &program, args: &argv, env: &env, cwd, cols, rows };
+    let handle = resident::start(spawn)
+        .map_err(|e| format!("could not start {}: {e}", program.display()))?;
+    let handle = Rc::new(handle);
+    tokio::task::spawn_local(watch_exit(shrine.clone(), o.id.to_string(), handle.clone()));
+    let argv = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    Ok((program.to_string_lossy().into_owned(), argv, handle))
 }
 
 fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
@@ -275,11 +503,8 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
         Some(n) => n,
         None => pick_name(&sh, &share),
     };
-    let path = std::env::var_os("PATH");
-    let program = launch::claude(path.as_deref()).ok_or("claude not found on PATH")?;
     let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
     let id = store::uuid();
-    let paths = launch::Paths { exe: &sh.exe, share: &share, socket: &sh.socket };
     let opts = launch::Options {
         id: &id,
         name: &name,
@@ -289,21 +514,15 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
         prompt: s.prompt.as_deref(),
         resume: false,
     };
-    let argv = launch::argv(&paths, &opts);
-    let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let env = launch::env(std::env::vars_os(), &id, &bin, &sh.socket);
-    let (cols, rows) = SIZE;
-    let spawn = pty::Spawn { program: &program, args: &argv, env: &env, cwd: &cwd, cols, rows };
-    let handle = resident::start(spawn)
-        .map_err(|e| format!("could not start {}: {e}", program.display()))?;
+    let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
         id: id.clone(),
         session: id.clone(),
         name,
         slot,
         cwd: cwd.to_string_lossy().into_owned(),
-        program: program.to_string_lossy().into_owned(),
-        argv: argv.iter().map(|a| a.to_string_lossy().into_owned()).collect(),
+        program,
+        argv,
         prompt: s.prompt,
         ritual: None,
         launched: store::now(),
@@ -315,10 +534,80 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
         log(json!({"ev": "record", "id": id, "error": e.to_string()}));
     }
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid}));
-    let handle = Rc::new(handle);
-    tokio::task::spawn_local(watch_exit(shrine.clone(), id, handle.clone()));
+    let r = info(&rec, Some(handle.pid));
     sh.entries.push(Entry { rec, handle: Some(handle) });
-    Ok(info(sh.entries.last().expect("just pushed")))
+    touch(&sh);
+    Ok(r)
+}
+
+/// A departed resident back in the shrine: one of this run's, or the newest in `departed/`
+/// by that name or id. Its session resumes with the flags it was summoned with.
+fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, String> {
+    let mut sh = shrine.borrow_mut();
+    if sh.quitting {
+        return Err("the daemon is stopping".into());
+    }
+    let (mut rec, at) = match find(&sh, who) {
+        Some(i) if sh.entries[i].handle.is_some() => {
+            return Err(format!("{} is still here", sh.entries[i].rec.name));
+        }
+        Some(i) => (sh.entries[i].rec.clone(), Some(i)),
+        None => {
+            let mut gone = sh.store.load_departed();
+            gone.retain(|r| r.name.eq_ignore_ascii_case(who) || r.id == who);
+            let r = gone.into_iter().max_by_key(|r| r.departed);
+            let r = r.ok_or_else(|| format!("no resident {who}"))?;
+            if taken(&sh, &r.name) {
+                return Err(format!("{} is already here", r.name));
+            }
+            (r, None)
+        }
+    };
+    let cwd = PathBuf::from(&rec.cwd);
+    if !cwd.is_dir() {
+        return Err(format!("{} is gone", rec.cwd));
+    }
+    let flag = |f: &str| {
+        let a = rec.argv.iter().take_while(|a| *a != "--");
+        a.skip_while(|a| *a != f).nth(1).cloned()
+    };
+    let (model, effort, mode) = (flag("--model"), flag("--effort"), flag("--permission-mode"));
+    // One that never got a prompt has nothing to resume: it starts afresh, same id and name.
+    let resume = launch::has_conversation(&rec.session);
+    let opts = launch::Options {
+        id: &rec.id,
+        name: &rec.name,
+        model: model.as_deref(),
+        effort: effort.as_deref(),
+        mode: mode.as_deref(),
+        prompt: None,
+        resume,
+    };
+    let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
+    let free =
+        |n: u8| sh.entries.iter().enumerate().all(|(i, e)| Some(i) == at || e.rec.slot != Some(n));
+    rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
+    (rec.program, rec.argv) = (program, argv);
+    (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
+    if let Err(e) = sh.store.restore(&rec) {
+        log(json!({"ev": "record", "id": rec.id, "error": e.to_string()}));
+    }
+    log(
+        json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
+    );
+    let r = info(&rec, Some(handle.pid));
+    let entry = Entry { rec, handle: Some(handle) };
+    match at {
+        Some(i) => sh.entries[i] = entry,
+        None => sh.entries.push(entry),
+    }
+    touch(&sh);
+    Ok(r)
+}
+
+/// Tells every `watch`er that the shrine changed.
+fn touch(sh: &Shrine) {
+    sh.changed.send_modify(|v| *v += 1);
 }
 
 fn taken(sh: &Shrine, n: &str) -> bool {
@@ -351,23 +640,25 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     depart(&mut e.rec, Some(exit));
     let rec = e.rec.clone();
     let _ = sh.store.save(&rec);
+    touch(&sh);
     log(
         json!({"ev": "departed", "id": id, "name": rec.name, "exit": exit.code, "signal": exit.signal}),
     );
 }
 
-fn live(shrine: &Shared, who: &str) -> Result<(String, Rc<Handle>), String> {
+/// Id, name and handle of a resident still running.
+fn live(shrine: &Shared, who: &str) -> Result<(String, String, Rc<Handle>), String> {
     let sh = shrine.borrow();
     let i = find(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
     let e = &sh.entries[i];
     match &e.handle {
-        Some(h) if h.exit().is_none() => Ok((e.rec.name.clone(), h.clone())),
+        Some(h) if h.exit().is_none() => Ok((e.rec.id.clone(), e.rec.name.clone(), h.clone())),
         _ => Err(format!("{} has already departed", e.rec.name)),
     }
 }
 
 async fn banish(shrine: &Shared, who: &str) -> Result<String, String> {
-    let (name, h) = live(shrine, who)?;
+    let (_, name, h) = live(shrine, who)?;
     let t = Instant::now();
     let (_, sweep) = pty::sweep(h.pid, BANISH_GRACE).await;
     let exit = tokio::time::timeout(Duration::from_secs(5), h.exited()).await;
@@ -408,6 +699,7 @@ async fn close(shrine: &Shared, who: &str) -> Result<String, String> {
             None => {
                 let e = sh.entries.remove(i);
                 let _ = sh.store.retire(&e.rec);
+                touch(&sh);
                 return Ok(format!("closed {}", e.rec.name));
             }
         }
@@ -462,4 +754,5 @@ async fn leave_all(shrine: &Shared) {
         }
         let _ = sh.store.retire(&e.rec);
     }
+    touch(&sh);
 }

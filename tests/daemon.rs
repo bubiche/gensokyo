@@ -385,3 +385,309 @@ fn hook_verbs_always_exit_zero_and_print_nothing() {
         assert_eq!((out.status.code(), out.stdout.len()), (Some(0), 0));
     }
 }
+
+/// A connection that stays: events arrive on a thread, so a read can give up without losing
+/// half a line.
+struct Client {
+    w: UnixStream,
+    rx: std::sync::mpsc::Receiver<Value>,
+}
+
+impl Client {
+    fn new(d: &Daemon) -> Client {
+        let s = UnixStream::connect(d.socket()).expect("connect");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let r = s.try_clone().unwrap();
+        std::thread::spawn(move || {
+            for l in BufReader::new(r).lines() {
+                let Ok(l) = l else { return };
+                if tx.send(serde_json::from_str(&l).unwrap()).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut c = Client { w: s, rx };
+        c.send(json!({"t": "hello", "proto": 1, "who": "test"}));
+        assert_eq!(c.next(Duration::from_secs(5)).unwrap()["t"], "welcome");
+        c
+    }
+
+    fn send(&mut self, v: Value) {
+        writeln!(self.w, "{v}").unwrap();
+    }
+
+    fn next(&mut self, within: Duration) -> Option<Value> {
+        self.rx.recv_timeout(within).ok()
+    }
+
+    /// Skips events until one passes `f`.
+    fn until(&mut self, what: &str, mut f: impl FnMut(&Value) -> bool) -> Value {
+        let t = Instant::now();
+        loop {
+            let left = Duration::from_secs(10).saturating_sub(t.elapsed());
+            let v = self.next(left).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+            if f(&v) {
+                return v;
+            }
+        }
+    }
+}
+
+/// The screen as a viewer holds it, one string per row.
+#[derive(Default)]
+struct Screen {
+    rev: u64,
+    rows: Vec<String>,
+    cols: u64,
+}
+
+impl Screen {
+    fn row(runs: &Value) -> String {
+        let mut s = String::new();
+        for r in runs.as_array().unwrap() {
+            let col = r["col"].as_u64().unwrap() as usize;
+            while s.chars().count() < col {
+                s.push(' ');
+            }
+            s.push_str(r["text"].as_str().unwrap());
+        }
+        s
+    }
+
+    /// Takes a `frame` or a `damage`; anything else is not for it.
+    fn apply(&mut self, ev: &Value) -> bool {
+        match ev["t"].as_str() {
+            Some("frame") => {
+                let f = &ev["frame"];
+                self.rows = f["rows"].as_array().unwrap().iter().map(Screen::row).collect();
+                self.cols = f["cols"].as_u64().unwrap();
+            }
+            Some("damage") => {
+                assert_eq!(ev["base"].as_u64(), Some(self.rev), "a damage off another base");
+                for r in ev["rows"].as_array().unwrap() {
+                    self.rows[r[0].as_u64().unwrap() as usize] = Screen::row(&r[1]);
+                }
+            }
+            _ => return false,
+        }
+        self.rev = ev["rev"].as_u64().unwrap();
+        true
+    }
+
+    fn has(&self, s: &str) -> bool {
+        self.rows.iter().any(|r| r.contains(s))
+    }
+
+    /// Applies events until the screen shows `s`.
+    fn wait_for(&mut self, c: &mut Client, s: &str) {
+        c.until(&format!("{s:?} on screen"), |ev| self.apply(ev) && self.has(s));
+    }
+}
+
+#[test]
+fn a_watcher_sees_the_shrine_and_a_viewer_the_screen() {
+    let d = Daemon::start("view", &[]);
+    let mut c = Client::new(&d);
+    c.send(json!({"t": "watch"}));
+    let ev = c.until("the first residents", |v| v["t"] == "residents");
+    assert_eq!(ev["residents"], json!([]));
+    let r = d.summon(json!({"name": "Reimu"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    let ev = c.until("a summon event", |v| v["t"] == "residents");
+    assert_eq!(ev["residents"][0]["name"], "Reimu");
+    d.stub(&r["id"], "ready");
+
+    c.send(json!({"t": "view", "who": "reimu"}));
+    let mut s = Screen::default();
+    let f = c.until("a frame", |v| v["t"] == "frame");
+    assert_eq!(f["who"], id.as_str());
+    assert_eq!((f["rev"].as_u64(), f["modes"]["kitty"].as_u64()), (Some(1), Some(5)));
+    assert_eq!(f["modes"]["paste"], true);
+    s.apply(&f);
+    s.wait_for(&mut c, &format!("stub-claude Reimu ({id})"));
+
+    // Bytes go to the tty as they are; a key goes by the child's flags, kitty 5 here.
+    c.send(json!({"t": "input", "who": "Reimu", "bytes": b"hello\r"}));
+    s.wait_for(&mut c, "> hello");
+    c.send(json!({"t": "input", "who": "1", "key": {"code": 13, "mods": 1, "event": 1}}));
+    c.send(json!({"t": "input", "who": "1", "bytes": b"\r"}));
+    let input = d.dir.join(format!("stub/{id}.input"));
+    wait(
+        || std::fs::read_to_string(&input).is_ok_and(|i| i.lines().any(|l| l == "\x1b[13;2u")),
+        "the encoded Shift+Enter",
+    );
+    c.send(json!({"t": "input", "who": "nobody", "id": 4, "bytes": b"x"}));
+    let e = c.until("an input error", |v| v["t"] == "error");
+    assert_eq!((e["id"].as_u64(), &e["error"]), (Some(4), &json!("no resident nobody")));
+
+    // A banish is answered on its own time; the shrine event says who left.
+    c.send(json!({"t": "banish", "id": 8, "who": "Reimu"}));
+    let (mut left, mut done) = (None, false);
+    c.until("the departure event and the banish reply", |v| {
+        if v["t"] == "residents" && v["residents"][0]["departed"].is_i64() {
+            left = Some(v.clone());
+        }
+        done |= v["t"] == "done" && v["id"] == 8;
+        left.is_some() && done
+    });
+    assert!(left.unwrap()["residents"][0]["pid"].is_null());
+    c.send(json!({"t": "view", "id": 9, "who": "Reimu"}));
+    let e = c.until("a view error", |v| v["t"] == "error");
+    assert!(e["error"].as_str().unwrap().contains("already departed"), "{e}");
+}
+
+#[test]
+fn a_resize_reaches_every_child_and_later_summons() {
+    let d = Daemon::start("resize", &[("STUB_WINCH", "1")]);
+    let r = d.summon(json!({}));
+    let id = r["id"].as_str().unwrap().to_string();
+    d.stub(&r["id"], "ready");
+    let mut c = Client::new(&d);
+    c.send(json!({"t": "resize", "cols": 100, "rows": 30}));
+    let size = d.dir.join(format!("stub/{id}.size"));
+    let read = || std::fs::read_to_string(&size).unwrap_or_default().trim().to_string();
+    wait(|| read() == "30 100", "the child to see 30 100");
+
+    // The first view on a connection nudges the size and back, which redraws Claude Code.
+    std::fs::remove_file(&size).unwrap();
+    c.send(json!({"t": "view", "who": id}));
+    let mut s = Screen::default();
+    s.apply(&c.until("a frame", |v| v["t"] == "frame"));
+    assert_eq!((s.cols, s.rows.len()), (100, 30));
+    // The two SIGWINCHes may reach the stub as one, so only the second size is sure to show.
+    wait(|| read() == "30 100", "a SIGWINCH from the nudge, and the size back");
+
+    let r2 = d.summon(json!({}));
+    c.send(json!({"t": "view", "who": r2["id"]}));
+    let f = c.until("the new resident's frame", |v| v["t"] == "frame" && v["who"] == r2["id"]);
+    assert_eq!(
+        (f["frame"]["cols"].as_u64(), f["frame"]["rows"].as_array().unwrap().len()),
+        (Some(100), 30)
+    );
+}
+
+#[test]
+fn a_synchronized_block_is_shown_whole_unless_it_never_ends() {
+    let d = Daemon::start("sync", &[]);
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let mut c = Client::new(&d);
+    c.send(json!({"t": "view", "who": r["id"]}));
+    let mut s = Screen::default();
+    s.wait_for(&mut c, "stub-claude");
+    // The emulator ends a block on a resize, so the first view's nudge has to be over.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // A short block: nobody sees its first half alone.
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"/sync 0.05\r"}));
+    c.until("the short block's end", |ev| {
+        s.apply(ev);
+        assert!(!(s.has("SYNC-MID") && !s.has("SYNC-END")), "half a block was shown: {ev}");
+        s.has("SYNC-END")
+    });
+
+    // A long one is shown anyway once the hold runs out.
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"clear\r"}));
+    s.wait_for(&mut c, "> clear");
+    let mids = s.rows.iter().filter(|r| r.contains("SYNC-MID")).count();
+    let t = Instant::now();
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"/sync 2\r"}));
+    c.until("the long block's middle", |ev| {
+        s.apply(ev);
+        s.rows.iter().filter(|r| r.contains("SYNC-MID")).count() > mids
+    });
+    assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+    assert_eq!(s.rows.iter().filter(|r| r.contains("SYNC-END")).count(), 1);
+}
+
+#[test]
+fn unview_stops_the_screen() {
+    let d = Daemon::start("unview", &[]);
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let mut c = Client::new(&d);
+    c.send(json!({"t": "view", "who": r["id"]}));
+    let mut s = Screen::default();
+    s.wait_for(&mut c, "stub-claude");
+    c.send(json!({"t": "unview"}));
+    c.send(json!({"t": "list", "id": 3}));
+    c.until("the list after unview", |v| v["t"] == "list");
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"quiet\r"}));
+    let input = d.dir.join(format!("stub/{}.input", r["id"].as_str().unwrap()));
+    wait(|| std::fs::read_to_string(&input).is_ok_and(|i| i.contains("quiet")), "the input");
+    std::thread::sleep(Duration::from_millis(300));
+    while let Some(ev) = c.next(Duration::from_millis(100)) {
+        assert!(!["frame", "damage"].contains(&ev["t"].as_str().unwrap()), "{ev}");
+    }
+    // Viewing again starts over with a whole frame.
+    c.send(json!({"t": "view", "who": r["id"]}));
+    let f = c.until("a new frame", |v| v["t"] == "frame");
+    assert_eq!(f["rev"], 1);
+}
+
+#[test]
+fn recall_resumes_a_banished_resident_with_its_flags() {
+    let d = Daemon::start("recall", &[]);
+    let r = d.summon(json!({"name": "Youmu", "model": "haiku", "prompt": "first"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    let args = |d: &Daemon| d.stub(&r["id"], "args").trim_end().to_string();
+    let before = args(&d);
+    let e = d.req(json!({"t": "recall", "id": 2, "who": "Youmu"}));
+    assert!(e["error"].as_str().unwrap().contains("still here"), "{e}");
+    assert_eq!(d.req(json!({"t": "banish", "id": 3, "who": "Youmu"}))["t"], "done");
+    std::fs::remove_file(d.dir.join(format!("stub/{id}.ready"))).unwrap();
+
+    let back = d.req(json!({"t": "recall", "id": 4, "who": "youmu"}));
+    assert_eq!(back["t"], "summoned", "{back}");
+    assert_eq!(
+        (back["resident"]["id"].as_str(), back["resident"]["slot"].as_u64()),
+        (Some(id.as_str()), Some(1))
+    );
+    assert!(back["resident"]["departed"].is_null());
+    let after = args(&d);
+    let flag = |a: &str, f: &str| a.split(' ').skip_while(|x| *x != f).nth(1).map(str::to_string);
+    assert_eq!(flag(&after, "--resume").as_deref(), Some(id.as_str()));
+    assert_eq!(flag(&after, "--model").as_deref(), Some("haiku"));
+    assert!(!after.contains("--session-id") && !after.ends_with(" -- first"), "{after}");
+    let settings =
+        |a: &str| a[a.find("--settings ").unwrap()..a.find(" --plugin-dir").unwrap()].to_string();
+    assert_eq!(settings(&after), settings(&before));
+    let l = d.list();
+    assert_eq!((l.len(), l[0]["pid"].is_i64()), (1, true));
+}
+
+#[test]
+fn list_all_shows_the_departed_of_an_earlier_run_and_resume_brings_one_back() {
+    let d = Daemon::start("all", &[]);
+    let a = d.summon(json!({"name": "Aya"}));
+    d.stub(&a["id"], "ready");
+    let b = d.summon(json!({"name": "Hatate"}));
+    d.stub(&b["id"], "ready");
+    assert_eq!(d.req(json!({"t": "banish", "id": 2, "who": "Hatate"}))["t"], "done");
+    std::thread::sleep(Duration::from_millis(1100));
+    let daemon = d.log()[0]["pid"].as_i64().unwrap();
+    assert_eq!(d.req(json!({"t": "quit", "id": 3}))["t"], "done");
+    wait(|| !alive(daemon), "the daemon to exit");
+
+    d.cli(&["list"]);
+    assert!(d.list().is_empty());
+    let all = d.req(json!({"t": "list", "id": 4, "all": true}))["residents"].clone();
+    let names: Vec<_> =
+        all.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    // Aya left last, at the quit.
+    assert_eq!(names, ["Aya", "Hatate"]);
+    assert!(all.as_array().unwrap().iter().all(|r| r["slot"].is_null() && r["departed"].is_i64()));
+
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", b["id"].as_str().unwrap()))).unwrap();
+    let out = d.cli(&["resume", "hatate"]);
+    // Its old slot is free, so it gets it back. It was never given a prompt, so Claude Code kept
+    // no conversation to resume: it starts afresh under the same id and name.
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("recalled Hatate (slot 2)"));
+    let bid = b["id"].as_str().unwrap();
+    assert!(d.stub(&b["id"], "args").contains(&format!("--session-id {bid} --name Hatate")));
+    assert!(!d.dir.join(format!("departed/{}.json", b["id"].as_str().unwrap())).exists());
+    let all = d.req(json!({"t": "list", "id": 5, "all": true}))["residents"].clone();
+    let names: Vec<_> =
+        all.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Hatate", "Aya"]);
+}

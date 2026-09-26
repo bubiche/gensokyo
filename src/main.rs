@@ -17,9 +17,6 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(_) => gensokyo::cli::main(&args),
-        None => {
-            eprintln!("gensokyo {}: the client is not implemented yet", env!("CARGO_PKG_VERSION"));
-            ExitCode::from(2)
-        }
+        None => gensokyo::client::app::main(),
     }
 }

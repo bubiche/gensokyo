@@ -1,8 +1,11 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
+//! `watch`, `view`, `unview`, `input` and `resize` are answered only when they fail. Events
+//! carry no `id` and go only to connections that asked for them (`watch`, `view`).
 
+use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const PROTO: u32 = 1;
 
@@ -21,7 +24,11 @@ pub enum Request {
         proto: u32,
         who: String,
     },
-    List,
+    List {
+        /// Also everyone in `departed/`, from earlier runs.
+        #[serde(default)]
+        all: bool,
+    },
     Summon(Summon),
     /// HUP, the grace, TERM, KILL. The resident stays in the shrine as departed.
     Banish {
@@ -31,8 +38,43 @@ pub enum Request {
     Close {
         who: String,
     },
+    /// A departed resident comes back: `claude --resume` with its old settings and name.
+    Recall {
+        who: String,
+    },
+    /// `residents` events from now on, whenever the shrine changes.
+    Watch,
+    /// This connection shows `who`: a `frame` now, then `damage` as the screen changes. A new
+    /// `view` replaces the old one.
+    View {
+        who: String,
+    },
+    Unview,
+    /// Bytes for the resident's tty as they are, or a key for its own encoder to encode.
+    Input {
+        who: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bytes: Vec<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<Key>,
+    },
+    /// The size of the client's grid: every live resident and every later summon takes it.
+    /// The last client to say wins.
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
+}
+
+/// A key in kitty's model: `code` is a Unicode codepoint or a kitty functional-key number,
+/// `mods` the kitty modifier parameter minus one, `event` 1 press, 2 repeat, 3 release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Key {
+    pub code: u32,
+    pub mods: u8,
+    pub event: u8,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -53,11 +95,47 @@ pub struct Summon {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Reply {
-    Welcome { proto: u32, pid: u32 },
-    List { id: u64, residents: Vec<Resident> },
-    Summoned { id: u64, resident: Resident },
-    Done { id: u64, message: String },
-    Error { id: u64, error: String },
+    Welcome {
+        proto: u32,
+        pid: u32,
+    },
+    List {
+        id: u64,
+        residents: Vec<Resident>,
+    },
+    Summoned {
+        id: u64,
+        resident: Resident,
+    },
+    Done {
+        id: u64,
+        message: String,
+    },
+    Error {
+        id: u64,
+        error: String,
+    },
+    /// Event: the shrine changed.
+    Residents {
+        residents: Vec<Resident>,
+    },
+    /// Event: the whole screen of the resident this connection views. `rev` numbers it.
+    Frame {
+        who: String,
+        rev: u64,
+        frame: Frame,
+        modes: Modes,
+    },
+    /// Event: the rows that changed since `base`, same size. A `base` the client doesn't hold
+    /// means it missed one: it asks for a `view` again.
+    Damage {
+        who: String,
+        base: u64,
+        rev: u64,
+        rows: Vec<(u16, Vec<Run>)>,
+        cursor: Option<(u16, u16)>,
+        modes: Modes,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +159,15 @@ pub fn state_dir() -> PathBuf {
     }
     let home = std::env::var_os("HOME").unwrap_or_else(|| "/".into());
     PathBuf::from(home).join(".local/state/gensokyo")
+}
+
+/// `$GENSOKYO_SHARE`, else `share/` beside the binary or up to three levels above it (a build
+/// tree).
+pub fn share_dir(exe: &Path) -> Option<PathBuf> {
+    if let Some(s) = std::env::var_os("GENSOKYO_SHARE") {
+        return Some(s.into());
+    }
+    exe.ancestors().skip(1).take(4).map(|d| d.join("share")).find(|s| s.join("names.txt").is_file())
 }
 
 /// `$GENSOKYO_SOCKET`, else `run/gensokyo.sock` in the state dir, else, when that is past the

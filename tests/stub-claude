@@ -11,7 +11,13 @@
 #   interactive (default)     honours --session-id, --name, --resume, swallows the other launch
 #                             flags, sets the window title to "✳ <name>", pushes the keyboard
 #                             modes Claude Code pushes, echoes input, /rename <name> renames,
-#                             /exit exits 0 - unless <id>.eat-exit says to drop that many first
+#                             /exit exits 0 - unless <id>.eat-exit says to drop that many first;
+#                             /sync <s> draws SYNC-MID, waits <s> seconds, then SYNC-END, all in
+#                             one synchronized-output block (2026)
+#                             /mouse turns on mouse reporting (1000, SGR 1006)
+# Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
+# tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
+# of the line read so far, so it is off by default.
 # Signals, for banish and sweep tests (Claude Code survives Ctrl-C, and so does the stub):
 #   STUB_HUP=exit (default) | ignore | <seconds>   exit on SIGHUP, ignore it, or linger first
 #   STUB_TERM=exit (default) | ignore              ignoring SIGTERM too leaves only SIGKILL
@@ -31,6 +37,10 @@ mkdir -p "$STUB_STATE"
 json_str() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
 }
+
+# Claude Code keeps a conversation only once a prompt is submitted, and cannot resume any other.
+convo() { printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/stub/$1.jsonl"; }
+submitted() { mkdir -p "$(dirname "$(convo "$id")")"; printf '%s\n' "$1" >> "$(convo "$id")"; }
 
 write_entry() {   # <id> <name> <status>
   printf '{"pid": %s, "cwd": "%s", "kind": "interactive", "startedAt": %s000, "sessionId": "%s", "name": "%s", "status": %s}\n' \
@@ -116,6 +126,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$id" ] || id=stub-$$
+[ -n "$resume" ] && [ ! -f "$(convo "$id")" ] && { echo "No conversation found with session ID: $id" >&2; exit 1; }
 [ -n "$resume" ] && [ -f "$STUB_STATE/$id.name" ] && name=$(cat "$STUB_STATE/$id.name")
 STARTED=$(date +%s)
 printf '%s\n' "$ORIG_ARGS" > "$STUB_STATE/$id.args"
@@ -130,6 +141,9 @@ trap leave EXIT
 # Ignored, not trapped: bash 3.2 can lose the last character of every later line when a trapped
 # SIGINT lands as `read` starts. The tty still throws away a half-typed line on Ctrl-C.
 trap '' INT
+winch() { stty size > "$STUB_STATE/$id.size.tmp"; mv "$STUB_STATE/$id.size.tmp" "$STUB_STATE/$id.size"
+          echo "size $(cat "$STUB_STATE/$id.size")"; }
+[ -n "${STUB_WINCH:-}" ] && trap winch WINCH
 case ${STUB_HUP:-exit} in
   exit) trap 'exit 129' HUP ;;
   ignore) trap : HUP ;;
@@ -154,7 +168,7 @@ echo "env TERM=${TERM:-} COLORTERM=${COLORTERM:-} TERM_PROGRAM=${TERM_PROGRAM:-}
 # What the skills tell a resident to type. A resident that cannot resolve it goes looking for
 # the binary, so whoever launched it must have put it on PATH.
 echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
-[ -n "$prompt" ] && echo "> $prompt"
+[ -n "$prompt" ] && { echo "> $prompt"; submitted "$prompt"; }
 
 # Bracketed paste, because a spell card depends on it: a paste is wrapped in \033[200~ and
 # \033[201~ only if the program asked for it, and the real thing does. The whole card then
@@ -168,6 +182,7 @@ pasted='' pastes=0
 while :; do
   IFS= read -r line; rc=$?
   if [ "$rc" -ne 0 ]; then [ "$rc" -gt 128 ] && continue; break; fi   # a trapped signal: keep going
+  printf '%s\n' "$line" >> "$STUB_STATE/$id.input"
   case $line in
     *"$pstart"*)
       pasted=${line#*"$pstart"}
@@ -206,9 +221,12 @@ $more"
         continue
       fi
       echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
+    /mouse) printf '%s[?1000h%s[?1006h' "$esc" "$esc"; echo "mouse on" ;;
+    /sync\ *) printf '%s[?2026hSYNC-MID\n' "$esc"; sleep "${line#/sync }"
+               printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"
                 write_entry "$id" "$name" '"idle"'; printf '%s]2;✳ %s\007' "$esc" "$name"; echo "renamed to $name" ;;
-    *) echo "> $line" ;;
+    *) echo "> $line"; submitted "$line" ;;
   esac
 done
 exit 0

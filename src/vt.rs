@@ -10,6 +10,7 @@
 //! libghostty's calls only fail on arguments this module never passes, hence the `unwrap`s. Sizes
 //! are clamped to at least 1x1, and a mode Ghostty doesn't know reads as unset.
 
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::io::Write;
 use std::ops::BitOr;
@@ -117,6 +118,11 @@ impl Vt {
         std::mem::take(&mut *self.replies.borrow_mut())
     }
 
+    /// Columns and rows.
+    pub fn size(&self) -> (u16, u16) {
+        (self.term.cols().unwrap(), self.term.rows().unwrap())
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.term.resize(cols.max(1), rows.max(1), 0, 0).unwrap();
     }
@@ -129,6 +135,19 @@ impl Vt {
     /// The kitty keyboard flags the child asked for: what the host should be set to.
     pub fn kitty_flags(&self) -> u8 {
         self.term.kitty_keyboard_flags().unwrap().bits()
+    }
+
+    /// What the child asked of its terminal that the client has to act on.
+    pub fn modes(&self) -> Modes {
+        let mouse = [1003, 1002, 1000].into_iter().find(|&m| self.mode(m)).unwrap_or(0);
+        Modes {
+            kitty: self.kitty_flags(),
+            mouse,
+            sgr: self.mode(1006),
+            paste: self.mode(2004),
+            focus: self.mode(1004),
+            alt: self.mode(1049) || self.mode(1047) || self.mode(47),
+        }
     }
 
     /// The visible screen as style runs.
@@ -213,8 +232,25 @@ impl Vt {
     }
 }
 
+/// The child's terminal modes the client acts on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Modes {
+    /// Kitty keyboard flags.
+    pub kitty: u8,
+    /// Mouse tracking: 0 none, 1000 clicks, 1002 drags too, 1003 all motion.
+    pub mouse: u16,
+    /// SGR mouse encoding (1006).
+    pub sgr: bool,
+    /// Bracketed paste (2004).
+    pub paste: bool,
+    /// Focus in/out reports (1004).
+    pub focus: bool,
+    /// The alternate screen.
+    pub alt: bool,
+}
+
 /// The screen at one moment, as rows of style runs.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub cols: u16,
     pub rows: Vec<Vec<Run>>,
@@ -238,14 +274,14 @@ impl Frame {
 
 /// Cells sharing one style, starting at column `col`. A wide character counts two columns and
 /// appears once in `text`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Run {
     pub col: u16,
     pub style: Style,
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Style {
     pub fg: Color,
     pub bg: Color,
@@ -253,7 +289,7 @@ pub struct Style {
     pub attrs: u8,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Color {
     #[default]
     Default,
@@ -363,6 +399,30 @@ pub struct KeyEvent {
 impl KeyEvent {
     pub fn press(key: Key, mods: Mods) -> KeyEvent {
         KeyEvent { key, mods, action: Action::Press }
+    }
+
+    /// A key in kitty's numbering (the codepoint of the unshifted key, or Enter 13, Tab 9,
+    /// Backspace 127, Escape 27; modifiers as the kitty parameter minus one; event 1 press, 2
+    /// repeat, 3 release). None for keys this module has no name for.
+    pub fn from_kitty(code: u32, mods: u8, event: u8) -> Option<KeyEvent> {
+        let mods = Mods(mods & 0x0f);
+        let key = match code {
+            13 => Key::Enter,
+            9 => Key::Tab,
+            127 | 8 => Key::Backspace,
+            27 => Key::Escape,
+            _ => match char::from_u32(code).filter(|c| !c.is_control()) {
+                Some(c) if mods.0 & Mods::SHIFT.0 != 0 => Key::Char(c.to_ascii_uppercase()),
+                Some(c) => Key::Char(c),
+                None => return None,
+            },
+        };
+        let action = match event {
+            2 => Action::Repeat,
+            3 => Action::Release,
+            _ => Action::Press,
+        };
+        Some(KeyEvent { key, mods, action })
     }
 }
 

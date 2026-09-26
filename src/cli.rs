@@ -77,6 +77,10 @@ pub fn main(args: &[String]) -> ExitCode {
     let r = match verb {
         "list" => list(rest),
         "new" => new(rest),
+        "resume" => match rest {
+            [who] => resume(who),
+            _ => Err("usage: gensokyo resume <name|id>".into()),
+        },
         "banish" | "close" => match rest {
             [who] if verb == "banish" => say(request(Request::Banish { who: who.clone() }, false)),
             [who] => say(request(Request::Close { who: who.clone() }, false)),
@@ -109,7 +113,8 @@ fn say(r: Result<Reply, String>) -> Result<(), String> {
 
 fn list(args: &[String]) -> Result<(), String> {
     let json = args.iter().any(|a| a == "--json");
-    let residents = match request(Request::List, true)? {
+    let all = args.iter().any(|a| a == "--all");
+    let residents = match request(Request::List { all }, true)? {
         Reply::List { residents, .. } => residents,
         other => return Err(format!("unexpected reply {other:?}")),
     };
@@ -123,6 +128,17 @@ fn list(args: &[String]) -> Result<(), String> {
         println!("{slot} {:<12} {state:<8} {}", r.name, r.cwd);
     }
     Ok(())
+}
+
+fn resume(who: &str) -> Result<(), String> {
+    match request(Request::Recall { who: who.into() }, true)? {
+        Reply::Summoned { resident: r, .. } => {
+            let slot = r.slot.map_or(String::new(), |s| format!(" (slot {s})"));
+            println!("recalled {}{slot} in {}", r.name, r.cwd);
+            Ok(())
+        }
+        other => Err(format!("unexpected reply {other:?}")),
+    }
 }
 
 fn new(args: &[String]) -> Result<(), String> {

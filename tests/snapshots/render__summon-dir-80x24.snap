@@ -1,0 +1,28 @@
+---
+source: tests/render.rs
+expression: t.backend()
+---
+"┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensokyo ───────────────────────────┐"
+"│1 ○ Reimu              ││line 00                                              │"
+"│2 ○ Marisa             ││line 01     ~                                        │"
+"│3 · Cirno              ││line 02     ~~                                       │"
+"│                       ││line 03     ~~~                                      │"
+"│                       ││line 04     ~~~~                                     │"
+"│                       ││line 05     ~~~~~                                    │"
+"│                       ││line 0┌ summon ──────────────────────────────┐       │"
+"│                       ││line 0│ Where?                               │       │"
+"│                       ││line 0│   /Users/someone/dev/sc█             │       │"
+"│                       ││line 0│ scratch_repo/  scripts/              │       │"
+"│                       ││line 1│ recent                               │       │"
+"│                       ││line 1│   ~/dev/gensokyo                     │       │"
+"│                       ││line 1│ › ~/dev/scratch_repo                 │       │"
+"│                       ││line 1│   ~/work/padlet                      │       │"
+"│                       ││line 1│ [summon ⏎] [cancel esc]              │       │"
+"│                       ││line 1└──────────────────────────────────────┘       │"
+"│                       ││line 16     ~~~~~~~~~~~~~~~~                         │"
+"│                       ││line 17     ~~~~~~~~~~~~~~~~~                        │"
+"│                       ││line 18     ~~~~~~~~~~~~~~~~~~                       │"
+"│[summon n] [banish b]  ││line 19     ~~~~~~~~~~~~~~~~~~~                      │"
+"│[recall r] [quit q] [?]││line 20                                              │"
+"│[mouse: shrine m]      ││line 21     ~                                        │"
+"└───────────────────────┘└─────────────────────────────────────────────────────┘"

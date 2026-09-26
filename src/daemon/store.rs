@@ -50,21 +50,36 @@ impl Store {
         remove(&self.residents().join(format!("{}.json", r.id)))
     }
 
+    /// Back in the shrine: recalled.
+    pub fn restore(&self, r: &Record) -> std::io::Result<()> {
+        self.save(r)?;
+        remove(&self.departed().join(format!("{}.json", r.id)))
+    }
+
     /// Every record in `residents/`, or why one could not be read.
     pub fn load(&self) -> Vec<Result<Record, String>> {
-        let read = |p: &Path| {
-            let b = std::fs::read(p).map_err(|e| e.to_string())?;
-            serde_json::from_slice(&b).map_err(|e| e.to_string())
-        };
-        std::fs::read_dir(self.residents())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
-            .map(|p| read(&p).map_err(|e| format!("{}: {e}", p.display())))
-            .collect()
+        load(&self.residents())
     }
+
+    /// The records in `departed/` that can be read.
+    pub fn load_departed(&self) -> Vec<Record> {
+        load(&self.departed()).into_iter().flatten().collect()
+    }
+}
+
+fn load(dir: &Path) -> Vec<Result<Record, String>> {
+    let read = |p: &Path| {
+        let b = std::fs::read(p).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&b).map_err(|e| e.to_string())
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| read(&p).map_err(|e| format!("{}: {e}", p.display())))
+        .collect()
 }
 
 fn to_json(r: &Record) -> Vec<u8> {

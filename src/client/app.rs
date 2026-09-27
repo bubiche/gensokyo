@@ -347,6 +347,11 @@ impl App {
         };
         match r {
             Reply::Welcome { .. } => {}
+            Reply::Cards { cards, unusable, .. } => {
+                if let Some(Modal::Cast(c)) = &mut self.m.modal {
+                    (c.cards, c.unusable) = (Some(cards), unusable);
+                }
+            }
             Reply::List { id, residents } => match self.lists.remove(&id) {
                 Some(Want::Shrine) => self.residents(residents),
                 _ => {
@@ -595,6 +600,7 @@ impl App {
                 Button::Summon => self.chord(Chord::Summon),
                 Button::Banish => self.chord(Chord::Banish),
                 Button::Recall => self.chord(Chord::Recall),
+                Button::Cast => self.chord(Chord::Cast),
                 Button::Quit => self.chord(Chord::Quit),
                 Button::Help => self.chord(Chord::Help),
                 Button::Capture => self.chord(Chord::Capture),
@@ -611,7 +617,9 @@ impl App {
                         s.selected = Some(i);
                     }
                 }
-                Some(Modal::Recall { selected, .. }) => {
+                Some(
+                    Modal::Recall { selected, .. } | Modal::Cast(render::Cast { selected, .. }),
+                ) => {
                     if *selected == i {
                         self.confirm();
                     } else {
@@ -646,6 +654,10 @@ impl App {
             Chord::Recall => {
                 self.m.modal = Some(Modal::Recall { list: Vec::new(), selected: 0 });
                 self.refresh_modal();
+            }
+            Chord::Cast => {
+                self.m.modal = Some(Modal::Cast(render::Cast::default()));
+                self.send(Request::Cards);
             }
             Chord::Quit => self.m.modal = Some(Modal::Quit),
             Chord::Help => self.m.modal = Some(Modal::Help),
@@ -733,8 +745,37 @@ impl App {
                     self.send(Request::Recall { who: r.id.clone() });
                 }
             }
+            Modal::Cast(mut c) => {
+                let choices = render::cast_choices(&self.m, &c);
+                let Some((pick, _)) = choices.get(c.selected.min(choices.len().saturating_sub(1)))
+                else {
+                    self.m.modal = Some(Modal::Cast(c));
+                    return;
+                };
+                let pick = pick.clone();
+                let card = match &c.card {
+                    None => {
+                        c.card = c.cards.iter().flatten().find(|k| k.slug == pick).cloned();
+                        c.selected = 0;
+                        self.m.modal = Some(Modal::Cast(c));
+                        return;
+                    }
+                    Some(k) if k.pair && c.target.is_none() => {
+                        (c.target, c.selected) = (Some(pick), 0);
+                        self.m.modal = Some(Modal::Cast(c));
+                        return;
+                    }
+                    Some(k) => k.clone(),
+                };
+                let (targets, peer) = match c.target {
+                    Some(t) => (vec![t], Some(pick)),
+                    None => (vec![pick], None),
+                };
+                self.send(Request::Cast(proto::Cast { card: card.slug, targets, peer }));
+                self.m.message = Some(format!("casting {}…", card.title));
+            }
             Modal::Quit => {
-                self.send(Request::Quit);
+                self.quit = Some(self.send(Request::Quit));
                 self.gone = Some("the shrine is empty; the daemon stopped".into());
             }
             Modal::Help => {}
@@ -743,6 +784,10 @@ impl App {
 
     fn modal_key(&mut self, c: &Chunk) {
         let k = ModalKey::of(c);
+        let last = match &self.m.modal {
+            Some(Modal::Cast(c)) => render::cast_choices(&self.m, c).len().saturating_sub(1),
+            _ => 0,
+        };
         let Some(modal) = self.m.modal.as_mut() else { return };
         match (modal, k) {
             (_, ModalKey::Esc) => self.m.modal = None,
@@ -751,6 +796,14 @@ impl App {
                 self.confirm()
             }
             (Modal::Quit | Modal::Banish { .. }, ModalKey::Text('n')) => self.m.modal = None,
+            (Modal::Cast(c), k) => match k {
+                ModalKey::Up | ModalKey::Text('k') => {
+                    c.selected = c.selected.min(last).saturating_sub(1)
+                }
+                ModalKey::Down | ModalKey::Text('j') => c.selected = (c.selected + 1).min(last),
+                ModalKey::Enter => self.confirm(),
+                _ => {}
+            },
             (Modal::Recall { list, selected }, k) => match k {
                 ModalKey::Up => *selected = selected.saturating_sub(1),
                 ModalKey::Down => *selected = (*selected + 1).min(list.len().saturating_sub(1)),

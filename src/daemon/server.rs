@@ -2,6 +2,7 @@
 //! and each connection's requests and screen stream, all on one thread. The residents
 //! themselves are the shrine's (`shrine.rs`).
 
+use super::cards;
 use super::ingest::{hook, replay, statusline};
 use super::notify::looked;
 use super::registry::poll;
@@ -193,7 +194,7 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
     }
 }
 
-/// Requests are read in order. Banish, close and quit run on their own, so a long one holds up
+/// Requests are read in order. Banish, close, cast and quit run on their own, so a long one holds up
 /// neither the rest nor the screen; their replies come when they finish.
 async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
     if !same_user(&s) {
@@ -257,12 +258,13 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
                 recall(&shrine, &who)
                     .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
             ),
-            Request::Banish { .. } | Request::Close { .. } => {
+            Request::Banish { .. } | Request::Close { .. } | Request::Cast(_) => {
                 let (shrine, out) = (shrine.clone(), out.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
                         Request::Banish { who } => banish(&shrine, &who).await,
                         Request::Close { who } => close(&shrine, &who).await,
+                        Request::Cast(c) => cards::cast(&shrine, c).await,
                         _ => unreachable!("matched above"),
                     };
                     send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
@@ -327,6 +329,10 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
             Request::Resize { cols, rows } => {
                 resize(&shrine, cols, rows);
                 None
+            }
+            Request::Cards => {
+                let (cards, unusable) = cards::cards(&shrine.borrow());
+                Some(Reply::Cards { id, cards, unusable })
             }
         };
         if let Some(r) = reply {

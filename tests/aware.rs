@@ -317,3 +317,34 @@ fn resident_text_is_one_line_of_printable_characters() {
     assert_eq!(tele::usage("7d", &l, 1000, 5), "7d ▓▓▓▓▓ 100% ↻1m");
     assert_eq!(tele::usage("7d", &l, 1059, 5), "7d ▓▓▓▓▓ 100%");
 }
+
+#[test]
+fn a_card_may_go_to_a_finished_turn_but_never_into_a_dialog_or_an_unlisted_session() {
+    let mut a = Aware::default();
+    assert_eq!(a.blocked(), Some("is still starting up"), "no snapshot yet: the trust dialog");
+    a.registry(Some(Registry::Idle), 5);
+    assert_eq!(a.blocked(), None);
+    a.hook(&recorded("UserPromptSubmit", None, 10));
+    a.hook(&recorded("Stop", None, 20));
+    assert_eq!((a.state(), a.blocked()), (State::Awaits, None));
+    // The hook's permission prompt, before the registry has caught up.
+    a.hook(&recorded("UserPromptSubmit", None, 30));
+    a.hook(&recorded("Notification", Some("permission_prompt"), 40));
+    assert_eq!(a.blocked(), Some("has a dialog waiting for you"));
+    a.registry(Some(Registry::Busy), 50);
+    assert_eq!(a.blocked(), None, "granted");
+    // A dialog only the registry sees.
+    a.registry(Some(Registry::Waiting), 60);
+    assert_eq!(a.blocked(), Some("has a dialog waiting for you"));
+    a.hook(&hook(
+        json!({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion",
+               "tool_input": {"questions": [{"question": "Which?"}]}}),
+        70,
+    ));
+    assert_eq!(a.blocked(), Some("is asking you a question"));
+    // Gone from the snapshot: whatever it shows now, nothing is known of it.
+    a.hook(&hook(json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}), 80));
+    a.registry(None, 90);
+    assert!(!a.listed());
+    assert_eq!(a.blocked(), Some("is still starting up"));
+}

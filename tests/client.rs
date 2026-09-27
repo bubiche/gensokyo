@@ -309,6 +309,39 @@ async fn a_resident_nobody_watches_rings_the_host() {
     // Back to the terminal, with her on screen: seen.
     c.send(b"\x1b[I").await;
     c.wait("Marisa seen", |s| s.contains("2 ○ Marisa")).await;
+
+    // Leader, c: a card (the user's own, first by title), then everyone: both get it, filled
+    // in for each.
+    let cards = dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("probe.md"), "---\ntitle: Aa Probe\n---\nprobe for {self}\n")
+        .unwrap();
+    c.send(b"\x1dc").await;
+    c.wait("the cards", |s| s.contains("› Aa Probe")).await;
+    c.send(b"\r").await;
+    c.wait("the targets", |s| s.contains("› everyone")).await;
+    c.send(b"\r").await;
+    // The reply wraps in the sidebar: its rows, read as one line.
+    let side = |s: &str| {
+        let rows = s.lines().map(|l| l.chars().skip(1).take(23).collect::<String>());
+        rows.map(|r| r.trim().to_string()).collect::<Vec<_>>().join(" ")
+    };
+    c.wait("the cast", |s| side(s).contains("cast Aa Probe on Reimu and Marisa")).await;
+    let inputs = std::fs::read_dir(dir.join("stub")).unwrap().flatten().map(|e| e.path());
+    let inputs: String = inputs
+        .filter(|p| p.extension().is_some_and(|x| x == "input"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    for who in ["Reimu", "Marisa"] {
+        assert!(inputs.contains(&format!("\x1b[200~probe for {who}\x1b[201~")), "{inputs:?}");
+    }
+
+    // She leaves, and is recalled from another shell under the same id: her new screen comes.
+    c.send(b"/exit\r").await;
+    c.wait("the departed screen", |s| s.contains("[ recall r ]")).await;
+    cli(&dir, &["resume", "Marisa"]);
+    c.wait("Marisa back", |s| s.contains("stub-claude Marisa") && !s.contains("[ recall r ]"))
+        .await;
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
 }

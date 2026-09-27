@@ -72,7 +72,7 @@ impl Daemon {
         let s = UnixStream::connect(self.socket()).expect("connect");
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         let mut w = s.try_clone().unwrap();
-        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 2, "who": "test"})).unwrap();
+        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 3, "who": "test"})).unwrap();
         let mut lines = BufReader::new(s).lines();
         let welcome: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         assert_eq!(welcome["t"], "welcome");
@@ -365,7 +365,7 @@ fn protocol_errors() {
     assert_eq!(r[0]["t"], "error");
     // After a hello, a bad line is answered and the connection stays.
     let r = talk(
-        "{\"t\":\"hello\",\"proto\":2,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
+        "{\"t\":\"hello\",\"proto\":3,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
     );
     let r: Vec<_> = r.iter().map(|v| v["t"].as_str().unwrap()).collect();
     assert_eq!(r, ["welcome", "error", "list"]);
@@ -416,7 +416,7 @@ impl Client {
             }
         });
         let mut c = Client { w: s, rx };
-        c.send(json!({"t": "hello", "proto": 2, "who": "test"}));
+        c.send(json!({"t": "hello", "proto": 3, "who": "test"}));
         assert_eq!(c.next(Duration::from_secs(5)).unwrap()["t"], "welcome");
         c
     }
@@ -713,7 +713,7 @@ fn input(d: &Daemon, who: &str, text: &str) {
     // Input is answered only when it fails, so a list after it says it was taken.
     let s = UnixStream::connect(d.socket()).unwrap();
     let mut w = s.try_clone().unwrap();
-    let hello = json!({"t": "hello", "proto": 2, "who": "test"});
+    let hello = json!({"t": "hello", "proto": 3, "who": "test"});
     let req = json!({"t": "input", "id": 1, "who": who, "bytes": bytes});
     writeln!(w, "{hello}\n{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
     let mut lines = BufReader::new(s).lines();
@@ -878,4 +878,85 @@ fn a_clear_moves_the_session_on_and_a_recall_after_a_restart_resumes_it_with_its
         },
         "the resumed session's SessionStart",
     );
+}
+
+#[test]
+fn a_card_reaches_everyone_free_and_names_whoever_holds_a_dialog() {
+    let d = Daemon::start("cast", &[("STUB_HOOKS", "1")]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    let roll = "---\ntitle: Roll Call\nsummary: who is here\n---\n\nYou are {self}.\nThe others: {residents}.\n";
+    std::fs::write(cards.join("roll-call.md"), roll).unwrap();
+    std::fs::write(cards.join("pair.md"), "---\ntitle: Pair\npeer: required\n---\nTalk to {peer}.")
+        .unwrap();
+    let out = d.cli(&["broadcast"]);
+    let listing = String::from_utf8_lossy(&out.stdout);
+    assert!(listing.contains("roll-call") && listing.contains("who is here"), "{listing}");
+    assert!(listing.contains("Pair") && listing.contains("(needs --with <peer>)"), "{listing}");
+
+    let (a, b) = (d.summon(json!({"name": "Reimu"})), d.summon(json!({"name": "Marisa"})));
+    d.stub(&a["id"], "ready");
+    d.stub(&b["id"], "ready");
+    // Marisa at a permission dialog, as Claude Code shows one: its hook, and `waiting`.
+    let bid = b["id"].as_str().unwrap();
+    std::fs::write(d.dir.join(format!("stub/{bid}.status")), "waiting").unwrap();
+    input(&d, "Marisa", "/perm");
+    wait(|| d.list()[1]["state"] == "awaits", "Marisa at her dialog");
+    let cast = |card: &str, targets: &[&str], peer: Option<&str>| {
+        let mut req = json!({"t": "cast", "id": 3, "card": card, "targets": targets});
+        if let Some(p) = peer {
+            req["peer"] = json!(p);
+        }
+        let r = d.req(req);
+        assert_eq!(r["id"], 3, "{r}");
+        (
+            r["t"].as_str().unwrap().to_string(),
+            r[if r["t"] == "done" { "message" } else { "error" }].as_str().unwrap().to_string(),
+        )
+    };
+    assert_eq!(
+        cast("roll", &["all"], None),
+        (
+            "done".into(),
+            "cast Roll Call on Reimu; Marisa has a dialog waiting for you; left out".into()
+        )
+    );
+    let reimu = || d.stub(&a["id"], "input");
+    wait(|| reimu().contains("\x1b[201~"), "the whole card");
+    assert!(
+        reimu().contains("\x1b[200~You are Reimu.\nThe others: Marisa.\x1b[201~\n"),
+        "{}",
+        reimu()
+    );
+    assert!(!d.stub(&b["id"], "input").contains("You are"));
+    assert_eq!(d.list()[0]["state"], "resting");
+    let log: Vec<Value> = d.log().into_iter().filter(|l| l["ev"] == "cast").collect();
+    assert_eq!((&log[0]["card"], &log[0]["sent"]), (&json!("roll-call"), &json!(["Reimu"])));
+
+    // Named, she is still not typed into; a card that reaches nobody is an error.
+    let (t, m) = cast("Roll Call", &["Marisa"], None);
+    assert_eq!(t, "error");
+    assert_eq!(
+        m,
+        "Roll Call reached nobody; Marisa has a dialog waiting for you; not cast at, or the card would answer it"
+    );
+    // A pair card: one target and a peer, who may be held but is told of.
+    assert_eq!(cast("pair", &["Reimu"], None).1, "Pair needs a peer: --with <name>");
+    assert_eq!(
+        cast("pair", &["Reimu", "Marisa"], Some("Reimu")).1,
+        "Pair is cast at one resident, with a peer; 2 were named"
+    );
+    assert_eq!(cast("pair", &["Reimu"], Some("reimu")).1, "Reimu cannot be its own peer");
+    assert_eq!(
+        cast("roll", &["Reimu"], Some("Marisa")).1,
+        "Roll Call names no peer, so --with has nowhere to go"
+    );
+    assert_eq!(
+        cast("pair", &["1"], Some("Marisa")),
+        ("done".into(), "cast Pair on Reimu; Marisa has a dialog waiting for you, so it may not answer until you have seen to that".into())
+    );
+    wait(|| reimu().contains("Talk to Marisa."), "the pair card");
+    let e = d.command(&["broadcast", "nope", "all"]).output().unwrap();
+    assert!(!e.status.success());
+    assert!(String::from_utf8_lossy(&e.stderr).contains("no spell card 'nope'"));
 }

@@ -1,6 +1,6 @@
 //! The plumbing verbs: one request over the socket, starting the daemon when nobody answers.
 
-use crate::proto::{self, Envelope, Reply, Request, Summon};
+use crate::proto::{self, Cast, Envelope, Reply, Request, Summon};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
@@ -86,6 +86,7 @@ pub fn main(args: &[String]) -> ExitCode {
             [who] => say(request(Request::Close { who: who.clone() }, false)),
             _ => Err(format!("usage: gensokyo {verb} <name|slot>")),
         },
+        "broadcast" => broadcast(rest),
         "quit" => match request(Request::Quit, false) {
             Err(e) if e == "the daemon is not running" => Ok(()),
             r => say(r),
@@ -187,4 +188,59 @@ fn new(args: &[String]) -> Result<(), String> {
         }
         other => Err(format!("unexpected reply {other:?}")),
     }
+}
+
+/// `broadcast <card> <all|awaiting|idle|name...> [--with <peer>]`; alone it lists the cards. No
+/// free text: a prompt worth sending to everybody is worth a file in `spellcards/`.
+fn broadcast(args: &[String]) -> Result<(), String> {
+    let mut c = Cast::default();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--with" => c.peer = Some(it.next().cloned().ok_or("broadcast: --with needs a name")?),
+            _ if a.starts_with('-') => {
+                return Err(format!(
+                    "broadcast: unknown option {a} (usage: gensokyo broadcast <card> <all|awaiting|idle|name> [--with peer])"
+                ));
+            }
+            _ if c.card.is_empty() => c.card = a.clone(),
+            _ => c.targets.push(a.clone()),
+        }
+    }
+    if !c.card.is_empty() {
+        return say(request(Request::Cast(c), false));
+    }
+    let (cards, unusable) = match request(Request::Cards, true)? {
+        Reply::Cards { cards, unusable, .. } => (cards, unusable),
+        other => return Err(format!("unexpected reply {other:?}")),
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tilde = |p: &str| match p.strip_prefix(&home) {
+        Some(rest) if !home.is_empty() => format!("~{rest}"),
+        _ => p.to_string(),
+    };
+    let mine = tilde(&proto::config_dir().join("spellcards").to_string_lossy());
+    if cards.is_empty() {
+        println!("no spell cards: put one in {mine}");
+    } else {
+        println!("  {:<18} {:<34} what it asks for", "card", "title");
+        for k in &cards {
+            let pair = if k.pair { " (needs --with <peer>)" } else { "" };
+            println!("  {:<18} {:<34} {}{pair}", k.slug, k.title, k.summary);
+        }
+        println!();
+        println!(
+            "  gensokyo broadcast <card> all|awaiting|idle|<name> [--with <name>]   (the shrine's [cast c] button)"
+        );
+        println!(
+            "  your own cards go in {mine}/<name>.md; {{self}} {{peer}} {{cwd}} {{residents}} are filled in"
+        );
+    }
+    for f in unusable {
+        eprintln!(
+            "gensokyo: not a usable card name (letters, digits, . _ - and .md): {}",
+            tilde(&f)
+        );
+    }
+    Ok(())
 }

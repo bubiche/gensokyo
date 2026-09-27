@@ -2,7 +2,7 @@
 //! resident's grid in a box, and a modal over it. `render` also returns what every cell does
 //! when clicked, so clicks are resolved against exactly what was drawn.
 
-use crate::proto::{Resident, State};
+use crate::proto::{Card, Resident, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -52,8 +52,42 @@ pub enum Modal {
         list: Vec<Resident>,
         selected: usize,
     },
+    /// A spell card, then who gets it, then whom a pair card's target talks to.
+    Cast(Cast),
     Quit,
     Help,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Cast {
+    /// None until the daemon has said.
+    pub cards: Option<Vec<Card>>,
+    /// Card files left out for their names.
+    pub unusable: Vec<String>,
+    /// The card picked, then the target picked (a group or a resident's id).
+    pub card: Option<Card>,
+    pub target: Option<String>,
+    pub selected: usize,
+}
+
+/// The cast modal's choices where it stands: what each sends, and its line. Residents are read
+/// from the model as it is now, so one that left meanwhile is simply not offered.
+pub fn cast_choices(m: &Model, c: &Cast) -> Vec<(String, String)> {
+    let Some(card) = &c.card else {
+        let cards = c.cards.iter().flatten();
+        let pair = |k: &Card| if k.pair { "  (pair)" } else { "" };
+        return cards.map(|k| (k.slug.clone(), format!("{}{}", k.title, pair(k)))).collect();
+    };
+    let groups =
+        [("all", "everyone"), ("awaiting", "everyone who needs you"), ("idle", "everyone resting")];
+    let groups = groups.iter().filter(|_| !card.pair && c.target.is_none());
+    let live = m.residents.iter().filter(|r| r.departed.is_none());
+    let live = live.filter(|r| c.target.as_ref() != Some(&r.id)).map(|r| {
+        let slot = r.slot.map_or("-".into(), |s| s.to_string());
+        let line = format!("{slot} {} {:<12} {}", r.state.glyph(), r.name, tilde(&r.cwd, &m.home));
+        (r.id.clone(), line)
+    });
+    groups.map(|(v, l)| (v.to_string(), l.to_string())).chain(live).collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,6 +129,7 @@ pub enum Button {
     Summon,
     Banish,
     Recall,
+    Cast,
     Quit,
     Help,
     Capture,
@@ -248,6 +283,7 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         ("[summon n]", Button::Summon),
         ("[banish b]", Button::Banish),
         ("[recall r]", Button::Recall),
+        ("[cast c]", Button::Cast),
         ("[quit q]", Button::Quit),
         ("[?]", Button::Help),
     ];
@@ -263,11 +299,15 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             }
         }
     }
-    let y = up(1);
     if m.leader {
-        buf.set_stringn(inner.x, y, "^] …", w, PICK.add_modifier(Modifier::BOLD));
+        buf.set_stringn(inner.x, up(1), "^] …", w, PICK.add_modifier(Modifier::BOLD));
     } else if let Some(msg) = &m.message {
-        buf.set_stringn(inner.x, y, msg, w, ERROR);
+        // Wrapped, not cut: a cast's reply names who was left out at its end.
+        let lines = wrap(msg, w, 5);
+        let y = up(lines.len() as u16);
+        for (i, l) in lines.iter().enumerate().take((inner.bottom() - y) as usize) {
+            buf.set_stringn(inner.x, y + i as u16, l, w, ERROR);
+        }
     }
     for (i, r) in m.residents.iter().enumerate() {
         let y = inner.y + i as u16;
@@ -403,7 +443,7 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let dim = |s: &str| Text(s.to_string(), DIM);
     let yes_no =
         |yes: &'static str, no: &'static str| Buttons(vec![(yes, Button::Yes), (no, Button::No)]);
-    let (title, mut rows): (&str, Vec<Row>) = match md {
+    let (title, mut rows): (String, Vec<Row>) = match md {
         Modal::Summon(s) if s.stage == Stage::Dir => {
             let typed = if s.selected.is_none() { PICK } else { Style::new() };
             let mut rows = vec![
@@ -420,10 +460,10 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                     Item(i, format!("{}{}", mark(sel), tilde(&s.recent[i], &m.home)), sel)
                 }));
             }
-            (" summon ", rows)
+            (" summon ".into(), rows)
         }
         Modal::Summon(s) => (
-            " summon ",
+            " summon ".into(),
             vec![
                 t(&format!("In {}", tilde(&s.path, &m.home))),
                 Text(format!("name: {}█", s.name), PICK),
@@ -431,14 +471,14 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             ],
         ),
         Modal::Banish { name, .. } => (
-            " banish ",
+            " banish ".into(),
             vec![t(&format!("Banish {name}?")), dim("It gets HUP, then TERM, then KILL.")],
         ),
         Modal::Recall { list, .. } if list.is_empty() => {
-            (" recall ", vec![dim("Nobody has departed.")])
+            (" recall ".into(), vec![dim("Nobody has departed.")])
         }
         Modal::Recall { list, selected } => (
-            " recall ",
+            " recall ".into(),
             window(list.len(), *selected, 12)
                 .map(|i| {
                     let r = &list[i];
@@ -450,15 +490,55 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 })
                 .collect(),
         ),
+        Modal::Cast(c) if c.cards.as_ref().is_none_or(Vec::is_empty) => {
+            let dir = tilde(&crate::proto::config_dir().to_string_lossy(), &m.home);
+            let say = match c.cards {
+                None => "loading the spell cards…".into(),
+                Some(_) => format!("no spell cards: put one in {dir}/spellcards"),
+            };
+            (" cast ".into(), vec![dim(&say)])
+        }
+        Modal::Cast(c) => {
+            let choices = cast_choices(m, c);
+            let sel = c.selected.min(choices.len().saturating_sub(1));
+            let (title, head) = match (&c.card, &c.target) {
+                (None, _) => (" cast ".to_string(), "Which spell card?".to_string()),
+                (Some(k), None) => (format!(" {} ", k.title), "On whom?".into()),
+                (Some(k), Some(t)) => {
+                    let who =
+                        m.residents.iter().find(|r| &r.id == t).map_or(t.as_str(), |r| &r.name);
+                    (format!(" {} ", k.title), format!("{who} talks to whom?"))
+                }
+            };
+            let mut rows = vec![t(&head)];
+            if choices.is_empty() {
+                rows.push(dim("Nobody is here to cast at."));
+            }
+            rows.extend(
+                window(choices.len(), sel, 10)
+                    .map(|i| Item(i, format!("{}{}", mark(i == sel), choices[i].1), i == sel)),
+            );
+            match c.cards.iter().flatten().nth(sel).filter(|_| c.card.is_none()) {
+                Some(k) if !k.summary.is_empty() => rows.push(dim(&k.summary)),
+                _ => {}
+            }
+            if c.card.is_none() && !c.unusable.is_empty() {
+                let names: Vec<_> =
+                    c.unusable.iter().map(|p| p.rsplit('/').next().unwrap_or(p)).collect();
+                rows.push(dim(&format!("file names not usable: {}", names.join(" "))));
+            }
+            (title, rows)
+        }
         Modal::Quit => (
-            " quit ",
+            " quit ".into(),
             vec![t("Quit the shrine?"), dim("Everyone gets /exit, then the daemon stops.")],
         ),
         Modal::Help => {
-            const KEYS: [(&str, &str); 8] = [
+            const KEYS: [(&str, &str); 9] = [
                 ("n", "summon"),
                 ("b", "banish"),
                 ("r", "recall"),
+                ("c", "cast"),
                 ("x", "close"),
                 ("q", "quit"),
                 ("?", "help"),
@@ -466,12 +546,12 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 ("d", "detach"),
             ];
             let mut rows = vec![t("Ctrl-] then a key:")];
-            rows.extend(
-                KEYS.chunks(2)
-                    .map(|p| t(&format!("  {}  {:<15} {}  {}", p[0].0, p[0].1, p[1].0, p[1].1))),
-            );
+            rows.extend(KEYS.chunks(2).map(|p| {
+                let right = p.get(1).map_or(String::new(), |(k, v)| format!(" {k}  {v}"));
+                t(&format!("  {}  {:<15}{right}", p[0].0, p[0].1))
+            }));
             rows.extend(["  1-9  focus that slot", "  Ctrl-]  a literal Ctrl-]"].map(t));
-            (" help ", rows)
+            (" help ".into(), rows)
         }
     };
     let error = match md {
@@ -486,6 +566,13 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         Modal::Banish { .. } => yes_no("[banish y]", "[cancel n]"),
         Modal::Recall { list, .. } if list.is_empty() => Buttons(vec![("[close esc]", Button::No)]),
         Modal::Recall { .. } => yes_no("[recall ⏎]", "[cancel esc]"),
+        Modal::Cast(c) if c.cards.as_ref().is_none_or(Vec::is_empty) => {
+            Buttons(vec![("[close esc]", Button::No)])
+        }
+        Modal::Cast(c) if c.card.as_ref().is_some_and(|k| !k.pair || c.target.is_some()) => {
+            yes_no("[cast ⏎]", "[cancel esc]")
+        }
+        Modal::Cast(_) => yes_no("[next ⏎]", "[cancel esc]"),
         Modal::Quit => yes_no("[quit y]", "[cancel n]"),
         Modal::Help => Buttons(vec![("[close esc]", Button::No)]),
     });
@@ -521,6 +608,45 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             Buttons(b) => flow(buf, line, b, BUTTON, hits),
         }
     }
+}
+
+/// `s` in lines of at most `w` columns, broken at spaces where it can be, at most `n` of them;
+/// the last ends in `…` when some was left over.
+fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
+    let mut lines: Vec<String> = vec![String::new()];
+    for word in s.split(' ') {
+        let cur = lines.last_mut().expect("never empty");
+        let sep = usize::from(!cur.is_empty());
+        if width(cur) as usize + sep + width(word) as usize <= w {
+            if sep == 1 {
+                cur.push(' ');
+            }
+            cur.push_str(word);
+            continue;
+        }
+        // Too long for a row of its own too: cut where it has to be.
+        if lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        let mut next = String::new();
+        for ch in word.chars() {
+            let cw = width(ch.encode_utf8(&mut [0; 4])) as usize;
+            if !next.is_empty() && width(&next) as usize + cw > w {
+                lines.push(std::mem::take(&mut next));
+            }
+            next.push(ch);
+        }
+        lines.push(next);
+    }
+    if lines.len() > n {
+        lines.truncate(n);
+        let last = &mut lines[n - 1];
+        while !last.is_empty() && width(last) as usize + 1 > w {
+            last.pop();
+        }
+        last.push('…');
+    }
+    lines
 }
 
 /// The selection marker, so it shows without colour too.

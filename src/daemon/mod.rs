@@ -1,6 +1,7 @@
 //! The daemon: owns every resident's PTY and emulator and serves clients over a unix socket.
 
 pub mod aware;
+pub mod cards;
 mod ingest;
 mod launch;
 mod notify;

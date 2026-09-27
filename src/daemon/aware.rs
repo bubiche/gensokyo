@@ -126,6 +126,26 @@ impl Aware {
         }
     }
 
+    /// Why nothing may be typed into it now, or nothing. A dialog open would take the Enter
+    /// after a card and answer it. So would one the registry cannot see yet: a session it does
+    /// not list may be on the workspace trust dialog, where no hook fires either. A finished
+    /// turn is not in the way: typing into that is what a card is for.
+    pub fn blocked(&self) -> Option<&'static str> {
+        match (self.pending, self.registry) {
+            (Some(Pending::Asked), _) => Some("is asking you a question"),
+            (_, None) => Some("is still starting up"),
+            (Some(Pending::Awaits), _) | (_, Some((Registry::Waiting, _))) => {
+                Some("has a dialog waiting for you")
+            }
+            _ => None,
+        }
+    }
+
+    /// In the last registry snapshot: other sessions can message it.
+    pub fn listed(&self) -> bool {
+        self.registry.is_some()
+    }
+
     /// On screen in a focused terminal: a finished turn has been seen. A dialog still waits.
     /// True if that cleared it.
     pub fn seen(&mut self) -> bool {

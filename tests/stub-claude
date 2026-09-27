@@ -205,6 +205,7 @@ while :; do
       while :; do
         case $pasted in *"$pend"*) break ;; esac
         IFS= read -r more || break
+        printf '%s\n' "$more" >> "$STUB_STATE/$id.input"
         pasted="$pasted
 $more"
       done

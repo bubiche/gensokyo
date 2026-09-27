@@ -8,7 +8,7 @@ use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const PROTO: u32 = 2;
+pub const PROTO: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -65,6 +65,11 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    /// Every spell card, by title, and the card files whose names are not usable.
+    Cards,
+    /// A card typed into each target as a prompt; answered with `done` saying who got it and
+    /// who was left out, or an error when nobody did.
+    Cast(Cast),
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
     /// The client's host terminal gained or lost focus. Until it first says, it has not.
@@ -187,6 +192,28 @@ pub struct Summon {
     pub prompt: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Cast {
+    /// A card's slug or title, or part of one that picks out a single card.
+    pub card: String,
+    /// `all`, `awaiting`, `idle`, or residents by name, slot or id.
+    pub targets: Vec<String>,
+    /// For a pair card: the resident the target talks to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer: Option<String>,
+}
+
+/// A spell card as a picker lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Card {
+    /// The file name without `.md`.
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    /// `peer: required`: cast at one resident, with a peer.
+    pub pair: bool,
+}
+
 // A frame's rows dwarf the rest, and every reply is written out at once.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +234,12 @@ pub enum Reply {
     Done {
         id: u64,
         message: String,
+    },
+    Cards {
+        id: u64,
+        cards: Vec<Card>,
+        /// Paths of card files left out for their names.
+        unusable: Vec<String>,
     },
     Error {
         id: u64,

@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
-use gensokyo::client::render::{self, Button, Hit, HitMap, Modal, Model, Stage, Summon};
-use gensokyo::proto::{Limit, Resident, State, Telemetry};
+use gensokyo::client::render::{self, Button, Cast, Hit, HitMap, Modal, Model, Stage, Summon};
+use gensokyo::proto::{Card, Limit, Resident, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -105,6 +105,31 @@ fn summon(stage: Stage) -> Modal {
     })
 }
 
+fn cast(card: Option<usize>, target: Option<&str>) -> Modal {
+    let one = |slug: &str, title: &str, summary: &str, pair| Card {
+        slug: slug.into(),
+        title: title.into(),
+        summary: summary.into(),
+        pair,
+    };
+    let cards = vec![
+        one("second-opinion", "Review Sign \"Second Opinion\"", "another resident reviews", true),
+        one(
+            "status-report",
+            "Spirit Sign \"Status Report\"",
+            "three lines from every resident",
+            false,
+        ),
+    ];
+    Modal::Cast(Cast {
+        card: card.map(|i| cards[i].clone()),
+        target: target.map(String::from),
+        cards: Some(cards),
+        unusable: vec![format!("{HOME}/.config/gensokyo/spellcards/bad name.md")],
+        selected: 1,
+    })
+}
+
 /// Every screen worth a snapshot, by name.
 fn screens() -> Vec<(&'static str, Model)> {
     let with = |f: &dyn Fn(&mut Model)| {
@@ -142,6 +167,10 @@ fn screens() -> Vec<(&'static str, Model)> {
             "recall",
             with(&|m| m.modal = Some(Modal::Recall { list: departed.clone(), selected: 0 })),
         ),
+        ("cast-card", with(&|m| m.modal = Some(cast(None, None)))),
+        ("cast-target", with(&|m| m.modal = Some(cast(Some(1), None)))),
+        ("cast-peer", with(&|m| m.modal = Some(cast(Some(0), Some("id-Reimu"))))),
+        ("cast-loading", with(&|m| m.modal = Some(Modal::Cast(Cast::default())))),
         ("quit", with(&|m| m.modal = Some(Modal::Quit))),
         ("help", with(&|m| m.modal = Some(Modal::Help))),
         (
@@ -152,6 +181,16 @@ fn screens() -> Vec<(&'static str, Model)> {
             }),
         ),
         ("leader", with(&|m| m.leader = true)),
+        (
+            "cast-reply",
+            with(&|m| {
+                m.message = Some(
+                    "cast Spirit Sign \"Status Report\" on Reimu; Marisa has a dialog waiting \
+                     for you; left out"
+                        .into(),
+                )
+            }),
+        ),
     ]
 }
 
@@ -190,6 +229,7 @@ fn every_sidebar_button_and_line_resolves() {
         Button::Summon,
         Button::Banish,
         Button::Recall,
+        Button::Cast,
         Button::Quit,
         Button::Help,
         Button::Capture,
@@ -253,6 +293,26 @@ fn modal_items_resolve() {
     // A long list scrolls to keep the selection in view.
     assert!(resolves(&map, Hit::Item(15)));
     assert!(!map.0.iter().any(|(_, h)| *h == Hit::Item(0)));
+}
+
+#[test]
+fn cast_offers_groups_then_the_living_and_never_the_target_as_peer() {
+    let mut m = shrine();
+    let Some(Modal::Cast(c)) = Some(cast(Some(1), None)) else { unreachable!() };
+    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    assert_eq!(picks, ["all", "awaiting", "idle", "id-Reimu", "id-Marisa"]);
+    let Some(Modal::Cast(c)) = Some(cast(Some(0), None)) else { unreachable!() };
+    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    assert_eq!(picks, ["id-Reimu", "id-Marisa"]);
+    let Some(Modal::Cast(c)) = Some(cast(Some(0), Some("id-Reimu"))) else { unreachable!() };
+    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    assert_eq!(picks, ["id-Marisa"]);
+    // Marisa leaves while the modal is open: she is no longer offered.
+    m.residents[1].departed = Some(NOW);
+    assert!(render::cast_choices(&m, &c).is_empty());
+    m.modal = Some(Modal::Cast(c));
+    let map = hits(&m, AREA);
+    assert!(!map.0.iter().any(|(_, h)| matches!(h, Hit::Item(_))));
 }
 
 #[test]

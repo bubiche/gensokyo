@@ -124,7 +124,7 @@ pub(super) fn list(shrine: &Shared, all: bool) -> Vec<proto::Resident> {
 }
 
 /// By name (any case), slot or id.
-fn find(shrine: &Shrine, who: &str) -> Option<usize> {
+pub(super) fn find(shrine: &Shrine, who: &str) -> Option<usize> {
     let slot = who.parse::<u8>().ok();
     shrine.entries.iter().position(|e| {
         e.rec.name.eq_ignore_ascii_case(who)

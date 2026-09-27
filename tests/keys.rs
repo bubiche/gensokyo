@@ -129,6 +129,7 @@ fn chord_after_the_leader() {
         ("n", Chord::Summon),
         ("b", Chord::Banish),
         ("r", Chord::Recall),
+        ("c", Chord::Cast),
         ("q", Chord::Quit),
         ("?", Chord::Help),
         ("m", Chord::Capture),

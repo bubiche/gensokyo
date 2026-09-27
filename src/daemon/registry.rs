@@ -83,7 +83,7 @@ pub(super) async fn poll(shrine: Shared) {
 }
 
 /// A registry snapshot: each resident's status, and the name it was renamed to inside.
-fn seen(shrine: &Shared, list: &[Session], at: i64) {
+pub(super) fn seen(shrine: &Shared, list: &[Session], at: i64) {
     let mut sh = shrine.borrow_mut();
     let sh = &mut *sh;
     for i in 0..sh.entries.len() {

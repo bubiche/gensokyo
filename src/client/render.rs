@@ -2,7 +2,8 @@
 //! resident's grid in a box, and a modal over it. `render` also returns what every cell does
 //! when clicked, so clicks are resolved against exactly what was drawn.
 
-use crate::proto::Resident;
+use crate::proto::{Resident, State};
+use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -77,31 +78,6 @@ pub enum Stage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Glyph {
-    Busy,
-    Awaits,
-    Asked,
-    Resting,
-    Departed,
-}
-
-impl Glyph {
-    pub fn of(r: &Resident) -> Glyph {
-        if r.departed.is_some() { Glyph::Departed } else { Glyph::Resting }
-    }
-
-    fn symbol(self) -> &'static str {
-        match self {
-            Glyph::Busy => "●",
-            Glyph::Awaits => "✦",
-            Glyph::Asked => "✧",
-            Glyph::Resting => "○",
-            Glyph::Departed => "·",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     /// A sidebar line: index into `Model::residents`.
     Resident(usize),
@@ -150,6 +126,8 @@ const DIM: Style = Style::new().fg(Color::DarkGray);
 const BUTTON: Style = Style::new().fg(Color::Cyan);
 const PICK: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
 const ERROR: Style = Style::new().fg(Color::LightRed);
+/// A resident that needs the user.
+const GOLD: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
 
 fn sidebar_rect(area: Rect) -> Rect {
     Rect { width: SIDEBAR_W.min(area.width), ..area }
@@ -185,7 +163,10 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
     let title = match f {
         Some(r) => {
             let slot = r.slot.map_or(String::new(), |s| format!("{s} "));
-            format!(" {slot}{} · {} ", r.name, tilde(&r.cwd, &m.home))
+            let branch = r.branch.as_ref().map_or(String::new(), |b| format!(" ⎇ {b}"));
+            let f = tele::fields(r.telemetry.as_ref(), r.mode.as_deref(), None, false);
+            let f = if f.is_empty() || r.departed.is_some() { f } else { format!(" · {f}") };
+            format!(" {slot}{} · {}{branch}{f} ", r.name, tilde(&r.cwd, &m.home))
         }
         None => " the shrine is empty ".into(),
     };
@@ -266,6 +247,15 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let rows = flow_rows(&buttons, inner.width);
     let y = up(rows);
     flow(buf, Rect { y, height: rows, ..inner }, &buttons, BUTTON, hits);
+    // The account's usage, from the newest report that has it.
+    let newest = m.residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
+    if let Some(t) = newest {
+        for (label, l) in [("wk", &t.seven_day), ("5h", &t.five_hour)] {
+            if let Some(l) = l {
+                buf.set_stringn(inner.x, up(1), tele::usage(label, l, m.now, 5), w, DIM);
+            }
+        }
+    }
     let y = up(1);
     if m.leader {
         buf.set_stringn(inner.x, y, "^] …", w, PICK.add_modifier(Modifier::BOLD));
@@ -277,15 +267,34 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         if y + 1 >= bottom {
             break;
         }
-        let g = Glyph::of(r);
         let slot = r.slot.map_or(" ".into(), |s| s.to_string());
-        let mut style = if g == Glyph::Departed { DIM } else { Style::new() };
+        let mut style = match r.state {
+            State::Departed => DIM,
+            s if s.needs_you() => GOLD,
+            _ => Style::new(),
+        };
         if Some(&r.id) == m.focused.as_ref() {
-            style = style.bg(Color::Indexed(237)).add_modifier(Modifier::BOLD);
-            buf.set_style(Rect { y, height: 1, ..inner }, style);
+            if !r.state.needs_you() {
+                style = style.bg(Color::Indexed(237));
+            }
+            style = style.add_modifier(Modifier::BOLD);
         }
-        buf.set_stringn(inner.x, y, format!("{slot} {} {}", g.symbol(), r.name), w, style);
-        hits.push(Rect { y, height: 1, ..inner }, Hit::Resident(i));
+        let line = Rect { y, height: 1, ..inner };
+        buf.set_style(line, style);
+        // Model and context at the right, while it runs and has reported.
+        let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
+        let right = t.map_or(String::new(), |t| {
+            let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
+            format!(
+                " {:<3} {ctx:>4}",
+                t.model.as_deref().map(tele::model_short).unwrap_or_default()
+            )
+        });
+        let left = format!("{slot} {} {}", r.state.glyph(), r.name);
+        let rw = (width(&right) as usize).min(w);
+        buf.set_stringn(inner.x, y, left, w - rw, style);
+        buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
+        hits.push(line, Hit::Resident(i));
     }
 }
 

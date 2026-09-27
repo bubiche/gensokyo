@@ -122,10 +122,26 @@ fn list(args: &[String]) -> Result<(), String> {
         println!("{}", serde_json::to_string(&residents).unwrap_or_default());
         return Ok(());
     }
-    for r in residents {
+    let now = crate::daemon::store::now();
+    for r in &residents {
         let slot = r.slot.map_or("-".into(), |s| s.to_string());
-        let state = if r.departed.is_some() { "departed" } else { "here" };
-        println!("{slot} {:<12} {state:<8} {}", r.name, r.cwd);
+        let state = serde_json::to_value(r.state).ok();
+        let state = state.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+        let t = r.telemetry.as_ref();
+        let mut fields = crate::tele::fields(t, r.mode.as_deref(), r.branch.as_deref(), true);
+        if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
+            fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
+        }
+        println!("{slot} {} {:<12} {state:<8} {}  {fields}", r.state.glyph(), r.name, r.cwd);
+    }
+    let newest = residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
+    let usage: Vec<String> = newest
+        .into_iter()
+        .flat_map(|t| [("5h", &t.five_hour), ("wk", &t.seven_day)])
+        .filter_map(|(label, l)| l.as_ref().map(|l| crate::tele::usage(label, l, now, 10)))
+        .collect();
+    if !usage.is_empty() {
+        println!("usage {}", usage.join("   "));
     }
     Ok(())
 }

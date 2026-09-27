@@ -201,6 +201,10 @@ struct App {
     gone: Option<String>,
     log: Option<File>,
     t0: Instant,
+    /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`: a bell and an OSC 9 notification to the
+    /// host when a resident nobody watches comes to need the user.
+    bell: bool,
+    desktop: bool,
 }
 
 impl App {
@@ -231,6 +235,8 @@ impl App {
             gone: None,
             log,
             t0: Instant::now(),
+            bell: proto::config("NOTIFY_BELL").as_deref() != Some("off"),
+            desktop: proto::config("NOTIFY_DESKTOP").as_deref() != Some("off"),
         }
     }
 
@@ -335,10 +341,29 @@ impl App {
                 }
             },
             Reply::Residents { residents } => {
+                // Recall and the recent dirs read the departed too, when someone came or went.
+                let who = |l: &[Resident]| -> Vec<(String, bool)> {
+                    l.iter().map(|r| (r.id.clone(), r.departed.is_some())).collect()
+                };
+                let moved = who(&residents) != who(&self.m.residents);
                 self.residents(residents);
-                // Recall and the recent dirs read the departed too.
-                let id = self.send(Request::List { all: true });
-                self.lists.insert(id, Want::All);
+                if moved {
+                    let id = self.send(Request::List { all: true });
+                    self.lists.insert(id, Want::All);
+                }
+            }
+            Reply::Notify { state, text, watched, .. } => {
+                if !watched {
+                    let text = crate::tele::clean(&text, 200);
+                    if self.bell {
+                        self.host.push(0x07);
+                    }
+                    if self.desktop {
+                        // iTerm2 posts this as its own notification; terminals without it ignore it.
+                        self.host.extend(format!("\x1b]9;{text}\x07").bytes());
+                    }
+                    self.m.message = Some(format!("{} {text}", state.glyph()));
+                }
             }
             Reply::Summoned { resident, .. } => {
                 if !self.m.residents.iter().any(|r| r.id == resident.id) {
@@ -410,7 +435,9 @@ impl App {
                 return;
             }
             Chunk::Mouse { m, .. } => return self.mouse(*m),
-            Chunk::Focus { .. } => {
+            Chunk::Focus { gained, .. } => {
+                // The daemon keeps quiet about a resident on screen in a focused terminal.
+                self.send(Request::Focus { on: *gained });
                 if self.m.modal.is_none() {
                     self.forward(&c);
                 }

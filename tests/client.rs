@@ -249,3 +249,65 @@ async fn summon_type_click_detach_reattach() {
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
 }
+
+/// `gensokyo <args>` from the test's state dir, with the stub's hooks on.
+fn cli(dir: &Path, args: &[&str]) {
+    let out = Command::new(BIN)
+        .args(args)
+        .envs(env(dir))
+        .env("STUB_HOOKS", "1")
+        .env_remove("GENSOKYO_SOCKET")
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_resident_nobody_watches_rings_the_host() {
+    let dir = state("ring");
+    let _quit = Quit(dir.clone());
+    cli(&dir, &["new", "work", "-n", "Reimu"]);
+    cli(&dir, &["new", "work", "-n", "Marisa"]);
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("both residents", |s| s.contains("1 ○ Reimu") && s.contains("2 ○ Marisa")).await;
+    let ready = || {
+        dir.join("stub").read_dir().map_or(0, |d| {
+            d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "ready")).count()
+        })
+    };
+    c.wait("both stubs reading", |_| ready() == 2).await;
+    // On Marisa, in a focused terminal: her finished turn is seen as it finishes, so she never
+    // turns gold, and nothing rings.
+    c.send(b"\x1b[I\x1d2").await;
+    c.wait("Marisa on screen", |s| s.contains("stub-claude Marisa")).await;
+    let t = Instant::now();
+    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c.send(b"hi\r").await;
+    let stopped = |n: usize| {
+        let log = std::fs::read_to_string(dir.join("daemon.log")).unwrap_or_default();
+        log.lines().filter(|l| l.contains("\"event\":\"Stop\"")).count() == n
+    };
+    c.wait("Marisa done", |s| stopped(1) && s.contains("> hi")).await;
+    let t = Instant::now();
+    let s = c.wait("a frame after", |_| t.elapsed() > Duration::from_millis(200)).await;
+    assert!(s.contains("2 ○ Marisa"), "{s}");
+    let rang = |seen: &[u8], text: &str| {
+        let want = format!("\x07\x1b]9;{text}\x07").into_bytes();
+        seen.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    assert!(!c.seen.windows(4).any(|w| w == b"\x1b]9;"), "a notification while watched");
+
+    // The terminal loses focus: the next one is a bell and an OSC 9 notification.
+    c.send(b"\x1b[O").await;
+    c.send(b"again\r").await;
+    c.wait("the notice", |s| s.contains("✦ Marisa is done")).await;
+    assert!(rang(&c.seen, "Marisa is done: echo: again"), "{:?}", String::from_utf8_lossy(&c.seen));
+    let s = c.wait("the gold", |s| s.contains("2 ✦ Marisa")).await;
+    assert!(s.contains("2 ✦ Marisa"));
+    // Back to the terminal, with her on screen: seen.
+    c.send(b"\x1b[I").await;
+    c.wait("Marisa seen", |s| s.contains("2 ○ Marisa")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+}

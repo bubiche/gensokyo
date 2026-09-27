@@ -15,6 +15,11 @@
 #                             /sync <s> draws SYNC-MID, waits <s> seconds, then SYNC-END, all in
 #                             one synchronized-output block (2026)
 #                             /mouse turns on mouse reporting (1000, SGR 1006)
+#                             /clear starts a new session id (the files below keep the first)
+# With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
+# SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
+# prompt, a permission Notification on /perm, AskUserQuestion's PreToolUse on /ask <q> and its
+# PostToolUse on /answer.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -40,7 +45,7 @@ json_str() {
 
 # Claude Code keeps a conversation only once a prompt is submitted, and cannot resume any other.
 convo() { printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/stub/$1.jsonl"; }
-submitted() { mkdir -p "$(dirname "$(convo "$id")")"; printf '%s\n' "$1" >> "$(convo "$id")"; }
+submitted() { mkdir -p "$(dirname "$(convo "$session")")"; printf '%s\n' "$1" >> "$(convo "$session")"; }
 
 write_entry() {   # <id> <name> <status>
   printf '{"pid": %s, "cwd": "%s", "kind": "interactive", "startedAt": %s000, "sessionId": "%s", "name": "%s", "status": %s}\n' \
@@ -113,19 +118,21 @@ fi
 
 # interactive
 ORIG_ARGS=$*
-id='' name=stub prompt='' resume=''
+id='' name=stub prompt='' resume='' hook_cmd=''
 while [ $# -gt 0 ]; do
   case $1 in
     --session-id) id=$2; shift ;;
     --resume) id=$2; resume=1; shift ;;
     --name) name=$2; shift ;;
-    --settings|--plugin-dir|--append-system-prompt|--model|--effort|--permission-mode|--mcp-config) shift ;;
+    --settings) hook_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_hook\)".*/\1/p'); shift ;;
+    --plugin-dir|--append-system-prompt|--model|--effort|--permission-mode|--mcp-config) shift ;;
     --) shift; prompt=$*; break ;;
     *) ;;
   esac
   shift
 done
 [ -n "$id" ] || id=stub-$$
+session=$id
 [ -n "$resume" ] && [ ! -f "$(convo "$id")" ] && { echo "No conversation found with session ID: $id" >&2; exit 1; }
 [ -n "$resume" ] && [ -f "$STUB_STATE/$id.name" ] && name=$(cat "$STUB_STATE/$id.name")
 STARTED=$(date +%s)
@@ -133,10 +140,16 @@ printf '%s\n' "$ORIG_ARGS" > "$STUB_STATE/$id.args"
 env > "$STUB_STATE/$id.env"
 printf '%s\n' "$name" > "$STUB_STATE/$id.name"
 rm -f "$STUB_STATE/$id.status"
-write_entry "$id" "$name" '"idle"'
+write_entry "$session" "$name" '"idle"'
+
+# fire <event> [,"more": "json"]: one hook, the way Claude Code runs it.
+fire() {
+  [ -n "${STUB_HOOKS:-}" ] && [ -n "$hook_cmd" ] || return 0
+  printf '{"hook_event_name": "%s", "session_id": "%s"%s}' "$1" "$session" "${2:-}" | sh -c "$hook_cmd"
+}
 
 esc=$(printf '\033')
-leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$id.json"; }
+leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$session.json"; }
 trap leave EXIT
 # Ignored, not trapped: bash 3.2 can lose the last character of every later line when a trapped
 # SIGINT lands as `read` starts. The tty still throws away a half-typed line on Ctrl-C.
@@ -168,6 +181,7 @@ echo "env TERM=${TERM:-} COLORTERM=${COLORTERM:-} TERM_PROGRAM=${TERM_PROGRAM:-}
 # What the skills tell a resident to type. A resident that cannot resolve it goes looking for
 # the binary, so whoever launched it must have put it on PATH.
 echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
+if [ -n "$resume" ]; then fire SessionStart ', "source": "resume"'; else fire SessionStart ', "source": "startup"'; fi
 [ -n "$prompt" ] && { echo "> $prompt"; submitted "$prompt"; }
 
 # Bracketed paste, because a spell card depends on it: a paste is wrapped in \033[200~ and
@@ -222,11 +236,18 @@ $more"
       fi
       echo "Resume this session with: claude --resume \"$name\""; exit 0 ;;
     /mouse) printf '%s[?1000h%s[?1006h' "$esc" "$esc"; echo "mouse on" ;;
+    /clear) rm -f "$STUB_STATE/$session.json"; session=$(uuidgen | tr 'A-Z' 'a-z')
+            write_entry "$session" "$name" '"idle"'; fire SessionStart ', "source": "clear"'; echo "cleared" ;;
+    /perm) fire Notification ', "notification_type": "permission_prompt", "message": "Claude needs your permission"'; echo "asked permission" ;;
+    /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
+    /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
     /sync\ *) printf '%s[?2026hSYNC-MID\n' "$esc"; sleep "${line#/sync }"
                printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"
-                write_entry "$id" "$name" '"idle"'; printf '%s]2;✳ %s\007' "$esc" "$name"; echo "renamed to $name" ;;
-    *) echo "> $line"; submitted "$line" ;;
+                write_entry "$session" "$name" '"idle"'; printf '%s]2;✳ %s\007' "$esc" "$name"; echo "renamed to $name" ;;
+    *) fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$line")\""
+       echo "> $line"; submitted "$line"
+       fire Stop ", \"permission_mode\": \"default\", \"last_assistant_message\": \"echo: $(json_str "$line")\"" ;;
   esac
 done
 exit 0

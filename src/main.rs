@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -12,8 +11,14 @@ fn main() -> ExitCode {
         Some("daemon") => gensokyo::daemon::server::main(),
         // Claude Code runs these for every resident. Whatever happens they exit 0: a hook's exit
         // 2 would block the prompt or the stop it was called for.
-        Some("_hook" | "_statusline") => {
-            let _ = std::io::stdin().take(1 << 20).read_to_end(&mut Vec::new());
+        Some(v @ ("_hook" | "_statusline")) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            let _ = match v {
+                "_hook" => std::panic::catch_unwind(gensokyo::hooks::hook_main),
+                _ => std::panic::catch_unwind(|| {
+                    gensokyo::hooks::statusline_main(args.get(1).map_or("", String::as_str))
+                }),
+            };
             ExitCode::SUCCESS
         }
         Some(_) => gensokyo::cli::main(&args),

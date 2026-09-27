@@ -71,7 +71,7 @@ impl Daemon {
         let s = UnixStream::connect(self.socket()).expect("connect");
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         let mut w = s.try_clone().unwrap();
-        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 1, "who": "test"})).unwrap();
+        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 2, "who": "test"})).unwrap();
         let mut lines = BufReader::new(s).lines();
         let welcome: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         assert_eq!(welcome["t"], "welcome");
@@ -103,7 +103,8 @@ impl Daemon {
         std::fs::read_to_string(self.dir.join("daemon.log"))
             .unwrap_or_default()
             .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
+            // The last line may be half written.
+            .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
     }
 }
@@ -363,7 +364,7 @@ fn protocol_errors() {
     assert_eq!(r[0]["t"], "error");
     // After a hello, a bad line is answered and the connection stays.
     let r = talk(
-        "{\"t\":\"hello\",\"proto\":1,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
+        "{\"t\":\"hello\",\"proto\":2,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
     );
     let r: Vec<_> = r.iter().map(|v| v["t"].as_str().unwrap()).collect();
     assert_eq!(r, ["welcome", "error", "list"]);
@@ -371,18 +372,25 @@ fn protocol_errors() {
     assert_eq!(e["error"], "no resident nobody");
 }
 
+/// `gensokyo <args>` as Claude Code runs it inside a resident: `stdin` in, stdout back.
+fn inside(d: &Daemon, args: &[&str], env: &[(&str, &str)], stdin: &[u8]) -> Output {
+    let mut c = d.command(args);
+    c.env("GENSOKYO_SOCKET", d.socket()).envs(env.iter().copied());
+    let mut c = c.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    c.stdin.take().unwrap().write_all(stdin).unwrap();
+    let out = c.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    out
+}
+
 #[test]
-fn hook_verbs_always_exit_zero_and_print_nothing() {
-    for verb in [&["_hook"][..], &["_statusline", "some-id"]] {
-        let mut c = Command::new(BIN)
-            .args(verb)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        c.stdin.take().unwrap().write_all(b"{\"hook_event_name\":\"Stop\"}").unwrap();
-        let out = c.wait_with_output().unwrap();
-        assert_eq!((out.status.code(), out.stdout.len()), (Some(0), 0));
+fn hook_verbs_always_exit_zero_and_a_hook_prints_nothing() {
+    let d = Daemon::new("verbs", &[]);
+    for input in [&b"not json"[..], b"{\"hook_event_name\":\"Stop\"}"] {
+        assert_eq!(inside(&d, &["_hook"], &[("GENSOKYO_RESIDENT", "x")], input).stdout, b"");
+        let out = inside(&d, &["_statusline", "x"], &[], input);
+        let want: &[u8] = if input[0] == b'{' { b"Claude\n" } else { b"" };
+        assert_eq!(out.stdout, want);
     }
 }
 
@@ -407,7 +415,7 @@ impl Client {
             }
         });
         let mut c = Client { w: s, rx };
-        c.send(json!({"t": "hello", "proto": 1, "who": "test"}));
+        c.send(json!({"t": "hello", "proto": 2, "who": "test"}));
         assert_eq!(c.next(Duration::from_secs(5)).unwrap()["t"], "welcome");
         c
     }
@@ -690,4 +698,179 @@ fn list_all_shows_the_departed_of_an_earlier_run_and_resume_brings_one_back() {
     let names: Vec<_> =
         all.as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["Hatate", "Aya"]);
+}
+
+/// The resident's record as the daemon last wrote it, from the shrine or from `departed/`.
+fn record(d: &Daemon, id: &str) -> Value {
+    let p = |dir: &str| d.dir.join(format!("{dir}/{id}.json"));
+    let f = if p("residents").exists() { p("residents") } else { p("departed") };
+    serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap()
+}
+
+fn input(d: &Daemon, who: &str, text: &str) {
+    let bytes: Vec<u8> = format!("{text}\r").into_bytes();
+    // Input is answered only when it fails, so a list after it says it was taken.
+    let s = UnixStream::connect(d.socket()).unwrap();
+    let mut w = s.try_clone().unwrap();
+    let hello = json!({"t": "hello", "proto": 2, "who": "test"});
+    let req = json!({"t": "input", "id": 1, "who": who, "bytes": bytes});
+    writeln!(w, "{hello}\n{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    let mut lines = BufReader::new(s).lines();
+    let _welcome = lines.next();
+    let r: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    assert_eq!(r["t"], "list", "{r}");
+}
+
+#[test]
+fn hooks_and_the_registry_light_the_glyphs_and_a_watched_resident_rings_nothing() {
+    let d = Daemon::start("aware", &[("STUB_HOOKS", "1")]);
+    let mut w = Client::new(&d);
+    w.send(json!({"t": "watch"}));
+    let r = d.summon(json!({"name": "Reimu"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    d.stub(&r["id"], "ready");
+    let state = |w: &mut Client, want: &str| {
+        w.until(&format!("Reimu {want}"), |v| {
+            v["t"] == "residents" && v["residents"][0]["state"] == want
+        })
+    };
+    state(&mut w, "resting");
+
+    // A prompt, then its Stop: a finished turn nobody has answered, and nobody watches.
+    input(&d, "Reimu", "hello");
+    let n = w.until("a notify", |v| v["t"] == "notify");
+    assert_eq!(
+        n,
+        json!({"t": "notify", "who": id, "name": "Reimu", "state": "awaits",
+                         "text": "Reimu is done: echo: hello", "watched": false})
+    );
+    // The shrine's own event may come before the notify or after it.
+    let l = &d.list()[0];
+    assert_eq!(
+        (&l["state"], &l["detail"], &l["mode"]),
+        (&json!("awaits"), &json!("echo: hello"), &json!("default"))
+    );
+
+    // Someone looks at it in a focused terminal: the finished turn has been seen, and the
+    // question it asks rings nothing.
+    let mut v = Client::new(&d);
+    v.send(json!({"t": "view", "who": "Reimu"}));
+    v.until("the screen", |ev| ev["t"] == "frame");
+    assert_eq!(d.list()[0]["state"], "awaits", "on screen, but not in a focused terminal");
+    v.send(json!({"t": "focus", "on": true}));
+    state(&mut w, "resting");
+    input(&d, "Reimu", "/ask Tea or coffee?");
+    let n = w.until("a notify", |v| v["t"] == "notify");
+    assert_eq!(
+        (&n["state"], &n["text"], &n["watched"]),
+        (&json!("asked"), &json!("Reimu asks: Tea or coffee?"), &json!(true))
+    );
+    input(&d, "Reimu", "/answer");
+    // A turn that finishes while watched is seen as it finishes.
+    let stops = |d: &Daemon| d.log().iter().filter(|l| l["event"] == "Stop").count();
+    input(&d, "Reimu", "watched");
+    wait(|| stops(&d) == 2, "the second Stop");
+    assert_eq!(d.list()[0]["state"], "resting");
+
+    // The registry: busy clears the flag, and a dialog it sees rings once the terminal is left.
+    std::fs::write(d.dir.join(format!("stub/{id}.status")), "busy").unwrap();
+    state(&mut w, "busy");
+    v.send(json!({"t": "focus", "on": false}));
+    std::fs::write(d.dir.join(format!("stub/{id}.status")), "waiting").unwrap();
+    let n = w.until("a notify", |v| v["t"] == "notify");
+    assert_eq!(
+        (&n["state"], &n["text"], &n["watched"]),
+        (&json!("awaits"), &json!("Reimu needs your permission"), &json!(false))
+    );
+    let events: Vec<_> =
+        d.log().into_iter().filter(|l| l["ev"] == "notify").map(|l| l["watched"].clone()).collect();
+    assert_eq!(events, [false, true, false]);
+}
+
+#[test]
+fn the_status_line_reports_and_prints_its_own_line_or_the_users() {
+    let d = Daemon::start("statusline", &[]);
+    let conf = d.dir.join("conf");
+    std::fs::create_dir_all(d.dir.join(".claude")).unwrap();
+    std::fs::create_dir_all(&conf).unwrap();
+    let settings = json!({"advisorModel": "opus", "statusLine": {"type": "command", "command": "cat; echo tail", "padding": 2}});
+    std::fs::write(d.dir.join(".claude/settings.json"), settings.to_string()).unwrap();
+    let r = d.summon(json!({"name": "Sakuya"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    // The user's padding is carried into the statusLine we put in its place.
+    assert!(d.stub(&r["id"], "args").contains("\"padding\":2"));
+
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/statusline-2.1.260.json");
+    let mut j: Value = serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+    j["workspace"]["current_dir"] = json!(d.dir);
+    let payload = j.to_string();
+    let env = [("GENSOKYO_CONFIG_DIR", conf.to_str().unwrap())];
+    let out = inside(&d, &["_statusline", &id], &env, payload.as_bytes());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m\n"
+    );
+    wait(|| !d.list()[0]["telemetry"].is_null(), "the report");
+    let t = &d.list()[0]["telemetry"];
+    assert_eq!(
+        (&t["model"], &t["advisor"], &t["ctx"]),
+        (&json!("Sonnet 5"), &json!("opus"), &json!(5))
+    );
+    let list = String::from_utf8(d.cli(&["list"]).stdout).unwrap();
+    assert!(
+        list.contains("Sonnet 5→⚖ Opus · ctx 5% · medium · ⚡93% (turn 99%) · $0.19"),
+        "{list}"
+    );
+    assert!(list.contains("\nusage 5h ▓▓▓░░░░░░░ 36%"), "{list}");
+
+    // STATUSLINE=user: the user's command gets the same JSON, and its output goes out as it is.
+    std::fs::write(conf.join("config"), "# mine\nSTATUSLINE=own\nSTATUSLINE=user\n").unwrap();
+    let out = inside(&d, &["_statusline", &id], &env, payload.as_bytes());
+    assert_eq!(out.stdout, format!("{payload}tail\n").into_bytes());
+}
+
+#[test]
+fn a_clear_moves_the_session_on_and_a_recall_after_a_restart_resumes_it_with_its_hooks() {
+    let d = Daemon::start("clear", &[("STUB_HOOKS", "1")]);
+    let r = d.summon(json!({"name": "Youmu", "prompt": "first"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    d.stub(&r["id"], "ready");
+    input(&d, "Youmu", "/clear");
+    wait(|| record(&d, &id)["session"] != json!(id), "the session to move on");
+    let cleared = record(&d, &id)["session"].as_str().unwrap().to_string();
+    input(&d, "Youmu", "second");
+    wait(|| d.log().iter().any(|l| l["ev"] == "hook" && l["event"] == "Stop"), "the Stop");
+    let daemon = d.log()[0]["pid"].as_i64().unwrap();
+    assert_eq!(d.req(json!({"t": "quit", "id": 3}))["t"], "done");
+    wait(|| !alive(daemon), "the daemon to exit");
+
+    // With no daemon to hear it, a hook is spooled; the next daemon replays it.
+    let later = "33333333-4444-4555-8666-777777777777";
+    let convo = d.dir.join(format!("claude/projects/stub/{later}.jsonl"));
+    std::fs::write(&convo, "compacted\n").unwrap();
+    let hook = json!({"hook_event_name": "SessionStart", "session_id": later, "source": "compact"});
+    inside(&d, &["_hook"], &[("GENSOKYO_RESIDENT", &id)], hook.to_string().as_bytes());
+    assert!(d.dir.join("spool.jsonl").exists());
+    // And one older than what the record has changes nothing.
+    let stale = json!({"t": "hook", "resident": id, "hook": {"event": "SessionStart", "session": cleared, "at": 1}});
+    let mut spool =
+        std::fs::OpenOptions::new().append(true).open(d.dir.join("spool.jsonl")).unwrap();
+    writeln!(spool, "{stale}").unwrap();
+    d.cli(&["list"]);
+    wait(|| record(&d, &id)["session"] == json!(later), "the spool to be replayed");
+    assert!(!d.dir.join("spool.jsonl").exists());
+
+    d.cli(&["resume", "youmu"]);
+    let args = d.stub(&json!(later), "args");
+    assert!(args.contains(&format!("--resume {later}")), "{args}");
+    assert!(args.contains("_hook"), "{args}");
+    // Its hooks still reach the shrine, under the same resident.
+    wait(
+        || {
+            d.log()
+                .iter()
+                .any(|l| l["ev"] == "hook" && l["id"] == json!(id) && l["kind"] == "resume")
+        },
+        "the resumed session's SessionStart",
+    );
 }

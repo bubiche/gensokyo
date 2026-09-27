@@ -52,6 +52,12 @@ pub struct Spawn<'a> {
     pub rows: u16,
 }
 
+/// Runs `f`, which forks, under the spawn lock.
+pub fn locked<T>(f: impl FnOnce() -> T) -> T {
+    let _g = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    f()
+}
+
 pub fn spawn(s: Spawn) -> pty_process::Result<(Pty, tokio::process::Child)> {
     let _g = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pty, pts) = pty_process::open()?;

@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
 use gensokyo::client::render::{self, Button, Hit, HitMap, Modal, Model, Stage, Summon};
-use gensokyo::proto::Resident;
+use gensokyo::proto::{Limit, Resident, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -22,7 +22,41 @@ fn resident(n: u8, name: &str, cwd: &str, departed: Option<i64>) -> Resident {
         departed,
         exit: departed.map(|_| 0),
         signal: None,
+        state: if departed.is_some() { State::Departed } else { State::Resting },
+        detail: None,
+        mode: None,
+        branch: None,
+        telemetry: None,
     }
+}
+
+/// The shrine with what hooks and status lines tell: one busy with a full report, one waiting
+/// on a permission, one asking a question.
+fn aware() -> Model {
+    let mut m = shrine();
+    let t = Telemetry {
+        model: Some("Haiku 4.5".into()),
+        advisor: Some("opus".into()),
+        effort: Some("high".into()),
+        ctx: Some(12),
+        cache: Some(91),
+        cost: Some(0.4213),
+        five_hour: Some(Limit { used: 37, resets: Some(NOW + 2 * 3600 + 11 * 60) }),
+        seven_day: Some(Limit { used: 62, resets: Some(NOW + 3 * 86400 + 4 * 3600) }),
+        at: NOW - 5,
+        ..Telemetry::default()
+    };
+    let r = &mut m.residents;
+    (r[0].state, r[0].mode, r[0].branch) =
+        (State::Busy, Some("acceptEdits".into()), Some("main".into()));
+    r[0].telemetry = Some(t.clone());
+    r[1].state = State::Awaits;
+    r[1].telemetry =
+        Some(Telemetry { model: Some("Opus 5.5".into()), ctx: Some(8), at: NOW - 60, ..t });
+    let mut asks = resident(4, "Sakuya", "work", None);
+    asks.state = State::Asked;
+    m.residents.push(asks);
+    m
 }
 
 /// Rows of text in a few styles, with a gap between runs.
@@ -82,6 +116,11 @@ fn screens() -> Vec<(&'static str, Model)> {
         shrine().residents.into_iter().filter(|r| r.departed.is_some()).collect();
     vec![
         ("residents", shrine()),
+        ("aware", aware()),
+        (
+            "aware-focused-gold",
+            with(&|m| *m = Model { focused: Some("id-Marisa".into()), ..aware() }),
+        ),
         ("departed", with(&|m| m.focused = Some("id-Cirno".into()))),
         (
             "empty",
@@ -321,4 +360,16 @@ fn a_selection_is_reversed_in_the_grid_only() {
     let want: Vec<(u16, u16)> =
         (90..g.width).map(|x| (g.x + x, g.y)).chain((0..4).map(|x| (g.x + x, g.y + 1))).collect();
     assert_eq!(cells, want);
+}
+
+#[test]
+fn whoever_needs_you_is_gold_across_the_sidebar() {
+    let m = aware();
+    let mut buf = Buffer::empty(AREA);
+    render::render(&m, AREA, &mut buf);
+    let gold = |y: u16| {
+        (1..render::SIDEBAR_W - 1).all(|x| buf[(x, y)].bg == ratatui::style::Color::Yellow)
+    };
+    // Rows 1-4 inside the box: Reimu busy, Marisa awaits, Cirno departed, Sakuya asked.
+    assert_eq!([1, 2, 3, 4].map(gold), [false, true, false, true]);
 }

@@ -11,6 +11,9 @@ pub struct Record {
     pub id: String,
     /// The current session id; `/clear` and `/compact` rotate it.
     pub session: String,
+    /// When `session` was last set by a hook, epoch ms: an older SessionStart never undoes it.
+    #[serde(default)]
+    pub session_at: i64,
     pub name: String,
     pub slot: Option<u8>,
     pub cwd: String,
@@ -50,6 +53,11 @@ impl Store {
         remove(&self.residents().join(format!("{}.json", r.id)))
     }
 
+    /// A record that stays in `departed/`, changed.
+    pub fn save_departed(&self, r: &Record) -> std::io::Result<()> {
+        write_atomic(&self.departed().join(format!("{}.json", r.id)), &to_json(r))
+    }
+
     /// Back in the shrine: recalled.
     pub fn restore(&self, r: &Record) -> std::io::Result<()> {
         self.save(r)?;
@@ -59,6 +67,12 @@ impl Store {
     /// Every record in `residents/`, or why one could not be read.
     pub fn load(&self) -> Vec<Result<Record, String>> {
         load(&self.residents())
+    }
+
+    /// One record in `departed/`, by id.
+    pub fn load_departed_id(&self, id: &str) -> Option<Record> {
+        let b = std::fs::read(self.departed().join(format!("{id}.json"))).ok()?;
+        serde_json::from_slice(&b).ok()
     }
 
     /// The records in `departed/` that can be read.

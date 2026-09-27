@@ -1,7 +1,7 @@
 //! What a resident is started with: the `claude` argv, the injected `--settings`, and an
 //! environment built from scratch.
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -10,13 +10,16 @@ use std::path::{Path, PathBuf};
 const DISALLOWED: [&str; 3] = ["CronCreate", "CronList", "CronDelete"];
 
 pub struct Options<'a> {
+    /// The resident's id, which its hooks and status line report under.
     pub id: &'a str,
+    /// The Claude Code session: `--session-id`, or with `resume` `--resume`.
+    pub session: &'a str,
     pub name: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub prompt: Option<&'a str>,
-    /// Recall: `--resume <id>` instead of `--session-id <id> --name <name>`.
+    /// Recall: `--resume <session>` instead of `--session-id <session> --name <name>`.
     pub resume: bool,
 }
 
@@ -55,29 +58,34 @@ pub fn has_conversation(session: &str) -> bool {
 }
 
 /// Hooks, the status line and the socket allowlist: per session, so nothing in `~/.claude`
-/// changes. Claude Code merges this over the user's and the project's own settings.
-pub fn settings(p: &Paths, id: &str) -> String {
+/// changes. Claude Code merges this over the user's and the project's own settings; the
+/// statusLine key is replaced whole, so the user's `padding` is carried over.
+pub fn settings(p: &Paths, id: &str, cwd: &Path) -> String {
     let exe = sh_quote(&p.exe.to_string_lossy());
     let cmd = json!({"type": "command", "command": format!("{exe} _hook")});
     let hook = json!([{"hooks": [cmd]}]);
     let ask = json!([{"matcher": "AskUserQuestion", "hooks": [cmd]}]);
+    let mut status = json!({"type": "command",
+                            "command": format!("{exe} _statusline {}", sh_quote(id))});
+    if let Some(pad) = crate::tele::setting(cwd, "/statusLine/padding").filter(Value::is_number) {
+        status["padding"] = pad;
+    }
     json!({
         "hooks": {
             "SessionStart": hook, "SessionEnd": hook, "UserPromptSubmit": hook,
             "Stop": hook, "Notification": hook, "PreToolUse": ask, "PostToolUse": ask,
         },
-        "statusLine": {"type": "command",
-                       "command": format!("{exe} _statusline {}", sh_quote(id))},
+        "statusLine": status,
         "sandbox": {"network": {"allowUnixSockets": [p.socket]}},
     })
     .to_string()
 }
 
-pub fn argv(p: &Paths, o: &Options) -> Vec<OsString> {
+pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     let mut a: Vec<OsString> = vec!["--disallowed-tools".into()];
     // The variadic list ends at the next flag, so it goes first.
     a.extend(DISALLOWED.map(OsString::from));
-    a.extend(["--settings".into(), settings(p, o.id).into()]);
+    a.extend(["--settings".into(), settings(p, o.id, cwd).into()]);
     a.extend(["--plugin-dir".into(), p.share.join("plugin").into_os_string()]);
     a.extend(["--append-system-prompt".into(), system_paragraph(o.name).into()]);
     for (flag, v) in [("--model", o.model), ("--effort", o.effort), ("--permission-mode", o.mode)] {
@@ -86,9 +94,9 @@ pub fn argv(p: &Paths, o: &Options) -> Vec<OsString> {
         }
     }
     if o.resume {
-        a.extend(["--resume".into(), o.id.into()]);
+        a.extend(["--resume".into(), o.session.into()]);
     } else {
-        a.extend(["--session-id".into(), o.id.into(), "--name".into(), o.name.into()]);
+        a.extend(["--session-id".into(), o.session.into(), "--name".into(), o.name.into()]);
         // `--` keeps a prompt that starts with `-` from being read as a flag.
         if let Some(prompt) = o.prompt {
             a.extend(["--".into(), prompt.into()]);
@@ -151,7 +159,8 @@ pub fn env(
     ];
     let drop = |k: &str| {
         (k.starts_with("CLAUDE") && k != "CLAUDE_CONFIG_DIR")
-            || (k.starts_with("GENSOKYO_") && k != "GENSOKYO_STATE_DIR")
+            || (k.starts_with("GENSOKYO_")
+                && !["GENSOKYO_STATE_DIR", "GENSOKYO_CONFIG_DIR"].contains(&k))
             || PREFIXES.iter().any(|p| k.starts_with(p))
             || NAMES.contains(&k)
     };

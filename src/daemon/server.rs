@@ -1,14 +1,19 @@
 //! The daemon process: one per state dir (a flock held for life), NDJSON over a unix socket,
 //! and the shrine of residents, all on one thread.
 
+use super::aware::Aware;
 use super::launch;
 use super::pty;
+use super::registry::{self, Session};
 use super::resident::{self, Handle};
 use super::store::{self, Record, Store};
-use crate::proto::{self, Envelope, Reply, Request, Summon};
+use crate::hooks;
+use crate::proto::{self, Envelope, Hook, Reply, Request, State, Summon, Telemetry};
+use crate::tele;
 use crate::vt::{Frame, KeyEvent, Modes};
 use serde_json::{Value, json};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -19,7 +24,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
 /// From HUP to TERM: how long a leader gets to leave on its own. Claude Code on haiku took
@@ -35,6 +40,8 @@ const SIZE: (u16, u16) = (80, 24);
 const FRAME_GAP: Duration = Duration::from_millis(16);
 /// How long a child's synchronized-output block may hold its screen back.
 const SYNC_HOLD: Duration = Duration::from_millis(150);
+/// How often the spool is replayed and the registry asked (a call costs about 0.12 s).
+const POLL: Duration = Duration::from_secs(3);
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
@@ -49,6 +56,14 @@ pub fn log(mut v: Value) {
 struct Entry {
     rec: Record,
     handle: Option<Rc<Handle>>,
+    aware: Aware,
+    tele: Option<Telemetry>,
+}
+
+impl Entry {
+    fn new(rec: Record, handle: Rc<Handle>) -> Entry {
+        Entry { rec, handle: Some(handle), aware: Aware::default(), tele: None }
+    }
 }
 
 struct Shrine {
@@ -62,9 +77,15 @@ struct Shrine {
     size: (u16, u16),
     /// Bumped whenever the shrine changes, for `watch`.
     changed: watch::Sender<u64>,
+    /// `notify` events, for every `watch`.
+    notices: broadcast::Sender<Reply>,
+    views: HashMap<u64, View>,
+    conns: u64,
 }
 
 type Shared = Rc<RefCell<Shrine>>;
+/// Per connection: the resident it views, and whether its terminal has focus.
+type View = (Option<String>, bool);
 
 pub fn main() -> std::process::ExitCode {
     let root = proto::state_dir();
@@ -135,10 +156,16 @@ async fn serve(store: Store) -> std::process::ExitCode {
         quitting: false,
         size: SIZE,
         changed: watch::channel(0).0,
+        notices: broadcast::channel(16).0,
+        views: HashMap::new(),
+        conns: 0,
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
     );
+    // Hooks spooled while no daemon answered: a /clear before the last one stopped, say.
+    replay(&shrine);
+    tokio::task::spawn_local(poll(shrine.clone()));
     let quit = Rc::new(Notify::new());
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
@@ -201,10 +228,28 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
 /// Requests are read in order. Banish, close and quit run on their own, so a long one holds up
 /// neither the rest nor the screen; their replies come when they finish.
 async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
-    // SAFETY: getuid cannot fail.
-    if s.peer_cred().map(|c| c.uid()).ok() != Some(unsafe { libc::getuid() }) {
+    if !same_user(&s) {
         return;
     }
+    let me = {
+        let mut sh = shrine.borrow_mut();
+        sh.conns += 1;
+        let me = sh.conns;
+        sh.views.insert(me, (None, false));
+        me
+    };
+    // A resident brought on screen in a focused terminal has been seen.
+    let set_view = |f: &dyn Fn(&mut View)| {
+        let mut sh = shrine.borrow_mut();
+        let Some(v) = sh.views.get_mut(&me) else { return };
+        f(v);
+        let (Some(who), true) = v.clone() else { return };
+        let at = hooks::now_ms();
+        let e = sh.entries.iter_mut().find(|e| e.rec.id == who && e.handle.is_some());
+        if e.is_some_and(|e| e.aware.seen(at)) {
+            touch(&sh);
+        }
+    };
     let (r, w) = s.into_split();
     let (out, rx) = mpsc::channel(64);
     tokio::task::spawn_local(write_lines(w, rx));
@@ -285,18 +330,32 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
                     let task = tokio::task::spawn_local(view(
                         shrine.clone(),
                         h,
-                        rid,
+                        rid.clone(),
                         out.clone(),
                         !viewed,
                     ));
                     viewing = Some(task.abort_handle());
                     viewed = true;
+                    set_view(&|v| v.0 = Some(rid.clone()));
                     None
                 }
                 Err(e) => Some(fail(e)),
             },
             Request::Unview => {
                 viewing.take().inspect(AbortHandle::abort);
+                set_view(&|v| v.0 = None);
+                None
+            }
+            Request::Focus { on } => {
+                set_view(&|v| v.1 = on);
+                None
+            }
+            Request::Hook { resident, hook: h } => {
+                hook(&shrine, &resident, h);
+                None
+            }
+            Request::Statusline { resident, telemetry } => {
+                statusline(&shrine, &resident, telemetry);
                 None
             }
             Request::Input { who, bytes, key } => {
@@ -314,18 +373,41 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
     for t in [watching, viewing].into_iter().flatten() {
         t.abort();
     }
+    shrine.borrow_mut().views.remove(&me);
 }
 
-/// A `residents` event now and whenever the shrine changes after.
+/// The peer runs as us. `getpeereid` alone: tokio's `peer_cred` also asks for the pid, which
+/// fails once the peer has hung up, and a hook writes its line and hangs up at once.
+fn same_user(s: &UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: getpeereid writes two ids into the locals; getuid cannot fail.
+    unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == libc::getuid() }
+}
+
+/// A `residents` event now and whenever the shrine changes after, and every `notify`.
 async fn watch(shrine: Shared, out: Out) {
-    let mut rx = shrine.borrow().changed.subscribe();
+    let (mut rx, mut notices) = {
+        let sh = shrine.borrow();
+        (sh.changed.subscribe(), sh.notices.subscribe())
+    };
     loop {
         rx.borrow_and_update();
         if !send(&out, &Reply::Residents { residents: list(&shrine, false) }).await {
             return;
         }
-        if rx.changed().await.is_err() {
-            return;
+        loop {
+            tokio::select! {
+                c = rx.changed() => match c {
+                    Ok(()) => break,
+                    Err(_) => return,
+                },
+                n = notices.recv() => match n {
+                    Ok(r) => if !send(&out, &r).await { return },
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => return,
+                },
+            }
         }
     }
 }
@@ -424,14 +506,35 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         departed: r.departed,
         exit: r.exit,
         signal: r.signal,
+        state: if r.departed.is_some() { State::Departed } else { State::Resting },
+        detail: None,
+        mode: flag(&r.argv, "--permission-mode"),
+        branch: None,
+        telemetry: None,
     }
+}
+
+/// Everything known about one in the shrine: what it is doing, and its last report.
+fn entry_info(e: &Entry) -> proto::Resident {
+    let mut r = info(&e.rec, e.handle.as_ref().map(|h| h.pid));
+    if e.handle.is_some() {
+        (r.state, r.detail) = (e.aware.state(), e.aware.detail.clone());
+    }
+    r.mode = e.aware.mode.clone().or(r.mode);
+    r.branch = tele::git_branch(Path::new(&e.rec.cwd));
+    r.telemetry = e.tele.clone();
+    r
+}
+
+/// A flag's value in a launch argv, before any `--`.
+fn flag(argv: &[String], f: &str) -> Option<String> {
+    argv.iter().take_while(|a| *a != "--").skip_while(|a| *a != f).nth(1).cloned()
 }
 
 /// The shrine in order; with `all`, then everyone in `departed/`, newest first and slotless.
 fn list(shrine: &Shared, all: bool) -> Vec<proto::Resident> {
     let sh = shrine.borrow();
-    let mut v: Vec<_> =
-        sh.entries.iter().map(|e| info(&e.rec, e.handle.as_ref().map(|h| h.pid))).collect();
+    let mut v: Vec<_> = sh.entries.iter().map(entry_info).collect();
     if all {
         let mut gone = sh.store.load_departed();
         gone.retain(|r| !sh.entries.iter().any(|e| e.rec.id == r.id));
@@ -469,7 +572,7 @@ fn launch(
     let path = std::env::var_os("PATH");
     let program = launch::claude(path.as_deref()).ok_or("claude not found on PATH")?;
     let paths = launch::Paths { exe: &sh.exe, share: &share, socket: &sh.socket };
-    let argv = launch::argv(&paths, o);
+    let argv = launch::argv(&paths, o, cwd);
     let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
     let env = launch::env(std::env::vars_os(), o.id, &bin, &sh.socket);
     let (cols, rows) = sh.size;
@@ -507,6 +610,7 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     let id = store::uuid();
     let opts = launch::Options {
         id: &id,
+        session: &id,
         name: &name,
         model: s.model.as_deref(),
         effort: s.effort.as_deref(),
@@ -518,6 +622,7 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     let rec = Record {
         id: id.clone(),
         session: id.clone(),
+        session_at: 0,
         name,
         slot,
         cwd: cwd.to_string_lossy().into_owned(),
@@ -535,7 +640,7 @@ fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
     }
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid}));
     let r = info(&rec, Some(handle.pid));
-    sh.entries.push(Entry { rec, handle: Some(handle) });
+    sh.entries.push(Entry::new(rec, handle));
     touch(&sh);
     Ok(r)
 }
@@ -567,15 +672,14 @@ fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, String> {
     if !cwd.is_dir() {
         return Err(format!("{} is gone", rec.cwd));
     }
-    let flag = |f: &str| {
-        let a = rec.argv.iter().take_while(|a| *a != "--");
-        a.skip_while(|a| *a != f).nth(1).cloned()
-    };
+    let flag = |f: &str| flag(&rec.argv, f);
     let (model, effort, mode) = (flag("--model"), flag("--effort"), flag("--permission-mode"));
-    // One that never got a prompt has nothing to resume: it starts afresh, same id and name.
+    // The session its hooks last named, which /clear moves on. One that never got a prompt has
+    // nothing to resume: it starts afresh on that session, with the same name.
     let resume = launch::has_conversation(&rec.session);
     let opts = launch::Options {
         id: &rec.id,
+        session: &rec.session,
         name: &rec.name,
         model: model.as_deref(),
         effort: effort.as_deref(),
@@ -596,13 +700,142 @@ fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, String> {
         json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
     );
     let r = info(&rec, Some(handle.pid));
-    let entry = Entry { rec, handle: Some(handle) };
+    let entry = Entry::new(rec, handle);
     match at {
         Some(i) => sh.entries[i] = entry,
         None => sh.entries.push(entry),
     }
     touch(&sh);
     Ok(r)
+}
+
+/// One hook from inside a resident. A SessionStart moves its record on to the new session,
+/// even once it has departed: a /clear the daemon hears of only from the spool.
+fn hook(shrine: &Shared, resident: &str, h: Hook) {
+    let mut sh = shrine.borrow_mut();
+    let sh = &mut *sh;
+    let at = sh.entries.iter().position(|e| e.rec.id == resident);
+    if let (true, Some(s)) = (h.event == "SessionStart", h.session.as_deref()) {
+        rotate(sh, at, resident, s, h.at);
+    }
+    let Some(i) = at.filter(|&i| sh.entries[i].handle.is_some()) else { return };
+    let before = sh.entries[i].aware.state();
+    if sh.entries[i].aware.hook(&h) {
+        let state = sh.entries[i].aware.state();
+        log(
+            json!({"ev": "hook", "id": resident, "event": h.event, "kind": h.kind, "state": state}),
+        );
+        after(sh, i, before);
+    }
+}
+
+fn rotate(sh: &mut Shrine, at: Option<usize>, resident: &str, session: &str, when: i64) {
+    let fresh = |r: &Record| when >= r.session_at && r.session != session;
+    let saved = match at {
+        Some(i) => {
+            let r = &mut sh.entries[i].rec;
+            if !fresh(r) {
+                return;
+            }
+            (r.session, r.session_at) = (session.into(), when);
+            let r = r.clone();
+            sh.store.save(&r)
+        }
+        None => match sh.store.load_departed_id(resident).filter(|r| fresh(r)) {
+            Some(mut r) => {
+                (r.session, r.session_at) = (session.into(), when);
+                sh.store.save_departed(&r)
+            }
+            None => return,
+        },
+    };
+    log(
+        json!({"ev": "session", "id": resident, "session": session, "error": saved.err().map(|e| e.to_string())}),
+    );
+}
+
+fn statusline(shrine: &Shared, resident: &str, mut t: Telemetry) {
+    let mut sh = shrine.borrow_mut();
+    let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == resident && e.handle.is_some()) else {
+        return;
+    };
+    t.at = store::now();
+    e.tele = Some(t);
+    touch(&sh);
+}
+
+/// Watchers hear of the change, and of a resident that has just come to need the user. A
+/// turn that finishes while someone watches it is seen at once.
+fn after(sh: &mut Shrine, i: usize, before: State) {
+    let id = &sh.entries[i].rec.id;
+    let watched = sh.views.values().any(|(v, f)| *f && v.as_ref() == Some(id));
+    if watched {
+        sh.entries[i].aware.seen(hooks::now_ms());
+    }
+    let e = &sh.entries[i];
+    let now = e.aware.state();
+    if now.needs_you() && now != before {
+        log(json!({"ev": "notify", "id": e.rec.id, "state": now, "watched": watched}));
+        let (who, name, text) = (e.rec.id.clone(), e.rec.name.clone(), e.aware.notice(&e.rec.name));
+        let _ = sh.notices.send(Reply::Notify { who, name, state: now, text, watched });
+    }
+    touch(sh);
+}
+
+fn replay(shrine: &Shared) {
+    let root = shrine.borrow().store.root.clone();
+    for (who, h) in hooks::take_spool(&root) {
+        hook(shrine, &who, h);
+    }
+}
+
+/// Every `POLL`: the spool, then the registry while anyone is here.
+async fn poll(shrine: Shared) {
+    loop {
+        tokio::time::sleep(POLL).await;
+        replay(&shrine);
+        let (claude, env) = {
+            let sh = shrine.borrow();
+            if sh.entries.iter().all(|e| e.handle.is_none()) {
+                continue;
+            }
+            let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
+            let path = std::env::var_os("PATH");
+            let Some(claude) = launch::claude(path.as_deref()) else { continue };
+            (claude, launch::env(std::env::vars_os(), "", &bin, &sh.socket))
+        };
+        // When the snapshot began: a hook that lands during the call is newer than it.
+        let at = hooks::now_ms();
+        if let Some(list) = registry::fetch(&claude, &env).await {
+            seen(&shrine, &list, at);
+        }
+    }
+}
+
+/// A registry snapshot: each resident's status, and the name it was renamed to inside.
+fn seen(shrine: &Shared, list: &[Session], at: i64) {
+    let mut sh = shrine.borrow_mut();
+    let sh = &mut *sh;
+    for i in 0..sh.entries.len() {
+        let e = &sh.entries[i];
+        let Some(pid) = e.handle.as_ref().map(|h| h.pid) else { continue };
+        let s = list.iter().find(|s| s.session_id == e.rec.session);
+        let s = s.or_else(|| list.iter().find(|s| s.pid == Some(pid)));
+        let renamed = s
+            .and_then(|s| s.name.clone())
+            .filter(|n| !n.eq_ignore_ascii_case(&e.rec.name) && valid_name(n) && !taken(sh, n));
+        let before = e.aware.state();
+        let e = &mut sh.entries[i];
+        e.aware.registry(s.and_then(Session::status), at);
+        if let Some(n) = &renamed {
+            log(json!({"ev": "renamed", "id": e.rec.id, "from": e.rec.name, "to": n}));
+            e.rec.name = n.clone();
+            let _ = sh.store.save(&sh.entries[i].rec);
+        }
+        if renamed.is_some() || sh.entries[i].aware.state() != before {
+            after(sh, i, before);
+        }
+    }
 }
 
 /// Tells every `watch`er that the shrine changed.

@@ -31,8 +31,6 @@ pub enum Registry {
 pub struct Aware {
     pub pending: Option<Pending>,
     pub detail: Option<String>,
-    /// When `pending` last changed, epoch ms.
-    since: i64,
     /// The hooks say a turn is running: a prompt went in, or a question was answered.
     running: bool,
     /// The newest hook applied, epoch ms.
@@ -60,11 +58,11 @@ impl Aware {
         let ask = h.tool.as_deref() == Some("AskUserQuestion");
         match (h.event.as_str(), h.kind.as_deref()) {
             ("UserPromptSubmit", _) => {
-                self.set(None, None, h.at);
+                self.set(None, None);
                 self.running = true;
             }
             ("Stop", _) => {
-                self.set(Some(Pending::Stopped), text, h.at);
+                self.set(Some(Pending::Stopped), text);
                 self.running = false;
             }
             // The turn holds until the dialog is answered. A question's own dialog brings a
@@ -74,31 +72,32 @@ impl Aware {
                     || k.starts_with("elicitation") =>
             {
                 if self.pending != Some(Pending::Asked) {
-                    self.set(Some(Pending::Awaits), text, h.at);
+                    self.set(Some(Pending::Awaits), text);
                     self.shown = k == "permission_prompt";
                 }
                 self.running = false;
             }
-            // Sent a minute after a turn: a late stand-in for a Stop that went missing.
+            // Sent a minute after a turn: a late stand-in for a Stop that went missing. Not
+            // after one that came, or a dialog dismissed: that turn has already been told of.
             ("Notification", Some("idle_prompt")) => {
-                if self.pending.is_none() {
-                    self.set(Some(Pending::Stopped), None, h.at);
+                if self.pending.is_none() && self.running {
+                    self.set(Some(Pending::Stopped), None);
                 }
                 self.running = false;
             }
             ("PreToolUse", _) if ask => {
-                self.set(Some(Pending::Asked), text, h.at);
+                self.set(Some(Pending::Asked), text);
                 self.shown = true;
             }
             ("PostToolUse", _) if ask => {
                 if self.pending == Some(Pending::Asked) {
-                    self.set(None, None, h.at);
+                    self.set(None, None);
                 }
                 self.running = true;
             }
             // A fresh conversation: nothing is waiting any more.
             ("SessionStart", Some("clear")) => {
-                self.set(None, None, h.at);
+                self.set(None, None);
                 self.running = false;
             }
             _ => {}
@@ -112,15 +111,16 @@ impl Aware {
         // Busy after the flag went up: the permission was granted, or a new turn began. Idle
         // after a dialog: Esc or a denial, which end the turn with no Stop, no PostToolUse and
         // no idle_prompt (2.1.283).
-        let after = at > self.since;
+        let after = at > self.hook_at;
         match (st, self.pending) {
             (Some(Registry::Busy), Some(Pending::Awaits | Pending::Stopped)) if after => {
-                self.set(None, None, at)
+                self.set(None, None);
+                self.running = true;
             }
             (Some(Registry::Idle), Some(Pending::Awaits | Pending::Asked))
                 if after && self.shown =>
             {
-                self.set(None, None, at)
+                self.set(None, None)
             }
             _ => {}
         }
@@ -128,17 +128,17 @@ impl Aware {
 
     /// On screen in a focused terminal: a finished turn has been seen. A dialog still waits.
     /// True if that cleared it.
-    pub fn seen(&mut self, at: i64) -> bool {
+    pub fn seen(&mut self) -> bool {
         let stopped = self.pending == Some(Pending::Stopped);
         if stopped {
-            self.set(None, None, at);
+            self.set(None, None);
         }
         stopped
     }
 
     /// Typed to by gensokyo (a spell card, a ritual): whatever it waited to be told, it was.
-    pub fn clear(&mut self, at: i64) {
-        self.set(None, None, at);
+    pub fn clear(&mut self) {
+        self.set(None, None);
     }
 
     pub fn state(&self) -> State {
@@ -171,10 +171,7 @@ impl Aware {
         }
     }
 
-    fn set(&mut self, p: Option<Pending>, detail: Option<String>, at: i64) {
-        if p != self.pending {
-            self.since = at;
-        }
+    fn set(&mut self, p: Option<Pending>, detail: Option<String>) {
         (self.pending, self.detail) = (p, detail);
     }
 }

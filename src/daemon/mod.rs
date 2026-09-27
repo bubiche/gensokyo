@@ -2,11 +2,11 @@
 
 pub mod aware;
 mod ingest;
-pub mod launch;
+mod launch;
 mod notify;
 pub mod pty;
 pub mod registry;
-pub mod resident;
+mod resident;
 pub mod server;
 mod shrine;
 pub mod store;

@@ -132,7 +132,8 @@ fn list(args: &[String]) -> Result<(), String> {
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
         }
-        println!("{slot} {} {:<12} {state:<8} {}  {fields}", r.state.glyph(), r.name, r.cwd);
+        let cwd = crate::tele::clean(&r.cwd, usize::MAX);
+        println!("{slot} {} {:<12} {state:<8} {cwd}  {fields}", r.state.glyph(), r.name);
     }
     let newest = residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
     let usage: Vec<String> = newest

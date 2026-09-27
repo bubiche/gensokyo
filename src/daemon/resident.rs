@@ -30,7 +30,8 @@ enum Out {
 pub struct Handle {
     pub pid: i32,
     out: mpsc::Sender<Out>,
-    resize: mpsc::Sender<(u16, u16)>,
+    /// The newest size wins: a burst of them never drops the last.
+    resize: watch::Sender<(u16, u16)>,
     exit: watch::Receiver<Option<Exit>>,
     last_output: Rc<Cell<Instant>>,
     vt: Rc<RefCell<Vt>>,
@@ -43,7 +44,7 @@ impl Handle {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {
-        let _ = self.resize.try_send((cols, rows));
+        self.resize.send_replace((cols, rows));
     }
 
     pub fn exit(&self) -> Option<Exit> {
@@ -102,7 +103,7 @@ pub fn start(spawn: pty::Spawn) -> std::io::Result<Handle> {
     let pid = child.id().expect("a child just spawned has a pid") as i32;
     let (r, w) = pty.into_split();
     let (out, out_rx) = mpsc::channel(QUEUE);
-    let (resize, resize_rx) = mpsc::channel(4);
+    let (resize, resize_rx) = watch::channel((cols, rows));
     let (exit_tx, exit) = watch::channel(None);
     let last_output = Rc::new(Cell::new(Instant::now()));
     let vt = Rc::new(RefCell::new(Vt::new(cols, rows)));
@@ -138,7 +139,7 @@ impl Actor {
         mut self,
         mut r: OwnedReadPty,
         mut child: tokio::process::Child,
-        mut resize: mpsc::Receiver<(u16, u16)>,
+        mut resize: watch::Receiver<(u16, u16)>,
         exit: watch::Sender<Option<Exit>>,
     ) {
         let mut buf = vec![0u8; 65536];
@@ -153,7 +154,8 @@ impl Actor {
                 },
                 st = child.wait() => break st,
                 // Both sizes change or neither: a resize dropped on a full queue is dropped here too.
-                Some((cols, rows)) = resize.recv() => {
+                Ok(()) = resize.changed() => {
+                    let (cols, rows) = *resize.borrow_and_update();
                     if self.out.try_send(Out::Resize(Size::new(rows.max(1), cols.max(1)))).is_ok() {
                         self.vt.borrow_mut().resize(cols, rows);
                         self.rev.send_modify(|r| *r += 1);

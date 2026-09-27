@@ -38,6 +38,7 @@ impl Daemon {
             ("STUB_STATE".into(), dir.join("stub").display().to_string()),
             ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
             ("CLAUDE_CONFIG_DIR".into(), dir.join("claude").display().to_string()),
+            ("GENSOKYO_CONFIG_DIR".into(), dir.join("conf").display().to_string()),
             ("TERM_PROGRAM".into(), "iTerm.app".into()),
             ("ITERM_SESSION_ID".into(), "w0t0p0".into()),
         ];
@@ -375,7 +376,7 @@ fn protocol_errors() {
 /// `gensokyo <args>` as Claude Code runs it inside a resident: `stdin` in, stdout back.
 fn inside(d: &Daemon, args: &[&str], env: &[(&str, &str)], stdin: &[u8]) -> Output {
     let mut c = d.command(args);
-    c.env("GENSOKYO_SOCKET", d.socket()).envs(env.iter().copied());
+    c.env("GENSOKYO_SOCKET", d.socket()).envs(env.iter().copied()).current_dir(&d.dir);
     let mut c = c.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
     c.stdin.take().unwrap().write_all(stdin).unwrap();
     let out = c.wait_with_output().unwrap();
@@ -802,7 +803,9 @@ fn the_status_line_reports_and_prints_its_own_line_or_the_users() {
 
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/statusline-2.1.260.json");
     let mut j: Value = serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
-    j["workspace"]["current_dir"] = json!(d.dir);
+    // Claude has gone into a subdirectory: the settings are still the project's.
+    j["workspace"]["project_dir"] = json!(d.dir);
+    j["workspace"]["current_dir"] = json!(d.dir.join("src"));
     let payload = j.to_string();
     let env = [("GENSOKYO_CONFIG_DIR", conf.to_str().unwrap())];
     let out = inside(&d, &["_statusline", &id], &env, payload.as_bytes());
@@ -851,18 +854,20 @@ fn a_clear_moves_the_session_on_and_a_recall_after_a_restart_resumes_it_with_its
     let hook = json!({"hook_event_name": "SessionStart", "session_id": later, "source": "compact"});
     inside(&d, &["_hook"], &[("GENSOKYO_RESIDENT", &id)], hook.to_string().as_bytes());
     assert!(d.dir.join("spool.jsonl").exists());
-    // And one older than what the record has changes nothing.
-    let stale = json!({"t": "hook", "resident": id, "hook": {"event": "SessionStart", "session": cleared, "at": 1}});
+    // And one older than the record's session, which it would otherwise move back to, is dropped.
+    let stale = json!({"t": "hook", "resident": id, "hook": {"event": "SessionStart", "session": id, "at": 1}});
     let mut spool =
         std::fs::OpenOptions::new().append(true).open(d.dir.join("spool.jsonl")).unwrap();
     writeln!(spool, "{stale}").unwrap();
-    d.cli(&["list"]);
-    wait(|| record(&d, &id)["session"] == json!(later), "the spool to be replayed");
-    assert!(!d.dir.join("spool.jsonl").exists());
 
+    // The resume starts the daemon, which has replayed the spool before it answers.
     d.cli(&["resume", "youmu"]);
     let args = d.stub(&json!(later), "args");
     assert!(args.contains(&format!("--resume {later}")), "{args}");
+    assert!(!d.dir.join("spool.jsonl").exists());
+    let moves: Vec<_> =
+        d.log().iter().filter(|l| l["ev"] == "session").map(|l| l["session"].clone()).collect();
+    assert_eq!(moves, [json!(cleared), json!(later)]);
     assert!(args.contains("_hook"), "{args}");
     // Its hooks still reach the shrine, under the same resident.
     wait(

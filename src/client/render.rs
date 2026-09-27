@@ -165,7 +165,10 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
             let slot = r.slot.map_or(String::new(), |s| format!("{s} "));
             let branch = r.branch.as_ref().map_or(String::new(), |b| format!(" ⎇ {b}"));
             let f = tele::fields(r.telemetry.as_ref(), r.mode.as_deref(), None, false);
-            let f = if f.is_empty() || r.departed.is_some() { f } else { format!(" · {f}") };
+            let f = match f.is_empty() || r.departed.is_some() {
+                true => String::new(),
+                false => format!(" · {f}"),
+            };
             format!(" {slot}{} · {}{branch}{f} ", r.name, tilde(&r.cwd, &m.home))
         }
         None => " the shrine is empty ".into(),
@@ -220,6 +223,10 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let block = Block::bordered().title(" gensokyo ").border_style(border);
     let inner = block.inner(side);
     block.render(side, buf);
+    // A host one row high has no inside at all.
+    if inner.is_empty() {
+        return;
+    }
     let w = inner.width as usize;
     // From the bottom up: capture, buttons, then the leader or the message.
     let mut bottom = inner.bottom();

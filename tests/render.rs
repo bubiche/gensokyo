@@ -311,7 +311,7 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
 #[test]
 fn tiny_screens_do_not_panic() {
     for (_, m) in screens() {
-        for (w, h) in [(40, 10), (26, 3), (25, 5), (10, 3), (1, 1), (0, 0), (200, 2)] {
+        for (w, h) in [(40, 10), (26, 3), (25, 5), (10, 3), (1, 1), (0, 0), (200, 2), (80, 1)] {
             let area = Rect::new(0, 0, w, h);
             render::render(&m, area, &mut Buffer::empty(area));
             render::cursor(&m, area);

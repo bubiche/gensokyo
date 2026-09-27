@@ -19,7 +19,7 @@ pub fn from_statusline(j: &Value) -> Telemetry {
         Some(Limit { used, resets: u(&format!("{p}/resets_at")).map(|v| v as i64) })
     };
     let turn_cache = {
-        let c = |k: &str| u(&format!("/context_window/current_usage/{k}")).unwrap_or(0);
+        let c = |k: &str| u(&format!("/context_window/current_usage/{k}")).unwrap_or(0) as u128;
         let read = c("cache_read_input_tokens");
         let total = c("input_tokens") + read + c("cache_creation_input_tokens");
         (total > 0).then(|| (read * 100 / total) as u32)
@@ -66,7 +66,7 @@ pub fn own_line(t: &Telemetry) -> String {
     }
     // Only once there is something to count: the first report reads "+0/-0 · 0s".
     let (a, r) = (t.added.unwrap_or(0), t.removed.unwrap_or(0));
-    if a + r > 0 {
+    if a > 0 || r > 0 {
         add(format!("+{a}/-{r}"));
     }
     if let Some(s) = t.age.filter(|s| *s > 0) {
@@ -164,7 +164,7 @@ fn eta(s: i64) -> String {
     match (d, h) {
         (1.., _) => format!("{d}d{h}h"),
         (_, 1..) => format!("{h}h{m}m"),
-        _ => format!("{m}m"),
+        _ => format!("{}m", m.max(1)),
     }
 }
 
@@ -197,8 +197,8 @@ pub fn git_branch(dir: &Path) -> Option<String> {
     let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
     let head = head.trim();
     Some(match head.strip_prefix("ref: refs/heads/") {
-        Some(b) => b.into(),
-        None => head.chars().take(7).collect(),
+        Some(b) => clean(b, 60),
+        None => clean(head, 7),
     })
 }
 

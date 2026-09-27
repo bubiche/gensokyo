@@ -3,7 +3,7 @@
 
 use gensokyo::daemon::aware::{Aware, Registry};
 use gensokyo::daemon::registry;
-use gensokyo::hooks::reduce;
+use gensokyo::hooks::{reduce, take_spool};
 use gensokyo::proto::{Hook, State};
 use gensokyo::tele;
 use serde_json::{Value, json};
@@ -135,6 +135,9 @@ fn an_older_hook_is_dropped_and_clear_starts_afresh() {
     a.hook(&recorded("Stop", None, 20));
     assert!(!a.hook(&recorded("UserPromptSubmit", None, 10)));
     assert_eq!(a.state(), State::Awaits);
+    // One at the same instant is not older: a spool replayed twice changes nothing more.
+    assert!(a.hook(&recorded("Stop", None, 20)));
+    assert_eq!(a.state(), State::Awaits);
     a.hook(&hook(
         json!({"hook_event_name": "SessionStart", "source": "clear", "session_id": "b"}),
         30,
@@ -152,6 +155,12 @@ fn the_registry_is_read_by_session() {
         (Some("Marisa"), Some(Registry::Idle), Some(74525))
     );
     assert!(registry::parse(b"{\"not\": \"a list\"}").is_none());
+    let odd = br#"[{"sessionId": null}, {"sessionId": "a", "name": 3}, {"sessionId": "b", "status": "busy"}]"#;
+    let list = registry::parse(odd).unwrap();
+    assert_eq!(
+        list.iter().map(|s| (s.session_id.as_str(), s.status())).collect::<Vec<_>>(),
+        [("b", Some(Registry::Busy))]
+    );
 }
 
 #[test]
@@ -214,6 +223,9 @@ fn a_permission_denied_leaves_it_resting() {
     assert_eq!(a.state(), State::Awaits);
     a.registry(Some(Registry::Idle), 25);
     assert_eq!(a.state(), State::Resting);
+    // A minute on, idle_prompt does not call the dismissed turn done.
+    a.hook(&recorded("Notification", Some("idle_prompt"), 80));
+    assert_eq!(a.state(), State::Resting);
 }
 
 #[test]
@@ -241,9 +253,67 @@ fn a_question_dismissed_with_esc_rests_but_an_unverified_dialog_keeps_its_flag()
 fn seeing_it_clears_a_finished_turn_but_not_a_dialog() {
     let mut a = Aware::default();
     a.hook(&recorded("Stop", None, 10));
-    assert!(a.seen(11));
+    assert!(a.seen());
+    assert_eq!(a.state(), State::Resting);
+    // Nor does idle_prompt bring back a turn already seen.
+    a.hook(&recorded("Notification", Some("idle_prompt"), 15));
     assert_eq!(a.state(), State::Resting);
     a.hook(&recorded("Notification", Some("permission_prompt"), 20));
-    assert!(!a.seen(21));
+    assert!(!a.seen());
     assert_eq!(a.state(), State::Awaits);
+}
+
+#[test]
+fn idle_prompt_stands_in_for_a_stop_that_never_came() {
+    // A permission granted, then the turn ends with no Stop (an interrupt).
+    let mut a = Aware::default();
+    a.hook(&recorded("UserPromptSubmit", None, 10));
+    a.hook(&recorded("Notification", Some("permission_prompt"), 20));
+    a.registry(Some(Registry::Busy), 30);
+    a.registry(Some(Registry::Idle), 40);
+    assert_eq!(a.state(), State::Resting);
+    a.hook(&recorded("Notification", Some("idle_prompt"), 100));
+    assert_eq!((a.state(), a.notice("Reimu").as_str()), (State::Awaits, "Reimu is done"));
+}
+
+#[test]
+fn the_spool_is_read_in_order_and_what_was_just_renamed_waits_a_beat() {
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("spool-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let line = |at: i64| {
+        json!({"t": "hook", "resident": "r", "hook": {"event": "Stop", "at": at}}).to_string()
+    };
+    std::fs::write(root.join("spool.1.jsonl"), format!("{}\nnot json\n{}\n", line(30), line(10)))
+        .unwrap();
+    std::fs::write(root.join("spool.2.jsonl"), format!("{}\n", line(20))).unwrap();
+    std::fs::write(root.join("spool.jsonl"), format!("{}\n", line(40))).unwrap();
+    let ats: Vec<_> = take_spool(&root, 1000).iter().map(|(_, h)| h.at).collect();
+    assert_eq!(ats, [10, 20, 30]);
+    // The live spool was renamed aside, and a hook that opened it just before may still write.
+    let left: Vec<_> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(left.len(), 1);
+    assert_ne!(left[0], "spool.jsonl");
+    assert!(take_spool(&root, 1000).is_empty());
+    // At start there is nobody to wait for. (A rename in the same ms would land on the first.)
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    std::fs::write(root.join("spool.jsonl"), format!("{}\n", line(50))).unwrap();
+    let ats: Vec<_> = take_spool(&root, 0).iter().map(|(_, h)| h.at).collect();
+    assert_eq!(ats, [40, 50]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn resident_text_is_one_line_of_printable_characters() {
+    assert_eq!(tele::clean("\r\n\t a\u{9b}b\u{7f}\u{1b}]9;x\u{7}", 80), "a b  ]9;x ");
+    assert_eq!(tele::clean("日本語テキスト", 3), "日本語");
+    let r = reduce(
+        &json!({"hook_event_name": 3, "tool_input": {"questions": []}, "message": " \n "}),
+        1,
+    );
+    assert_eq!((r.event.as_str(), r.text), ("", None));
+    let l = gensokyo::proto::Limit { used: 100, resets: Some(1059) };
+    assert_eq!(tele::usage("7d", &l, 1000, 5), "7d ▓▓▓▓▓ 100% ↻1m");
+    assert_eq!(tele::usage("7d", &l, 1059, 5), "7d ▓▓▓▓▓ 100%");
 }

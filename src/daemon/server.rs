@@ -38,13 +38,17 @@ static LOG: Mutex<Option<File>> = Mutex::new(None);
 /// One JSON line in `daemon.log`.
 pub fn log(mut v: Value) {
     v["ts"] = json!(store::now());
+    // One write per line: Display alone would write it in pieces.
     if let Some(f) = LOG.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-        let _ = writeln!(f, "{v}");
+        let _ = f.write_all(format!("{v}\n").as_bytes());
     }
 }
 
 pub fn main() -> std::process::ExitCode {
-    let root = proto::state_dir();
+    // Absolute: the daemon moves to / below, and residents inherit it with their own cwd.
+    let root = std::path::absolute(proto::state_dir()).unwrap_or_else(|_| proto::state_dir());
+    // SAFETY: one thread still; the runtime starts below.
+    unsafe { std::env::set_var("GENSOKYO_STATE_DIR", &root) };
     let run = root.join("run");
     for d in [&run, &root.join("residents"), &root.join("departed")] {
         if let Err(e) = std::fs::create_dir_all(d) {
@@ -52,7 +56,10 @@ pub fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    let _ = std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700));
+    // Records hold prompts and argv: the user's alone, like the spool.
+    for d in [&root, &run] {
+        let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700));
+    }
     *LOG.lock().unwrap_or_else(|e| e.into_inner()) =
         OpenOptions::new().create(true).append(true).open(root.join("daemon.log")).ok();
     let Ok(lock) =
@@ -119,8 +126,9 @@ async fn serve(store: Store) -> std::process::ExitCode {
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
     );
-    // Hooks spooled while no daemon answered: a /clear before the last one stopped, say.
-    replay(&shrine);
+    // Hooks spooled while no daemon answered: a /clear before the last one stopped, say. Before
+    // the first request, so a resume that started this daemon resumes the session it moved to.
+    replay(&shrine, 0);
     tokio::task::spawn_local(poll(shrine.clone()));
     let quit = Rc::new(Notify::new());
     use tokio::signal::unix::{SignalKind, signal};
@@ -133,12 +141,15 @@ async fn serve(store: Store) -> std::process::ExitCode {
     };
     loop {
         tokio::select! {
-            a = listener.accept() => if let Ok((s, _)) = a {
-                tokio::task::spawn_local(conn(shrine.clone(), quit.clone(), s));
+            a = listener.accept() => match a {
+                Ok((s, _)) => { tokio::task::spawn_local(conn(shrine.clone(), quit.clone(), s)); }
+                // Out of fds, say: not a spin.
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
             },
             _ = quit.notified() => break,
-            _ = term.recv() => { leave_all(&shrine).await; break }
-            _ = int.recv() => { leave_all(&shrine).await; break }
+            // As `quit` does: hooks and the CLI are still heard while everyone leaves.
+            _ = term.recv() => stop(&shrine, &quit),
+            _ = int.recv() => stop(&shrine, &quit),
             _ = hup.recv() => {}
         }
     }
@@ -440,9 +451,22 @@ async fn input(
     Ok(())
 }
 
+fn stop(shrine: &Shared, quit: &Rc<Notify>) {
+    if std::mem::replace(&mut shrine.borrow_mut().quitting, true) {
+        return;
+    }
+    let (shrine, quit) = (shrine.clone(), quit.clone());
+    tokio::task::spawn_local(async move {
+        leave_all(&shrine).await;
+        quit.notify_one();
+    });
+}
+
+/// Bounded: an emulator is allocated at this size for every resident, and every summon after.
 fn resize(shrine: &Shared, cols: u16, rows: u16) {
     let mut sh = shrine.borrow_mut();
-    sh.size = (cols.max(1), rows.max(1));
+    let (cols, rows) = (cols.clamp(1, 1000), rows.clamp(1, 500));
+    sh.size = (cols, rows);
     for h in sh.entries.iter().filter_map(|e| e.handle.as_ref()) {
         h.resize(cols, rows);
     }

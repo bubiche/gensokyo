@@ -2,7 +2,6 @@
 
 use super::server::log;
 use super::shrine::{Shrine, touch};
-use crate::hooks;
 use crate::proto::{Reply, State};
 use serde_json::json;
 
@@ -12,7 +11,7 @@ pub(super) fn after(sh: &mut Shrine, i: usize, before: State) {
     let id = &sh.entries[i].rec.id;
     let watched = sh.views.values().any(|(v, f)| *f && v.as_ref() == Some(id));
     if watched {
-        sh.entries[i].aware.seen(hooks::now_ms());
+        sh.entries[i].aware.seen();
     }
     let e = &sh.entries[i];
     let now = e.aware.state();
@@ -29,7 +28,7 @@ pub(super) fn after(sh: &mut Shrine, i: usize, before: State) {
 pub(super) fn looked(sh: &mut Shrine, me: u64) {
     let Some((Some(who), true)) = sh.views.get(&me).cloned() else { return };
     let e = sh.entries.iter_mut().find(|e| e.rec.id == who && e.handle.is_some());
-    if e.is_some_and(|e| e.aware.seen(hooks::now_ms())) {
+    if e.is_some_and(|e| e.aware.seen()) {
         touch(sh);
     }
 }

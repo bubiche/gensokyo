@@ -12,6 +12,7 @@ use crate::tele;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -58,6 +59,15 @@ pub(super) struct Shrine {
     pub(super) notices: broadcast::Sender<Reply>,
     pub(super) views: HashMap<u64, View>,
     pub(super) conns: u64,
+}
+
+impl Shrine {
+    /// `claude` on PATH, and the environment it runs in for resident `id` (none: the registry).
+    pub(super) fn claude(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
+        let program = launch::claude(std::env::var_os("PATH").as_deref())?;
+        let bin = self.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
+        Some((program, launch::env(std::env::vars_os(), id, &bin, &self.socket)))
+    }
 }
 
 pub(super) type Shared = Rc<RefCell<Shrine>>;
@@ -138,12 +148,9 @@ fn launch(
     cwd: &Path,
 ) -> Result<(String, Vec<String>, Rc<Handle>), String> {
     let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
-    let path = std::env::var_os("PATH");
-    let program = launch::claude(path.as_deref()).ok_or("claude not found on PATH")?;
+    let (program, env) = sh.claude(o.id).ok_or("claude not found on PATH")?;
     let paths = launch::Paths { exe: &sh.exe, share: &share, socket: &sh.socket };
     let argv = launch::argv(&paths, o, cwd);
-    let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let env = launch::env(std::env::vars_os(), o.id, &bin, &sh.socket);
     let (cols, rows) = sh.size;
     let spawn = pty::Spawn { program: &program, args: &argv, env: &env, cwd, cols, rows };
     let handle = resident::start(spawn)
@@ -313,6 +320,10 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     depart(&mut e.rec, Some(exit));
     let rec = e.rec.clone();
     let _ = sh.store.save(&rec);
+    // Its screen is gone: a recall under the same id is not on anyone's screen until viewed.
+    for v in sh.views.values_mut().filter(|v| v.0.as_deref() == Some(id.as_str())) {
+        v.0 = None;
+    }
     touch(&sh);
     log(
         json!({"ev": "departed", "id": id, "name": rec.name, "exit": exit.code, "signal": exit.signal}),
@@ -366,6 +377,9 @@ async fn ask_twice(h: &Handle) -> bool {
 pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> {
     let (name, h) = {
         let mut sh = shrine.borrow_mut();
+        if sh.quitting {
+            return Err("the daemon is stopping".into());
+        }
         let i = find(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
         match sh.entries[i].handle.clone() {
             Some(h) => (sh.entries[i].rec.name.clone(), h),

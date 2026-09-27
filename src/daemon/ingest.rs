@@ -59,14 +59,18 @@ pub(super) fn statusline(shrine: &Shared, resident: &str, mut t: Telemetry) {
     let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == resident && e.handle.is_some()) else {
         return;
     };
+    // Claude Code redraws its status line several times a second; watchers hear of a change.
     t.at = store::now();
+    let changed = e.tele.as_ref().is_none_or(|o| Telemetry { at: t.at, ..o.clone() } != t);
     e.tele = Some(t);
-    touch(&sh);
+    if changed {
+        touch(&sh);
+    }
 }
 
-pub(super) fn replay(shrine: &Shared) {
+pub(super) fn replay(shrine: &Shared, settle: i64) {
     let root = shrine.borrow().store.root.clone();
-    for (who, h) in hooks::take_spool(&root) {
+    for (who, h) in hooks::take_spool(&root, settle) {
         hook(shrine, &who, h);
     }
 }

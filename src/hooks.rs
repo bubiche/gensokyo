@@ -14,6 +14,9 @@ use std::time::Duration;
 /// How long a hook may spend handing its line to the daemon.
 const DELIVER: Duration = Duration::from_millis(300);
 
+/// How long a spool renamed aside waits before the poll reads it, in ms.
+pub const SPOOL_SETTLE: i64 = 1000;
+
 fn stdin() -> Vec<u8> {
     let mut b = Vec::new();
     let _ = std::io::stdin().take(1 << 20).read_to_end(&mut b);
@@ -83,12 +86,14 @@ pub fn spool(root: &Path, req: &Request) {
     let _ = f.and_then(|mut f| f.write_all(&line));
 }
 
-/// Every spooled hook, oldest first, and the spool emptied. It is renamed aside before it is
-/// read, so a hook spooled meanwhile starts a new one; a crash before the delete replays those
-/// again, which the timestamps make harmless.
-pub fn take_spool(root: &Path) -> Vec<(String, Hook)> {
-    let _ =
-        std::fs::rename(root.join("spool.jsonl"), root.join(format!("spool.{}.jsonl", now_ms())));
+/// Every spooled hook, oldest first, and the spool emptied. It is renamed aside, so a hook
+/// spooled meanwhile starts a new one, and read once `settle` ms old: a hook that opened it
+/// just before the rename has written by then. At start, with nobody yet able to hook in,
+/// it is read at once. A crash before the delete replays those again, which the timestamps
+/// make harmless.
+pub fn take_spool(root: &Path, settle: i64) -> Vec<(String, Hook)> {
+    let now = now_ms();
+    let _ = std::fs::rename(root.join("spool.jsonl"), root.join(format!("spool.{now}.jsonl")));
     let mut files: Vec<_> = std::fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -96,7 +101,8 @@ pub fn take_spool(root: &Path) -> Vec<(String, Hook)> {
         .map(|e| e.path())
         .filter(|p| {
             let n = p.file_name().unwrap_or_default().to_string_lossy();
-            n.starts_with("spool.") && n.ends_with(".jsonl") && n != "spool.jsonl"
+            let at = n.strip_prefix("spool.").and_then(|n| n.strip_suffix(".jsonl"));
+            at.and_then(|a| a.parse::<i64>().ok()).is_some_and(|a| a <= now - settle)
         })
         .collect();
     files.sort();
@@ -119,7 +125,8 @@ pub fn take_spool(root: &Path) -> Vec<(String, Hook)> {
 pub fn statusline_main(id: &str) {
     let payload = stdin();
     let Ok(j) = serde_json::from_slice::<Value>(&payload) else { return };
-    let cwd = ["/workspace/current_dir", "/cwd"]
+    // The settings chain is the project's, wherever Claude has gone inside it.
+    let cwd = ["/workspace/project_dir", "/workspace/current_dir", "/cwd"]
         .iter()
         .find_map(|p| j.pointer(p).and_then(Value::as_str))
         .map_or_else(|| Path::new(".").to_path_buf(), Into::into);

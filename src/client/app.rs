@@ -15,6 +15,7 @@ use ratatui::crossterm::terminal;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Stdout, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -27,7 +28,7 @@ const FRAME: Duration = Duration::from_millis(16);
 /// Alternate screen, cursor hidden, focus reports, bracketed paste, a kitty entry of our own.
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
 const LEAVE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l";
+    b"\x1b[?2026l\x1b[<u\x1b[?2004l\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l";
 /// Clicks and drags in SGR form. Not 1003 (every hover) unless the resident on screen asked.
 const CAPTURE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const CAPTURE_OFF: &[u8] = b"\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l";
@@ -60,9 +61,12 @@ pub fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let hook = std::panic::take_hook();
+    // Out at once: unwinding would flush what was queued for the host (mouse and kitty modes)
+    // after the restore.
     std::panic::set_hook(Box::new(move |p| {
         restore();
         hook(p);
+        std::process::exit(101);
     }));
     let r = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt.block_on(run(sock)),
@@ -127,8 +131,15 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
     let mut drawn = Instant::now() - FRAME;
     let mut dirty = true;
     let end = loop {
+        let mut wrote = Ok(());
         for l in app.out.drain(..) {
-            w.write_all(&l).await.map_err(err)?;
+            wrote = w.write_all(&l).await;
+            if wrote.is_err() {
+                break;
+            }
+        }
+        if wrote.is_err() {
+            break app.gone.take().unwrap_or_else(|| "the daemon went away".into());
         }
         if let Some(why) = app.done.take() {
             break why;
@@ -199,6 +210,8 @@ struct App {
     done: Option<String>,
     /// Printed if the daemon hangs up next (after a quit).
     gone: Option<String>,
+    /// The quit request, whose error means the daemon stays.
+    quit: Option<u64>,
     log: Option<File>,
     t0: Instant,
     /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`: a bell and an OSC 9 notification to the
@@ -216,7 +229,7 @@ impl App {
             .map(|b| b.lines().map(String::from).collect())
             .unwrap_or_default();
         let log = std::env::var_os("GENSOKYO_CLIENT_LOG")
-            .and_then(|p| File::options().create(true).append(true).open(p).ok());
+            .and_then(|p| File::options().create(true).append(true).mode(0o600).open(p).ok());
         App {
             m: Model { capture: true, home, banner, now: now(), ..Model::default() },
             hits: HitMap::default(),
@@ -233,6 +246,7 @@ impl App {
             host: Vec::new(),
             done: None,
             gone: None,
+            quit: None,
             log,
             t0: Instant::now(),
             bell: proto::config("NOTIFY_BELL").as_deref() != Some("off"),
@@ -366,18 +380,26 @@ impl App {
                 }
             }
             Reply::Summoned { resident, .. } => {
-                if !self.m.residents.iter().any(|r| r.id == resident.id) {
-                    self.m.residents.push(resident.clone());
+                let was = self.live();
+                match self.m.residents.iter_mut().find(|r| r.id == resident.id) {
+                    Some(r) => *r = resident.clone(),
+                    None => self.m.residents.push(resident.clone()),
                 }
-                self.focus(Some(resident.id));
+                match self.m.focused == Some(resident.id.clone()) {
+                    true => self.back(was),
+                    false => self.focus(Some(resident.id)),
+                }
             }
-            Reply::Done { message, .. } => {
-                self.m.message = Some(message.clone());
-                self.gone.get_or_insert(message);
-            }
-            Reply::Error { error, .. } => {
+            Reply::Done { message, .. } => self.m.message = Some(message),
+            Reply::Error { id, error } => {
+                if Some(id) == self.quit {
+                    self.gone = None;
+                }
+                // The hello (the first request) turned away: why the daemon hangs up.
+                if id == 1 {
+                    self.gone = Some(error.clone());
+                }
                 self.m.message = Some(error);
-                self.gone = None;
             }
             Reply::Frame { who, rev, frame, modes } => {
                 if Some(&who) == self.m.focused.as_ref() {
@@ -410,6 +432,7 @@ impl App {
     }
 
     fn residents(&mut self, list: Vec<Resident>) {
+        let was = self.live();
         self.m.residents = list;
         if self.focused().is_none() {
             let first = self.m.residents.iter().find(|r| r.departed.is_none());
@@ -418,6 +441,17 @@ impl App {
         } else if self.live().is_none() {
             // Departed while on screen: the departed screen, and the host back to plain keys.
             self.m.screen = None;
+            self.modes();
+        } else {
+            self.back(was);
+        }
+    }
+
+    /// The resident on screen was recalled under its id: its new screen.
+    fn back(&mut self, was: Option<String>) {
+        if let Some(who) = self.live().filter(|l| was.as_ref() != Some(l)) {
+            self.m.screen = None;
+            self.send(Request::View { who });
             self.modes();
         }
     }
@@ -861,9 +895,13 @@ fn complete(s: &mut render::Summon, home: &str) {
         }
         [one] => format!("{one}/"),
         [first, rest @ ..] => {
-            let n = rest.iter().fold(first.len(), |n, r| {
+            let mut n = rest.iter().fold(first.len(), |n, r| {
                 first.bytes().zip(r.bytes()).take(n).take_while(|(a, b)| a == b).count()
             });
+            // `café` and `cafè` share a byte of the é.
+            while !first.is_char_boundary(n) {
+                n -= 1;
+            }
             first[..n].to_string()
         }
     };

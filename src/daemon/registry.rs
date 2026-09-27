@@ -5,7 +5,6 @@
 
 use super::aware::Registry;
 use super::ingest::replay;
-use super::launch;
 use super::notify::after;
 use super::pty;
 use super::server::log;
@@ -41,8 +40,11 @@ impl Session {
     }
 }
 
+/// Every session on the machine is listed, the user's own too: one entry this cannot read
+/// is skipped, not the snapshot.
 pub fn parse(json: &[u8]) -> Option<Vec<Session>> {
-    serde_json::from_slice(json).ok()
+    let all: Vec<serde_json::Value> = serde_json::from_slice(json).ok()?;
+    Some(all.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
 }
 
 /// One call, at most 5 s; `None` when it fails.
@@ -63,16 +65,14 @@ const POLL: Duration = Duration::from_secs(3);
 pub(super) async fn poll(shrine: Shared) {
     loop {
         tokio::time::sleep(POLL).await;
-        replay(&shrine);
+        replay(&shrine, hooks::SPOOL_SETTLE);
         let (claude, env) = {
             let sh = shrine.borrow();
             if sh.entries.iter().all(|e| e.handle.is_none()) {
                 continue;
             }
-            let bin = sh.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
-            let path = std::env::var_os("PATH");
-            let Some(claude) = launch::claude(path.as_deref()) else { continue };
-            (claude, launch::env(std::env::vars_os(), "", &bin, &sh.socket))
+            let Some(found) = sh.claude("") else { continue };
+            found
         };
         // When the snapshot began: a hook that lands during the call is newer than it.
         let at = hooks::now_ms();

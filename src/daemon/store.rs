@@ -71,6 +71,10 @@ impl Store {
 
     /// One record in `departed/`, by id.
     pub fn load_departed_id(&self, id: &str) -> Option<Record> {
+        // A hook names it, and anything on the socket can send one.
+        if id.contains('/') {
+            return None;
+        }
         let b = std::fs::read(self.departed().join(format!("{id}.json"))).ok()?;
         serde_json::from_slice(&b).ok()
     }

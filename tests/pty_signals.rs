@@ -14,7 +14,7 @@ for (qw(HUP INT QUIT TERM TSTP PIPE)) {
     printf "%s %s%s\n", $_, $SIG{$_} // "DEFAULT", $o->ismember(eval "SIG$_") ? " blocked" : "" }"#;
 
 fn out(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join(name)
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()))
 }
 
 #[tokio::test(flavor = "current_thread")]

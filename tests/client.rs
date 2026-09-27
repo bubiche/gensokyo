@@ -19,6 +19,7 @@ fn env(dir: &Path) -> Vec<(String, String)> {
         ),
         ("STUB_STATE".into(), dir.join("stub").display().to_string()),
         ("CLAUDE_CONFIG_DIR".into(), dir.join("claude").display().to_string()),
+        ("GENSOKYO_CONFIG_DIR".into(), dir.join("conf").display().to_string()),
         ("GENSOKYO_CLIENT_LOG".into(), dir.join("client.log").display().to_string()),
         ("HOME".into(), dir.display().to_string()),
         ("STUB_WINCH".into(), "1".into()),
@@ -217,10 +218,11 @@ async fn summon_type_click_detach_reattach() {
     let (x, y) = find(&s, "mouse on");
     c.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes()).await;
     c.send(b"after\r").await;
-    c.wait("the echo after the click", |s| s.contains("after")).await;
+    // The tty echoes it before the stub has read it: the stub's record is what counts.
     let (gx, gy) = (x - 26, y - 1);
     let want = format!("\x1b[<0;{gx};{gy}M\x1b[<0;{gx};{gy}mafter");
-    assert_eq!(stub(&dir, "input").lines().last(), Some(want.as_str()));
+    let got = |_: &str| stub(&dir, "input").lines().last() == Some(want.as_str());
+    c.wait("the click and the line after it", got).await;
 
     // ...and a click on chrome opens the modal and never reaches it.
     let (x, y) = find(&s, "[summon n]");
@@ -244,8 +246,7 @@ async fn summon_type_click_detach_reattach() {
     // The host is at the child's kitty flags, so Shift+Enter goes through as it came. (The
     // stub's echo of it is a cursor restore, so it goes last.)
     c.send(b"one\x1b[13;2utwo\r").await;
-    c.wait("the second echo", |s| s.contains("two")).await;
-    assert!(stub(&dir, "input").contains("one\x1b[13;2utwo"), "{:?}", stub(&dir, "input"));
+    c.wait("Shift+Enter as it came", |_| stub(&dir, "input").contains("one\x1b[13;2utwo")).await;
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
 }

@@ -143,9 +143,10 @@ pub fn env(
         "WEZTERM_",
         "KONSOLE_",
     ];
-    const NAMES: [&str; 12] = [
+    const NAMES: [&str; 13] = [
         "TERM_SESSION_ID",
         "TERM_FEATURES",
+        "TERMINFO",
         "TERMINFO_DIRS",
         "COLORFGBG",
         "VTE_VERSION",

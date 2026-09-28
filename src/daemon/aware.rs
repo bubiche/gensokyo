@@ -33,6 +33,8 @@ pub struct Aware {
     pub detail: Option<String>,
     /// The hooks say a turn is running: a prompt went in, or a question was answered.
     running: bool,
+    /// A prompt has gone in since it started.
+    prompted: bool,
     /// The newest hook applied, epoch ms.
     hook_at: i64,
     /// The last snapshot and when it began.
@@ -60,6 +62,7 @@ impl Aware {
             ("UserPromptSubmit", _) => {
                 self.set(None, None);
                 self.running = true;
+                self.prompted = true;
             }
             ("Stop", _) => {
                 self.set(Some(Pending::Stopped), text);
@@ -144,6 +147,17 @@ impl Aware {
     /// In the last registry snapshot: other sessions can message it.
     pub fn listed(&self) -> bool {
         self.registry.is_some()
+    }
+
+    /// Done with what it was given: a prompt went in, its turn is over and nothing waits on the
+    /// user. One just started has not got as far as its prompt (SessionStart comes first).
+    pub fn finished(&self) -> bool {
+        self.prompted && !self.running && self.blocked().is_none() && self.state() != State::Busy
+    }
+
+    /// Resumed with its conversation: its prompts went in before this start.
+    pub fn resumed(&mut self) {
+        self.prompted = true;
     }
 
     /// On screen in a focused terminal: a finished turn has been seen. A dialog still waits.

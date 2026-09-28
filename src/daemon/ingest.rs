@@ -21,6 +21,10 @@ pub(super) fn hook(shrine: &Shared, resident: &str, h: Hook) {
     let Some(i) = at.filter(|&i| sh.entries[i].handle.is_some()) else { return };
     let before = sh.entries[i].aware.state();
     if sh.entries[i].aware.hook(&h) {
+        // Typed into: a ritual run's `keep` starts again from its next finish.
+        if h.event == "UserPromptSubmit" {
+            sh.entries[i].idle_since = None;
+        }
         let state = sh.entries[i].aware.state();
         log(
             json!({"ev": "hook", "id": resident, "event": h.event, "kind": h.kind, "state": state}),

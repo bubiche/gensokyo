@@ -336,6 +336,12 @@ async fn a_resident_nobody_watches_rings_the_host() {
         assert!(inputs.contains(&format!("\x1b[200~probe for {who}\x1b[201~")), "{inputs:?}");
     }
 
+    // Leader, t: the timetable, as the daemon lists it; Esc closes it.
+    c.send(b"\x1dt").await;
+    c.wait("the timetable", |s| s.contains("┌ timetable") && !s.contains("loading")).await;
+    c.send(b"\x1b").await;
+    c.wait("the timetable closed", |s| !s.contains("┌ timetable")).await;
+
     // She leaves, and is recalled from another shell under the same id: her new screen comes.
     c.send(b"/exit\r").await;
     c.wait("the departed screen", |s| s.contains("[ recall r ]")).await;

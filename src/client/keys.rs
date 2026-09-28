@@ -101,6 +101,7 @@ pub enum Chord {
     Banish,
     Recall,
     Cast,
+    Timetable,
     Quit,
     Help,
     /// Mouse capture on or off (native text selection while off).
@@ -146,6 +147,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'b' => Chord::Banish,
         'r' => Chord::Recall,
         'c' => Chord::Cast,
+        't' => Chord::Timetable,
         'q' => Chord::Quit,
         '?' => Chord::Help,
         'm' => Chord::Capture,

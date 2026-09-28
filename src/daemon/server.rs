@@ -7,6 +7,7 @@ use super::ingest::{hook, replay, statusline};
 use super::notify::looked;
 use super::registry::poll;
 use super::resident::Handle;
+use super::rituals;
 use super::shrine::{
     SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
 };
@@ -123,6 +124,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         notices: broadcast::channel(16).0,
         views: HashMap::new(),
         conns: 0,
+        rites: Default::default(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -131,6 +133,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
     // the first request, so a resume that started this daemon resumes the session it moved to.
     replay(&shrine, 0);
     tokio::task::spawn_local(poll(shrine.clone()));
+    tokio::task::spawn_local(rituals::clock(shrine.clone()));
     let quit = Rc::new(Notify::new());
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
@@ -258,6 +261,11 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
                 recall(&shrine, &who)
                     .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
             ),
+            Request::Rituals => Some(rituals::listing(&shrine, id)),
+            Request::Ritual { verb, name } => Some(
+                rituals::verb(&shrine, verb, &name)
+                    .map_or_else(fail, |message| Reply::Done { id, message }),
+            ),
             Request::Banish { .. } | Request::Close { .. } | Request::Cast(_) => {
                 let (shrine, out) = (shrine.clone(), out.clone());
                 tokio::task::spawn_local(async move {
@@ -354,12 +362,16 @@ fn same_user(s: &UnixStream) -> bool {
     unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == libc::getuid() }
 }
 
-/// A `residents` event now and whenever the shrine changes after, and every `notify`.
+/// A `residents` event now and whenever the shrine changes after, the timetable now and
+/// whenever it changes, and every `notify` and `notice`.
 async fn watch(shrine: Shared, out: Out) {
     let (mut rx, mut notices) = {
         let sh = shrine.borrow();
         (sh.changed.subscribe(), sh.notices.subscribe())
     };
+    if !send(&out, &rituals::listing(&shrine, 0)).await {
+        return;
+    }
     loop {
         rx.borrow_and_update();
         if !send(&out, &Reply::Residents { residents: list(&shrine, false) }).await {

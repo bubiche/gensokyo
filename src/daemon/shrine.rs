@@ -5,6 +5,7 @@ use super::aware::Aware;
 use super::launch;
 use super::pty;
 use super::resident::{self, Handle};
+use super::rituals::Rites;
 use super::server::log;
 use super::store::{self, Record, Store};
 use crate::proto::{self, Reply, State, Summon, Telemetry};
@@ -36,11 +37,13 @@ pub(super) struct Entry {
     pub(super) handle: Option<Rc<Handle>>,
     pub(super) aware: Aware,
     pub(super) tele: Option<Telemetry>,
+    /// A ritual run: since when it has been finished or departed, on the ritual clock.
+    pub(super) idle_since: Option<i64>,
 }
 
 impl Entry {
     fn new(rec: Record, handle: Rc<Handle>) -> Entry {
-        Entry { rec, handle: Some(handle), aware: Aware::default(), tele: None }
+        Entry { rec, handle: Some(handle), aware: Aware::default(), tele: None, idle_since: None }
     }
 }
 
@@ -59,6 +62,7 @@ pub(super) struct Shrine {
     pub(super) notices: broadcast::Sender<Reply>,
     pub(super) views: HashMap<u64, View>,
     pub(super) conns: u64,
+    pub(super) rites: Rites,
 }
 
 impl Shrine {
@@ -162,6 +166,29 @@ fn launch(
 }
 
 pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
+    if s.prompt.as_deref().is_some_and(|p| p.contains('\n')) {
+        return Err("a prompt is a single line".into());
+    }
+    let Summon { cwd, name, model, effort, mode, prompt } = s;
+    start(shrine, Start { cwd, name, model, effort, mode, prompt, ..Start::default() })
+}
+
+/// What a resident is started with: a summon's fields, and a ritual run's own.
+#[derive(Default)]
+pub(super) struct Start {
+    pub(super) cwd: String,
+    pub(super) name: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+    pub(super) mode: Option<String>,
+    /// Any number of lines.
+    pub(super) prompt: Option<String>,
+    pub(super) ritual: Option<String>,
+    pub(super) keep: Option<u64>,
+    pub(super) extra: Vec<String>,
+}
+
+pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String> {
     let mut sh = shrine.borrow_mut();
     if sh.quitting {
         return Err("the daemon is stopping".into());
@@ -170,9 +197,6 @@ pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, Stri
         .ok()
         .filter(|p| p.is_dir())
         .ok_or_else(|| format!("no such directory: {}", s.cwd))?;
-    if s.prompt.as_deref().is_some_and(|p| p.contains('\n')) {
-        return Err("a prompt is a single line".into());
-    }
     let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
     let name = match s.name {
         Some(n) if !valid_name(&n) => {
@@ -193,6 +217,7 @@ pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, Stri
         mode: s.mode.as_deref(),
         prompt: s.prompt.as_deref(),
         resume: false,
+        extra: &s.extra,
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -205,7 +230,9 @@ pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, Stri
         program,
         argv,
         prompt: s.prompt,
-        ritual: None,
+        ritual: s.ritual,
+        keep: s.keep,
+        extra: s.extra,
         launched: store::now(),
         departed: None,
         exit: None,
@@ -214,7 +241,9 @@ pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, Stri
     if let Err(e) = sh.store.save(&rec) {
         log(json!({"ev": "record", "id": id, "error": e.to_string()}));
     }
-    log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid}));
+    log(
+        json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid, "ritual": rec.ritual}),
+    );
     let r = info(&rec, Some(handle.pid));
     sh.entries.push(Entry::new(rec, handle));
     touch(&sh);
@@ -262,6 +291,7 @@ pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, Stri
         mode: mode.as_deref(),
         prompt: None,
         resume,
+        extra: &rec.extra,
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let free =
@@ -276,7 +306,10 @@ pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, Stri
         json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
     );
     let r = info(&rec, Some(handle.pid));
-    let entry = Entry::new(rec, handle);
+    let mut entry = Entry::new(rec, handle);
+    if resume {
+        entry.aware.resumed();
+    }
     match at {
         Some(i) => sh.entries[i] = entry,
         None => sh.entries.push(entry),
@@ -366,6 +399,12 @@ async fn ask_leave(h: &Handle, wait: Duration) -> bool {
     tokio::time::sleep(Duration::from_millis(300)).await;
     h.input(b"\r").await;
     tokio::time::timeout(wait, h.exited()).await.is_ok()
+}
+
+/// One `/exit`, bounded: a resident that stopped reading its tty blocks the keystrokes too.
+pub(super) async fn ask_once(h: &Handle) -> bool {
+    let most = EXIT_WAIT + Duration::from_secs(3);
+    tokio::time::timeout(most, ask_leave(h, EXIT_WAIT)).await.unwrap_or(false)
 }
 
 /// A keystroke that went missing would leave the resident sitting there, so the gesture is

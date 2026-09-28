@@ -1,0 +1,28 @@
+---
+source: tests/render.rs
+expression: t.backend()
+---
+"┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensokyo ───────────────────────────┐"
+"│1 ○ Reimu              ││line 00                                              │"
+"│2 ○ Marisa             ││line 01     ~                                        │"
+"│3 · Cirno              ││line 02     ~~                                       │"
+"│                       ││line 03     ~~~                                      │"
+"│                       ││line 04     ~~~~                                     │"
+"│                       ││li┌ slack-morning ───────────────────────────────┐   │"
+"│                       ││li│ overnight Slack                              │   │"
+"│                       ││li│ schedule  5 9 * * 1-5                        │   │"
+"│                       ││li│ next      2026-09-22 09:05                   │   │"
+"│                       ││li│ target    new                                │   │"
+"│                       ││li│ in        ~/dev/mozart                       │   │"
+"│                       ││li│ last ran  13h ago                            │   │"
+"│                       ││li│ ran (due 2026-09-21 09:05)                   │   │"
+"│                       ││li│ a run of it is going now                     │   │"
+"│                       ││li│ [run now r] [pause p] [remove x] [back esc]  │   │"
+"│                       ││li└──────────────────────────────────────────────┘   │"
+"│⏲ evening-notes   23:00││line 16     ~~~~~~~~~~~~~~~~                         │"
+"│[summon n] [cast c]    ││line 17     ~~~~~~~~~~~~~~~~~                        │"
+"│[banish b] [recall r]  ││line 18     ~~~~~~~~~~~~~~~~~~                       │"
+"│[timetable t] [quit q] ││line 19     ~~~~~~~~~~~~~~~~~~~                      │"
+"│[?]                    ││line 20                                              │"
+"│[mouse: shrine m]      ││line 21     ~                                        │"
+"└───────────────────────┘└─────────────────────────────────────────────────────┘"

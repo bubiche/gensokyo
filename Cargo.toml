@@ -5,6 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+croner = { version = "4.0.0", default-features = false, features = ["jiff"] }
+jiff = "0.2.37"
 libc = "0.2.189"
 # Built from the Ghostty source scripts/ghostty.sh fetches; see .cargo/config.toml.
 libghostty-vt = { version = "=0.2.1", default-features = false }

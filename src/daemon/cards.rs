@@ -252,7 +252,7 @@ pub(super) async fn cast(shrine: &Shared, c: Cast) -> Result<String, String> {
         .map(|t| {
             let shrine = shrine.clone();
             tokio::task::spawn_local(async move {
-                let r = deliver(&shrine, &t).await;
+                let r = deliver(&shrine, &t.id, &t.handle, &t.text, "card").await;
                 (t.name, r)
             })
         })
@@ -375,19 +375,28 @@ fn aim(sh: &Shrine, card: &Card, c: &Cast) -> Result<(Vec<Target>, Vec<String>),
     Ok((targets, notes))
 }
 
-/// The card into the input line, then Enter once it shows there. It must be the card that
-/// shows, not merely a screen that changed: whatever swallows a paste redraws doing it, and an
-/// Enter into an unknown dialog answers it. A card that never shows gets no Enter: left in an
-/// input line it is visible and recoverable.
-async fn deliver(shrine: &Shared, t: &Target) -> Result<(), String> {
-    let h = &t.handle;
-    let needle = needle(&clean(&t.text));
+/// Text into the input line, then Enter once it shows there (`what` names it in the errors: a
+/// card, a ritual's prompt). It must be the text that shows, not merely a screen that changed:
+/// whatever swallows a paste redraws doing it, and an Enter into an unknown dialog answers it.
+/// Text that never shows gets no Enter: left in an input line it is visible and recoverable.
+pub(super) async fn deliver(
+    shrine: &Shared,
+    id: &str,
+    h: &Rc<Handle>,
+    text: &str,
+    what: &str,
+) -> Result<(), String> {
+    // Everyone is being asked to /exit: typing now would land between the Ctrl-C and it.
+    if shrine.borrow().quitting {
+        return Err("was not typed into: the daemon is stopping".into());
+    }
+    let needle = needle(&clean(text));
     let before = h.frame().text();
     // More rows than before: an echo of the last cast still on screen does not count.
     let was = shown(&before, &needle);
     let pasted = Instant::now();
-    if !h.input(&typed(&t.text, h.modes().paste)).await {
-        return Err("is not reading; not cast at".into());
+    if !h.input(&typed(text, h.modes().paste)).await {
+        return Err("is not reading its input".into());
     }
     loop {
         let now = h.frame().text();
@@ -395,10 +404,12 @@ async fn deliver(shrine: &Shared, t: &Target) -> Result<(), String> {
             break;
         }
         if h.exit().is_some() {
-            return Err("left before the card showed".into());
+            return Err(format!("left before the {what} showed"));
         }
         if pasted.elapsed() > SHOW_WAIT {
-            return Err("never showed the card in its input line; nothing was submitted".into());
+            return Err(format!(
+                "never showed the {what} in its input line; nothing was submitted"
+            ));
         }
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
@@ -406,18 +417,22 @@ async fn deliver(shrine: &Shared, t: &Target) -> Result<(), String> {
     // A dialog that came up meanwhile would take the Enter.
     let why = {
         let sh = shrine.borrow();
-        let e = sh.entries.iter().find(|e| e.rec.id == t.id);
-        e.map_or(Some("has left"), |e| e.aware.blocked())
+        let e = sh.entries.iter().find(|e| e.rec.id == id);
+        match e {
+            _ if sh.quitting => Some("is being asked to leave"),
+            None => Some("has left"),
+            Some(e) => e.aware.blocked(),
+        }
     };
     if let Some(why) = why {
-        return Err(format!("{why}; the card waits in its input line, not submitted"));
+        return Err(format!("{why}; the {what} waits in its input line, not submitted"));
     }
     if !h.input(b"\r").await {
         return Err("stopped reading before the Enter".into());
     }
     // Typed to for the user: whatever it waited to be told, it has been.
     let mut sh = shrine.borrow_mut();
-    if let Some(i) = sh.entries.iter().position(|e| e.rec.id == t.id) {
+    if let Some(i) = sh.entries.iter().position(|e| e.rec.id == id) {
         let before = sh.entries[i].aware.state();
         sh.entries[i].aware.clear();
         after(&mut sh, i, before);

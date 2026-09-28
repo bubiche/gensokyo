@@ -1,14 +1,14 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
 //! `watch`, `view`, `unview`, `input`, `resize`, `focus`, `hook` and `statusline` are answered
-//! only when they fail. Events carry no `id` and go only to connections that asked for them
+//! only when they fail. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
 use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const PROTO: u32 = 3;
+pub const PROTO: u32 = 4;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -70,6 +70,13 @@ pub enum Request {
     /// A card typed into each target as a prompt; answered with `done` saying who got it and
     /// who was left out, or an error when nobody did.
     Cast(Cast),
+    /// Every ritual with its next fire, and the ritual files whose names are not usable.
+    Rituals,
+    /// A ritual fired now, paused, resumed or deleted; answered with `done`.
+    Ritual {
+        verb: RitualVerb,
+        name: String,
+    },
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
     /// The client's host terminal gained or lost focus. Until it first says, it has not.
@@ -214,6 +221,50 @@ pub struct Card {
     pub pair: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RitualVerb {
+    /// Fire it now, whatever the schedule says (and whether or not it is enabled).
+    Run,
+    Enable,
+    Disable,
+    /// The file, its notes and its journal. Never a shipped one.
+    Remove,
+}
+
+/// A ritual as the timetable and `ritual list --json` show it. The keys are the ones the
+/// `gensokyo-ritual` skill reads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RitualInfo {
+    /// The file name without `.md`.
+    pub name: String,
+    pub enabled: bool,
+    pub schedule: String,
+    /// Epoch seconds; none while disabled or when the schedule never comes round.
+    pub next_fire: Option<i64>,
+    /// The same minute on this machine's clock, `YYYY-MM-DD HH:MM`.
+    pub next_fire_local: Option<String>,
+    /// When it last ran or was sent, epoch seconds, from its journal.
+    pub last_run: Option<i64>,
+    /// The newest journal line.
+    pub last: Option<String>,
+    /// `new`, `persistent`, or a resident's name.
+    pub target: String,
+    pub headless: bool,
+    pub keep: String,
+    pub overlap: String,
+    pub cwd: Option<String>,
+    pub description: Option<String>,
+    /// Why it cannot fire, when something is wrong with it.
+    pub problem: Option<String>,
+    pub path: String,
+    /// One of the examples in `share/rituals/`, not the user's own file.
+    pub shipped: bool,
+    /// A run of it is still going (daemon only).
+    pub running: bool,
+}
+
 // A frame's rows dwarf the rest, and every reply is written out at once.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +290,12 @@ pub enum Reply {
         id: u64,
         cards: Vec<Card>,
         /// Paths of card files left out for their names.
+        unusable: Vec<String>,
+    },
+    Rituals {
+        id: u64,
+        rituals: Vec<RitualInfo>,
+        /// Paths of ritual files left out for their names.
         unusable: Vec<String>,
     },
     Error {
@@ -274,6 +331,11 @@ pub enum Reply {
         state: State,
         text: String,
         watched: bool,
+    },
+    /// Event: news about a ritual rather than a resident (a run that could not start, one that
+    /// finished headless). Shown and sent to the desktop; no bell.
+    Notice {
+        text: String,
     },
 }
 

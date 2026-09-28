@@ -72,7 +72,7 @@ impl Daemon {
         let s = UnixStream::connect(self.socket()).expect("connect");
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         let mut w = s.try_clone().unwrap();
-        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 3, "who": "test"})).unwrap();
+        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 4, "who": "test"})).unwrap();
         let mut lines = BufReader::new(s).lines();
         let welcome: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         assert_eq!(welcome["t"], "welcome");
@@ -365,7 +365,7 @@ fn protocol_errors() {
     assert_eq!(r[0]["t"], "error");
     // After a hello, a bad line is answered and the connection stays.
     let r = talk(
-        "{\"t\":\"hello\",\"proto\":3,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
+        "{\"t\":\"hello\",\"proto\":4,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
     );
     let r: Vec<_> = r.iter().map(|v| v["t"].as_str().unwrap()).collect();
     assert_eq!(r, ["welcome", "error", "list"]);
@@ -416,7 +416,7 @@ impl Client {
             }
         });
         let mut c = Client { w: s, rx };
-        c.send(json!({"t": "hello", "proto": 3, "who": "test"}));
+        c.send(json!({"t": "hello", "proto": 4, "who": "test"}));
         assert_eq!(c.next(Duration::from_secs(5)).unwrap()["t"], "welcome");
         c
     }
@@ -713,7 +713,7 @@ fn input(d: &Daemon, who: &str, text: &str) {
     // Input is answered only when it fails, so a list after it says it was taken.
     let s = UnixStream::connect(d.socket()).unwrap();
     let mut w = s.try_clone().unwrap();
-    let hello = json!({"t": "hello", "proto": 3, "who": "test"});
+    let hello = json!({"t": "hello", "proto": 4, "who": "test"});
     let req = json!({"t": "input", "id": 1, "who": who, "bytes": bytes});
     writeln!(w, "{hello}\n{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
     let mut lines = BufReader::new(s).lines();

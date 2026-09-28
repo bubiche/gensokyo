@@ -24,6 +24,12 @@ pub struct Record {
     pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ritual: Option<String>,
+    /// A ritual run: seconds idle before it is asked to leave. None stays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<u64>,
+    /// A ritual run's own flags (`--add-dir`, `--allowedTools` …), kept for a recall.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<String>,
     pub launched: i64,
     pub departed: Option<i64>,
     pub exit: Option<i32>,

@@ -2,8 +2,8 @@
 //! resident's grid in a box, and a modal over it. `render` also returns what every cell does
 //! when clicked, so clicks are resolved against exactly what was drawn.
 
-use crate::proto::{Card, Resident, State};
-use crate::tele;
+use crate::proto::{Card, Resident, RitualInfo, State};
+use crate::tele::{self, tilde};
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -38,6 +38,10 @@ pub struct Model {
     pub home: String,
     /// Epoch seconds, for "5m ago".
     pub now: i64,
+    /// This machine's date, `YYYY-MM-DD`: a fire today shows its time alone.
+    pub today: String,
+    /// The timetable, once the daemon has sent it.
+    pub rituals: Option<Vec<RitualInfo>>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,8 +58,45 @@ pub enum Modal {
     },
     /// A spell card, then who gets it, then whom a pair card's target talks to.
     Cast(Cast),
+    Timetable(Timetable),
     Quit,
     Help,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Timetable {
+    /// Into `timetable_order`.
+    pub selected: usize,
+    /// The ritual whose detail is shown, by name.
+    pub open: Option<String>,
+    /// Its removal asked, waiting for a yes.
+    pub confirm: bool,
+}
+
+/// The timetable's order: soonest fire first, then the rest by name. Indices into `rituals`.
+pub fn timetable_order(rituals: &[RitualInfo]) -> Vec<usize> {
+    let mut v: Vec<usize> = (0..rituals.len()).collect();
+    v.sort_by(|&a, &b| {
+        let (a, b) = (&rituals[a], &rituals[b]);
+        let key = |r: &RitualInfo| (r.next_fire.is_none(), r.next_fire, r.name.clone());
+        key(a).cmp(&key(b))
+    });
+    v
+}
+
+/// `YYYY-MM-DD HH:MM` said short: the time alone today, the weekday within the week, else the
+/// month and day.
+pub fn when_short(local: &str, today: &str) -> String {
+    let Some((date, time)) = local.split_once(' ') else { return local.to_string() };
+    if date == today {
+        return time.to_string();
+    }
+    let parse = |d: &str| d.parse::<jiff::civil::Date>().ok();
+    let days = parse(date).zip(parse(today)).map(|(d, t)| (d - t).get_days());
+    match (days, parse(date)) {
+        (Some(1..=6), Some(d)) => format!("{} {time}", d.strftime("%a")),
+        _ => format!("{} {time}", date.get(5..).unwrap_or(date)),
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -130,9 +171,14 @@ pub enum Button {
     Banish,
     Recall,
     Cast,
+    Timetable,
     Quit,
     Help,
     Capture,
+    /// The open ritual's run now, pause or resume, and remove.
+    RunRitual,
+    ToggleRitual,
+    RemoveRitual,
     /// The departed screen's recall and close, for the resident on it.
     RecallFocused,
     CloseFocused,
@@ -281,9 +327,10 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     }
     let buttons = [
         ("[summon n]", Button::Summon),
+        ("[cast c]", Button::Cast),
         ("[banish b]", Button::Banish),
         ("[recall r]", Button::Recall),
-        ("[cast c]", Button::Cast),
+        ("[timetable t]", Button::Timetable),
         ("[quit q]", Button::Quit),
         ("[?]", Button::Help),
     ];
@@ -298,6 +345,33 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 buf.set_stringn(inner.x, up(1), tele::usage(label, l, m.now, 5), w, DIM);
             }
         }
+    }
+    // The ritual that fires next.
+    let rituals = m.rituals.as_deref().unwrap_or_default();
+    // A disabled ritual has no next fire.
+    let next = rituals
+        .iter()
+        .filter_map(|r| Some((r.next_fire?, r.next_fire_local.as_deref()?, r.name.as_str())));
+    let line = match next.min() {
+        Some((_, local, name)) => Some((name.to_string(), when_short(local, &m.today))),
+        None if !rituals.is_empty() => Some(("none on".into(), String::new())),
+        None => None,
+    };
+    if let Some((name, at)) = line {
+        let y = up(1);
+        // The time only beside room for a few letters of the name, which is cut with a `…`.
+        let aw = width(&at) as usize;
+        let aw = if aw + 6 <= w { aw } else { 0 };
+        let room = w.saturating_sub(if aw == 0 { 2 } else { aw + 3 });
+        let name = match name.chars().count() > room {
+            true => name.chars().take(room.saturating_sub(1)).chain(['…']).collect(),
+            false => name,
+        };
+        buf.set_stringn(inner.x, y, format!("⏲ {name}"), w, Style::new());
+        if aw > 0 {
+            buf.set_stringn(inner.x + (w - aw) as u16, y, &at, aw, Style::new());
+        }
+        hits.push(Rect { y, height: 1, ..inner }, Hit::Button(Button::Timetable));
     }
     if m.leader {
         buf.set_stringn(inner.x, up(1), "^] …", w, PICK.add_modifier(Modifier::BOLD));
@@ -529,17 +603,19 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             }
             (title, rows)
         }
+        Modal::Timetable(tt) => timetable(m, tt, g.width.min(72).saturating_sub(4) as usize),
         Modal::Quit => (
             " quit ".into(),
             vec![t("Quit the shrine?"), dim("Everyone gets /exit, then the daemon stops.")],
         ),
         Modal::Help => {
-            const KEYS: [(&str, &str); 9] = [
+            const KEYS: [(&str, &str); 10] = [
                 ("n", "summon"),
                 ("b", "banish"),
                 ("r", "recall"),
                 ("c", "cast"),
                 ("x", "close"),
+                ("t", "timetable"),
                 ("q", "quit"),
                 ("?", "help"),
                 ("m", "mouse capture"),
@@ -573,6 +649,20 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             yes_no("[cast ⏎]", "[cancel esc]")
         }
         Modal::Cast(_) => yes_no("[next ⏎]", "[cancel esc]"),
+        Modal::Timetable(tt) if tt.confirm => yes_no("[yes y]", "[no n]"),
+        Modal::Timetable(tt) => match opened(m, tt) {
+            Some(r) => {
+                let toggle = if r.enabled { "[pause p]" } else { "[resume p]" };
+                let mut b =
+                    vec![("[run now r]", Button::RunRitual), (toggle, Button::ToggleRitual)];
+                if !r.shipped {
+                    b.push(("[remove x]", Button::RemoveRitual));
+                }
+                b.push(("[back esc]", Button::No));
+                Buttons(b)
+            }
+            None => Buttons(vec![("[close esc]", Button::No)]),
+        },
         Modal::Quit => yes_no("[quit y]", "[cancel n]"),
         Modal::Help => Buttons(vec![("[close esc]", Button::No)]),
     });
@@ -608,6 +698,89 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             Buttons(b) => flow(buf, line, b, BUTTON, hits),
         }
     }
+}
+
+/// The ritual the timetable has open, if it is still there.
+pub fn opened<'a>(m: &'a Model, tt: &Timetable) -> Option<&'a RitualInfo> {
+    let name = tt.open.as_ref()?;
+    m.rituals.iter().flatten().find(|r| &r.name == name)
+}
+
+/// `w` is the widest a line can be in the modal: long ones are wrapped to it.
+fn timetable(m: &Model, tt: &Timetable, w: usize) -> (String, Vec<Row>) {
+    use Row::*;
+    let dim = |s: &str| Text(s.to_string(), DIM);
+    let Some(rituals) = &m.rituals else {
+        return (" timetable ".into(), vec![dim("loading the rituals…")]);
+    };
+    if let Some(r) = opened(m, tt) {
+        let field = |k: &str, v: &str| Text(format!("{k:<9} {v}"), Style::new());
+        let wrapped = |s: &str, st: Style| wrap(s, w, 3).into_iter().map(move |l| Text(l, st));
+        let mut rows = Vec::new();
+        if tt.confirm {
+            rows.push(Text(format!("Remove {}?", r.name), Style::new()));
+            rows.extend(wrapped(
+                "Its file, its notes and its journal go, and do not come back.",
+                DIM,
+            ));
+            return (format!(" {} ", r.name), rows);
+        }
+        if let Some(d) = &r.description {
+            rows.push(Text(d.clone(), Style::new()));
+        }
+        let on = if r.enabled { "" } else { "  (paused)" };
+        rows.push(field("schedule", &format!("{}{on}", r.schedule)));
+        let next = match (&r.next_fire_local, r.enabled) {
+            (_, false) => "paused".to_string(),
+            (Some(l), true) => l.clone(),
+            (None, true) => "never".into(),
+        };
+        rows.push(field("next", &next));
+        let headless = if r.headless { ", headless" } else { "" };
+        rows.push(field("target", &format!("{}{headless}", r.target)));
+        if let Some(c) = &r.cwd {
+            rows.push(field("in", &tilde(c, &m.home)));
+        }
+        let last = r.last_run.map_or("never".into(), |t| ago(m.now - t) + " ago");
+        rows.push(field("last ran", &last));
+        if let Some(l) = &r.last {
+            rows.extend(wrapped(l, DIM));
+        }
+        if r.running {
+            rows.push(Text("a run of it is going now".into(), Style::new().fg(Color::Yellow)));
+        }
+        if let Some(p) = &r.problem {
+            rows.extend(wrapped(p, ERROR));
+        }
+        if r.shipped {
+            rows.extend(wrapped("An example gensokyo ships: pause it, or edit a copy.", DIM));
+        }
+        return (format!(" {} ", r.name), rows);
+    }
+    if rituals.is_empty() {
+        let dir = tilde(&crate::proto::config_dir().to_string_lossy(), &m.home);
+        return (" timetable ".into(), vec![dim(&format!("nothing is scheduled: {dir}/rituals"))]);
+    }
+    let order = timetable_order(rituals);
+    let sel = tt.selected.min(order.len() - 1);
+    let nw = rituals.iter().map(|r| width(&r.name)).max().unwrap_or(0).min(20) as usize;
+    let rows = window(order.len(), sel, 12)
+        .map(|i| {
+            let r = &rituals[order[i]];
+            let next = match (&r.next_fire_local, r.enabled) {
+                (_, false) => "paused".to_string(),
+                (Some(l), true) => when_short(l, &m.today),
+                (None, true) => "—".into(),
+            };
+            let on = if r.enabled { "on " } else { "off" };
+            let flag = if r.problem.is_some() { "!" } else { " " };
+            let desc = r.description.as_deref().unwrap_or("");
+            let name: String = r.name.chars().take(nw).collect();
+            let line = format!("{}{name:<nw$} {on} {next:<11}{flag} {desc}", mark(i == sel));
+            Item(i, line, i == sel)
+        })
+        .collect();
+    (" timetable ".into(), rows)
 }
 
 /// `s` in lines of at most `w` columns, broken at spaces where it can be, at most `n` of them;
@@ -710,15 +883,6 @@ fn centered(buf: &mut Buffer, g: Rect, y: u16, s: &str, style: Style) {
 
 fn width(s: &str) -> u16 {
     ratatui::text::Line::raw(s).width() as u16
-}
-
-fn tilde(p: &str, home: &str) -> String {
-    match p.strip_prefix(home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => p.to_string(),
-    }
 }
 
 fn ago(s: i64) -> String {

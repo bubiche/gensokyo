@@ -21,6 +21,8 @@ pub struct Options<'a> {
     pub prompt: Option<&'a str>,
     /// Recall: `--resume <session>` instead of `--session-id <session> --name <name>`.
     pub resume: bool,
+    /// A ritual's own flags. They may end in a variadic list, so a flag always follows them.
+    pub extra: &'a [String],
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -93,6 +95,7 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
             a.extend([flag.into(), v.into()]);
         }
     }
+    a.extend(o.extra.iter().map(OsString::from));
     if o.resume {
         a.extend(["--resume".into(), o.session.into()]);
     } else {

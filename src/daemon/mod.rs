@@ -8,6 +8,7 @@ mod notify;
 pub mod pty;
 pub mod registry;
 mod resident;
+mod rituals;
 pub mod server;
 mod shrine;
 pub mod store;

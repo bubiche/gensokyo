@@ -6,7 +6,7 @@
 #                             entry per running stub session, status from <id>.status
 #   -p / --print              one headless run: the JSON object of --output-format json, else
 #                             the result as plain text. What it answers is set by STUB_P_* (see
-#                             below); every call leaves its arguments in print.args and its
+#                             below: SLEEP, FAIL, ERROR, RESULT, DENY, SESSION, COST, TURNS); every call leaves its arguments in print.args and its
 #                             prompt in print.prompt
 #   interactive (default)     honours --session-id, --name, --resume, swallows the other launch
 #                             flags, sets the window title to "✳ <name>", pushes the keyboard
@@ -18,8 +18,9 @@
 #                             /clear starts a new session id (the files below keep the first)
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
 # SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
-# prompt, a permission Notification on /perm, AskUserQuestion's PreToolUse on /ask <q> and its
-# PostToolUse on /answer.
+# prompt (the one on the command line too), a permission Notification on /perm,
+# AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer. With STUB_HOLD=1 the
+# command line's prompt gets no Stop until /finish: a run still going.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -97,6 +98,13 @@ if [ -n "$printing" ]; then
   [ -n "${STUB_P_SLEEP:-}" ] && sleep "$STUB_P_SLEEP"
   if [ -n "${STUB_P_FAIL:-}" ]; then
     echo "stub-claude: $STUB_P_FAIL" >&2
+    exit 1
+  fi
+  # As a bad --model does: the object, saying it failed, and exit 1.
+  if [ -n "${STUB_P_ERROR:-}" ]; then
+    echo "Warning: something on stderr" >&2
+    printf '{"type": "result", "subtype": "success", "is_error": true, "result": "%s", "num_turns": 1}\n' \
+      "$(json_str "$STUB_P_ERROR")"
     exit 1
   fi
   result=${STUB_P_RESULT:-"stub -p ran in $PWD
@@ -184,7 +192,11 @@ echo "env TERM=${TERM:-} COLORTERM=${COLORTERM:-} TERM_PROGRAM=${TERM_PROGRAM:-}
 # the binary, so whoever launched it must have put it on PATH.
 echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
 if [ -n "$resume" ]; then fire SessionStart ', "source": "resume"'; else fire SessionStart ', "source": "startup"'; fi
-[ -n "$prompt" ] && { echo "> $prompt"; submitted "$prompt"; }
+if [ -n "$prompt" ]; then
+  fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$prompt")\""
+  echo "> $prompt"; submitted "$prompt"
+  [ -n "${STUB_HOLD:-}" ] || fire Stop ', "permission_mode": "default", "last_assistant_message": "done"'
+fi
 
 # Bracketed paste, because a spell card depends on it: a paste is wrapped in \033[200~ and
 # \033[201~ only if the program asked for it, and the real thing does. The whole card then
@@ -244,6 +256,7 @@ $more"
     /perm) fire Notification ', "notification_type": "permission_prompt", "message": "Claude needs your permission"'; echo "asked permission" ;;
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
+    /finish) fire Stop ', "permission_mode": "default", "last_assistant_message": "finished"'; echo "finished" ;;
     /sync\ *) printf '%s[?2026hSYNC-MID\n' "$esc"; sleep "${line#/sync }"
                printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"

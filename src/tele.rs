@@ -169,6 +169,16 @@ fn eta(s: i64) -> String {
 }
 
 /// 12s, 3m, 2h, 1d.
+/// `~` for `home`, as paths are shown.
+pub fn tilde(p: &str, home: &str) -> String {
+    match p.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
+        _ => p.to_string(),
+    }
+}
+
 pub fn age(s: u64) -> String {
     match s {
         0..60 => format!("{s}s"),

@@ -1,7 +1,9 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
-use gensokyo::client::render::{self, Button, Cast, Hit, HitMap, Modal, Model, Stage, Summon};
-use gensokyo::proto::{Card, Limit, Resident, State, Telemetry};
+use gensokyo::client::render::{
+    self, Button, Cast, Hit, HitMap, Modal, Model, Stage, Summon, Timetable,
+};
+use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -87,6 +89,7 @@ fn shrine() -> Model {
         banner: banner.unwrap().lines().map(String::from).collect(),
         home: HOME.into(),
         now: NOW,
+        today: "2026-09-21".into(),
         ..Model::default()
     }
 }
@@ -130,6 +133,47 @@ fn cast(card: Option<usize>, target: Option<&str>) -> Modal {
     })
 }
 
+/// A timetable: one firing today, one tomorrow, one headless in a fortnight, a shipped example
+/// paused, and one paused with something wrong with it.
+fn rituals() -> Vec<RitualInfo> {
+    let one = |name: &str, next: Option<(i64, &str)>, desc: &str| RitualInfo {
+        name: name.into(),
+        enabled: next.is_some(),
+        schedule: "5 9 * * 1-5".into(),
+        next_fire: next.map(|n| n.0),
+        next_fire_local: next.map(|n| n.1.to_string()),
+        target: "new".into(),
+        keep: "2h".into(),
+        overlap: "skip".into(),
+        cwd: Some(format!("{HOME}/dev/mozart")),
+        description: Some(desc.into()),
+        path: format!("{HOME}/.config/gensokyo/rituals/{name}.md"),
+        ..RitualInfo::default()
+    };
+    let mut v = vec![
+        one("slack-morning", Some((NOW + 39_100, "2026-09-22 09:05")), "overnight Slack"),
+        one("evening-notes", Some((NOW + 2_800, "2026-09-21 23:00")), "the day, in notes"),
+        one("inbox-zero", Some((NOW + 1_158_000, "2026-10-05 08:00")), "the morning's mail"),
+        one("nightly-checks", None, "the tests and the linter overnight"),
+        one("broken", None, "never comes round"),
+    ];
+    v[0].last_run = Some(NOW - 47_000);
+    v[0].last = Some("ran (due 2026-09-21 09:05)".into());
+    v[0].running = true;
+    v[2].headless = true;
+    (v[3].shipped, v[3].schedule) = (true, "0 2 * * *".into());
+    v[4].schedule = "0 0 30 2 *".into();
+    v[4].problem = Some(
+        "schedule: 0 0 30 2 * never comes round (a date that does not exist, like 30 February)"
+            .into(),
+    );
+    v
+}
+
+fn timetable(open: Option<&str>, confirm: bool) -> Modal {
+    Modal::Timetable(Timetable { selected: 1, open: open.map(String::from), confirm })
+}
+
 /// Every screen worth a snapshot, by name.
 fn screens() -> Vec<(&'static str, Model)> {
     let with = |f: &dyn Fn(&mut Model)| {
@@ -171,6 +215,59 @@ fn screens() -> Vec<(&'static str, Model)> {
         ("cast-target", with(&|m| m.modal = Some(cast(Some(1), None)))),
         ("cast-peer", with(&|m| m.modal = Some(cast(Some(0), Some("id-Reimu"))))),
         ("cast-loading", with(&|m| m.modal = Some(Modal::Cast(Cast::default())))),
+        ("sidebar-next-today", with(&|m| m.rituals = Some(rituals()))),
+        (
+            "sidebar-next-later",
+            with(&|m| {
+                let mut r = rituals();
+                r.retain(|r| r.name != "evening-notes" && r.name != "slack-morning");
+                m.rituals = Some(r);
+            }),
+        ),
+        (
+            "sidebar-none-on",
+            with(&|m| {
+                let mut r = rituals();
+                r.retain(|r| !r.enabled);
+                m.rituals = Some(r);
+            }),
+        ),
+        ("timetable-loading", with(&|m| m.modal = Some(timetable(None, false)))),
+        (
+            "timetable",
+            with(&|m| {
+                m.rituals = Some(rituals());
+                m.modal = Some(timetable(None, false));
+            }),
+        ),
+        (
+            "timetable-detail",
+            with(&|m| {
+                m.rituals = Some(rituals());
+                m.modal = Some(timetable(Some("slack-morning"), false));
+            }),
+        ),
+        (
+            "timetable-detail-problem",
+            with(&|m| {
+                m.rituals = Some(rituals());
+                m.modal = Some(timetable(Some("broken"), false));
+            }),
+        ),
+        (
+            "timetable-detail-shipped",
+            with(&|m| {
+                m.rituals = Some(rituals());
+                m.modal = Some(timetable(Some("nightly-checks"), false));
+            }),
+        ),
+        (
+            "timetable-remove",
+            with(&|m| {
+                m.rituals = Some(rituals());
+                m.modal = Some(timetable(Some("slack-morning"), true));
+            }),
+        ),
         ("quit", with(&|m| m.modal = Some(Modal::Quit))),
         ("help", with(&|m| m.modal = Some(Modal::Help))),
         (
@@ -230,6 +327,7 @@ fn every_sidebar_button_and_line_resolves() {
         Button::Banish,
         Button::Recall,
         Button::Cast,
+        Button::Timetable,
         Button::Quit,
         Button::Help,
         Button::Capture,
@@ -313,6 +411,36 @@ fn cast_offers_groups_then_the_living_and_never_the_target_as_peer() {
     m.modal = Some(Modal::Cast(c));
     let map = hits(&m, AREA);
     assert!(!map.0.iter().any(|(_, h)| matches!(h, Hit::Item(_))));
+}
+
+#[test]
+fn the_timetable_lists_soonest_first_and_offers_what_each_ritual_allows() {
+    let list = rituals();
+    let names: Vec<&str> =
+        render::timetable_order(&list).into_iter().map(|i| list[i].name.as_str()).collect();
+    assert_eq!(names, ["evening-notes", "slack-morning", "inbox-zero", "broken", "nightly-checks"]);
+    assert_eq!(render::when_short("2026-09-21 23:00", "2026-09-21"), "23:00");
+    assert_eq!(render::when_short("2026-09-22 09:05", "2026-09-21"), "Tue 09:05");
+    assert_eq!(render::when_short("2026-10-05 08:00", "2026-09-21"), "10-05 08:00");
+    let mut m = shrine();
+    m.rituals = Some(list);
+    m.modal = Some(timetable(None, false));
+    let map = hits(&m, AREA);
+    for i in 0..5 {
+        assert!(resolves(&map, Hit::Item(i)), "row {i}");
+    }
+    // The sidebar's next fire opens the timetable too.
+    m.modal = None;
+    let map = hits(&m, AREA);
+    let n = map.0.iter().filter(|(_, h)| *h == Hit::Button(Button::Timetable)).count();
+    assert_eq!(n, 2);
+    for (open, remove) in [("slack-morning", true), ("nightly-checks", false)] {
+        m.modal = Some(timetable(Some(open), false));
+        let map = hits(&m, AREA);
+        assert!(resolves(&map, Hit::Button(Button::RunRitual)), "{open}");
+        assert!(resolves(&map, Hit::Button(Button::ToggleRitual)), "{open}");
+        assert_eq!(resolves(&map, Hit::Button(Button::RemoveRitual)), remove, "{open}");
+    }
 }
 
 #[test]
@@ -432,4 +560,21 @@ fn whoever_needs_you_is_gold_across_the_sidebar() {
     };
     // Rows 1-4 inside the box: Reimu busy, Marisa awaits, Cirno departed, Sakuya asked.
     assert_eq!([1, 2, 3, 4].map(gold), [false, true, false, true]);
+}
+
+#[test]
+fn a_narrow_sidebar_drops_the_rituals_time_rather_than_draw_over_its_name() {
+    let mut m = shrine();
+    m.rituals = Some(rituals());
+    let row = |w: u16| {
+        let area = Rect::new(0, 0, w, 24);
+        let mut buf = Buffer::empty(area);
+        render::render(&m, area, &mut buf);
+        let line = |y: u16| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        (0..24).map(line).find(|l| l.contains('⏲')).unwrap_or_default()
+    };
+    assert_eq!(row(25).trim_end_matches('│'), "│⏲ evening-notes   23:00", "{}", row(25));
+    assert_eq!(row(14), "│⏲ eve… 23:00│");
+    let narrow = row(10);
+    assert!(narrow.starts_with("│⏲ eveni…") && !narrow.contains("23"), "{narrow}");
 }

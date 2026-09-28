@@ -9,7 +9,8 @@ use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward};
 use super::render::{self, Button, Hit, HitMap, Modal, Model, Stage};
 use crate::cli;
-use crate::proto::{self, Envelope, Reply, Request, Resident};
+use crate::proto::{self, Envelope, Reply, Request, Resident, RitualVerb};
+use crate::tele::tilde;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::terminal;
 use std::collections::HashMap;
@@ -317,6 +318,9 @@ impl App {
 
     fn draw(&mut self, term: &mut Term) -> std::io::Result<()> {
         self.m.now = now();
+        if self.m.rituals.as_ref().is_some_and(|r| !r.is_empty()) {
+            self.m.today = jiff::Zoned::now().date().to_string();
+        }
         let b = term.backend_mut();
         b.write_all(&std::mem::take(&mut self.host))?;
         b.write_all(b"\x1b[?2026h")?;
@@ -347,6 +351,37 @@ impl App {
         };
         match r {
             Reply::Welcome { .. } => {}
+            Reply::Rituals { rituals, .. } => {
+                let order =
+                    |m: &Model| render::timetable_order(m.rituals.as_deref().unwrap_or(&[]));
+                let was = match &self.m.modal {
+                    Some(Modal::Timetable(tt)) => order(&self.m)
+                        .get(tt.selected)
+                        .and_then(|&i| self.m.rituals.as_ref()?.get(i))
+                        .map(|r| r.name.clone()),
+                    _ => None,
+                };
+                self.m.rituals = Some(rituals);
+                let now = order(&self.m);
+                let list = self.m.rituals.as_deref().unwrap_or_default();
+                let at = was.and_then(|n| now.iter().position(|&i| list[i].name == n));
+                if let (Some(Modal::Timetable(tt)), Some(at)) = (&mut self.m.modal, at) {
+                    tt.selected = at;
+                }
+                // The ritual it had open is gone: nothing to act on, or to confirm removing.
+                if let Some(Modal::Timetable(tt)) = &mut self.m.modal
+                    && tt.open.as_ref().is_some_and(|n| !list.iter().any(|r| &r.name == n))
+                {
+                    (tt.open, tt.confirm) = (None, false);
+                }
+            }
+            Reply::Notice { text } => {
+                let text = crate::tele::clean(&text, 200);
+                if self.desktop {
+                    self.host.extend(format!("\x1b]9;{text}\x07").bytes());
+                }
+                self.m.message = Some(text);
+            }
             Reply::Cards { cards, unusable, .. } => {
                 if let Some(Modal::Cast(c)) = &mut self.m.modal {
                     (c.cards, c.unusable) = (Some(cards), unusable);
@@ -601,13 +636,17 @@ impl App {
                 Button::Banish => self.chord(Chord::Banish),
                 Button::Recall => self.chord(Chord::Recall),
                 Button::Cast => self.chord(Chord::Cast),
+                Button::Timetable => self.chord(Chord::Timetable),
+                Button::RunRitual => self.ritual(Act::Run),
+                Button::ToggleRitual => self.ritual(Act::Toggle),
+                Button::RemoveRitual => self.ritual(Act::Remove),
                 Button::Quit => self.chord(Chord::Quit),
                 Button::Help => self.chord(Chord::Help),
                 Button::Capture => self.chord(Chord::Capture),
                 Button::RecallFocused => self.recall_focused(),
                 Button::CloseFocused => self.chord(Chord::Close),
                 Button::Yes => self.confirm(),
-                Button::No => self.m.modal = None,
+                Button::No => self.go_back(),
             },
             Hit::Item(i) => match &mut self.m.modal {
                 Some(Modal::Summon(s)) if s.stage == Stage::Dir => {
@@ -616,6 +655,10 @@ impl App {
                     } else {
                         s.selected = Some(i);
                     }
+                }
+                Some(Modal::Timetable(tt)) if tt.open.is_none() => {
+                    tt.selected = i;
+                    self.confirm();
                 }
                 Some(
                     Modal::Recall { selected, .. } | Modal::Cast(render::Cast { selected, .. }),
@@ -659,6 +702,10 @@ impl App {
                 self.m.modal = Some(Modal::Cast(render::Cast::default()));
                 self.send(Request::Cards);
             }
+            Chord::Timetable => {
+                self.m.modal = Some(Modal::Timetable(render::Timetable::default()));
+                self.send(Request::Rituals);
+            }
             Chord::Quit => self.m.modal = Some(Modal::Quit),
             Chord::Help => self.m.modal = Some(Modal::Help),
             Chord::Capture => {
@@ -686,6 +733,40 @@ impl App {
             }
             Chord::Cancel | Chord::Unbound => {}
         }
+    }
+
+    /// Esc or a modal's cancel: the timetable goes back from a confirm to the ritual and from
+    /// the ritual to the list; everything else closes.
+    fn go_back(&mut self) {
+        match &mut self.m.modal {
+            Some(Modal::Timetable(tt)) if tt.confirm => tt.confirm = false,
+            Some(Modal::Timetable(tt)) if tt.open.is_some() => tt.open = None,
+            _ => self.m.modal = None,
+        }
+    }
+
+    /// Run, pause or resume, or ask to remove, the ritual the timetable has open.
+    fn ritual(&mut self, act: Act) {
+        let Some(Modal::Timetable(tt)) = &self.m.modal else { return };
+        let Some(r) = render::opened(&self.m, tt) else { return };
+        let (name, enabled, shipped) = (r.name.clone(), r.enabled, r.shipped);
+        let (verb, doing) = match act {
+            Act::Run => (RitualVerb::Run, "running"),
+            Act::Remove if shipped => {
+                self.m.message = Some(format!("{name} ships with gensokyo: pause it instead"));
+                return;
+            }
+            Act::Remove => {
+                if let Some(Modal::Timetable(tt)) = &mut self.m.modal {
+                    tt.confirm = true;
+                }
+                return;
+            }
+            Act::Toggle if enabled => (RitualVerb::Disable, "pausing"),
+            Act::Toggle => (RitualVerb::Enable, "resuming"),
+        };
+        self.m.message = Some(format!("{doing} {name}…"));
+        self.send(Request::Ritual { verb, name });
     }
 
     /// The departed for recall, newest first, and the recent directories for summon: the
@@ -774,6 +855,24 @@ impl App {
                 self.send(Request::Cast(proto::Cast { card: card.slug, targets, peer }));
                 self.m.message = Some(format!("casting {}…", card.title));
             }
+            Modal::Timetable(mut tt) => {
+                match (&tt.open, tt.confirm) {
+                    (Some(name), true) => {
+                        self.m.message = Some(format!("removing {name}…"));
+                        let name = name.clone();
+                        self.send(Request::Ritual { verb: RitualVerb::Remove, name });
+                        (tt.open, tt.confirm) = (None, false);
+                    }
+                    (None, _) => {
+                        let list = self.m.rituals.as_deref().unwrap_or_default();
+                        let order = render::timetable_order(list);
+                        let i = order.get(tt.selected.min(order.len().saturating_sub(1)));
+                        tt.open = i.map(|&i| list[i].name.clone());
+                    }
+                    _ => {}
+                }
+                self.m.modal = Some(Modal::Timetable(tt));
+            }
             Modal::Quit => {
                 self.quit = Some(self.send(Request::Quit));
                 self.gone = Some("the shrine is empty; the daemon stopped".into());
@@ -786,11 +885,14 @@ impl App {
         let k = ModalKey::of(c);
         let last = match &self.m.modal {
             Some(Modal::Cast(c)) => render::cast_choices(&self.m, c).len().saturating_sub(1),
+            Some(Modal::Timetable(_)) => {
+                self.m.rituals.as_ref().map_or(0, Vec::len).saturating_sub(1)
+            }
             _ => 0,
         };
         let Some(modal) = self.m.modal.as_mut() else { return };
         match (modal, k) {
-            (_, ModalKey::Esc) => self.m.modal = None,
+            (_, ModalKey::Esc) => self.go_back(),
             (Modal::Help, _) => self.m.modal = None,
             (Modal::Quit | Modal::Banish { .. }, ModalKey::Enter | ModalKey::Text('y')) => {
                 self.confirm()
@@ -801,6 +903,25 @@ impl App {
                     c.selected = c.selected.min(last).saturating_sub(1)
                 }
                 ModalKey::Down | ModalKey::Text('j') => c.selected = (c.selected + 1).min(last),
+                ModalKey::Enter => self.confirm(),
+                _ => {}
+            },
+            (Modal::Timetable(tt), k) if tt.confirm => match k {
+                ModalKey::Enter | ModalKey::Text('y') => self.confirm(),
+                ModalKey::Text('n') => tt.confirm = false,
+                _ => {}
+            },
+            (Modal::Timetable(tt), k) if tt.open.is_some() => match k {
+                ModalKey::Text('r') => self.ritual(Act::Run),
+                ModalKey::Text('p') => self.ritual(Act::Toggle),
+                ModalKey::Text('x') => self.ritual(Act::Remove),
+                _ => {}
+            },
+            (Modal::Timetable(tt), k) => match k {
+                ModalKey::Up | ModalKey::Text('k') => {
+                    tt.selected = tt.selected.min(last).saturating_sub(1)
+                }
+                ModalKey::Down | ModalKey::Text('j') => tt.selected = (tt.selected + 1).min(last),
                 ModalKey::Enter => self.confirm(),
                 _ => {}
             },
@@ -903,16 +1024,6 @@ fn now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// `~` for the home directory, as paths are shown.
-fn tilde(p: &str, home: &str) -> String {
-    match p.strip_prefix(home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => p.to_string(),
-    }
-}
-
 /// A typed path made absolute: `~` is home, and a relative one is under the client's cwd.
 fn expand(p: &str, home: &str) -> PathBuf {
     let p = p.trim();
@@ -961,4 +1072,12 @@ fn complete(s: &mut render::Summon, home: &str) {
     s.path = format!("{dir}{shared}");
     s.completions = if names.len() > 1 { names } else { Vec::new() };
     s.selected = None;
+}
+
+/// What the timetable's buttons do to the ritual it has open.
+enum Act {
+    Run,
+    /// Pause it, or resume it.
+    Toggle,
+    Remove,
 }

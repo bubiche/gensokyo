@@ -1,8 +1,8 @@
 //! What residents report from inside: their hooks, which may come late through the spool,
 //! and their status line.
 
+use super::log::log;
 use super::notify::after;
-use super::server::log;
 use super::shrine::{Shared, Shrine, touch};
 use super::store::{self, Record};
 use crate::hooks;

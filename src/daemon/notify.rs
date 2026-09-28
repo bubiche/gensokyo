@@ -1,6 +1,6 @@
 //! Who hears that a resident needs the user, and when a finished turn has been seen.
 
-use super::server::log;
+use super::log::log;
 use super::shrine::{Shrine, touch};
 use crate::proto::{Reply, State};
 use serde_json::json;

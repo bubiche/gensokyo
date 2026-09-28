@@ -2,6 +2,7 @@
 //! firing one does, and removing one asks it first whether a run is still going.
 
 use super::{Error, request, say};
+use crate::paths;
 use crate::proto::{self, Request, RitualVerb};
 use crate::ritual::{self, Dir, Ritual, Trust};
 use clap::Subcommand;
@@ -118,7 +119,7 @@ pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
 }
 
 pub(super) fn share() -> Option<std::path::PathBuf> {
-    proto::share_dir(&std::env::current_exe().ok()?)
+    paths::share_dir(&std::env::current_exe().ok()?)
 }
 
 fn rituals() -> (Vec<Ritual>, Vec<std::path::PathBuf>) {
@@ -147,7 +148,7 @@ fn list(json: bool) -> Result<(), String> {
     }
     if infos.is_empty() {
         println!("nothing is scheduled yet: gensokyo ritual new <name>");
-        let mine = ritual::tilde(&ritual::mine_dir().to_string_lossy());
+        let mine = paths::short(&ritual::mine_dir().to_string_lossy());
         println!("  your rituals live in {mine}/<name>.md");
     }
     for (i, r) in infos.iter().enumerate() {
@@ -175,7 +176,7 @@ fn list(json: bool) -> Result<(), String> {
             println!("  {:<18} headless: no pane, and its own log of what each run said", "");
         }
         if let Some(p) = &r.problem {
-            println!("  {:<18} not firing: {p} ({})", "", ritual::tilde(&r.path));
+            println!("  {:<18} not firing: {p} ({})", "", paths::short(&r.path));
         }
     }
     if !infos.is_empty() {
@@ -184,14 +185,14 @@ fn list(json: bool) -> Result<(), String> {
             "  gensokyo ritual run <name>      fire one now, which is how its prompts get approved once"
         );
         println!("  gensokyo ritual log <name>      what it has done; edit <name> opens the file");
-        if UnixStream::connect(proto::socket_path()).is_err() {
+        if UnixStream::connect(paths::socket_path()).is_err() {
             println!("  gensokyo is not running, so nothing fires until it is (run gensokyo)");
         }
     }
     for f in unusable {
         eprintln!(
             "gensokyo: not a usable ritual name (letters, digits, . _ - and .md): {}",
-            ritual::tilde(&f.to_string_lossy())
+            paths::short(&f.to_string_lossy())
         );
     }
     Ok(())
@@ -211,7 +212,7 @@ fn add(o: Add) -> Result<(), String> {
             s
         }
         (None, Some(f)) => {
-            let f = expand(&f);
+            let f = paths::expand(&f);
             std::fs::read_to_string(&f)
                 .map_err(|e| format!("ritual add: no such prompt file: {f} ({e})"))?
         }
@@ -220,7 +221,7 @@ fn add(o: Add) -> Result<(), String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
     let cwd = match o.cwd.as_deref() {
         None | Some("") => here.to_string_lossy().into_owned(),
-        Some(c) => here.join(expand(c)).to_string_lossy().into_owned(),
+        Some(c) => here.join(paths::expand(c)).to_string_lossy().into_owned(),
     };
     // Field by field: a field added to Add later keeps its default here.
     let mut a = ritual::Add::default();
@@ -274,7 +275,7 @@ fn mine(r: &Ritual) -> Result<std::path::PathBuf, String> {
         println!(
             "the shipped {}.md is now yours, in {}",
             r.slug,
-            ritual::tilde(&path.to_string_lossy())
+            paths::short(&path.to_string_lossy())
         );
     }
     Ok(path)
@@ -333,7 +334,7 @@ fn log(name: &str, n: usize) -> Result<(), String> {
     let journal = dir.path.join("journal.jsonl");
     println!(
         "  {}   (its notes are beside it, in memory.md)",
-        ritual::tilde(&journal.to_string_lossy())
+        paths::short(&journal.to_string_lossy())
     );
     let mut runs: Vec<_> = std::fs::read_dir(dir.runs())
         .into_iter()
@@ -346,7 +347,7 @@ fn log(name: &str, n: usize) -> Result<(), String> {
     if let Some(newest) = runs.last() {
         println!(
             "  {}   (what the last headless run said, in full)",
-            ritual::tilde(&newest.to_string_lossy())
+            paths::short(&newest.to_string_lossy())
         );
     }
     Ok(())
@@ -369,7 +370,7 @@ fn open_editor(path: &std::path::Path) -> Result<(), String> {
     } else {
         Err(format!(
             "{ed} did not finish cleanly; the file is there: {}",
-            ritual::tilde(&path.to_string_lossy())
+            paths::short(&path.to_string_lossy())
         ))
     }
 }
@@ -416,20 +417,10 @@ fn new(name: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir)
         .and_then(|_| std::fs::write(&path, ritual::template(name, &here.to_string_lossy())))
         .map_err(|e| {
-            format!("ritual new: could not write {}: {e}", ritual::tilde(&path.to_string_lossy()))
+            format!("ritual new: could not write {}: {e}", paths::short(&path.to_string_lossy()))
         })?;
-    println!("wrote {}", ritual::tilde(&path.to_string_lossy()));
+    println!("wrote {}", paths::short(&path.to_string_lossy()));
     open_editor(&path).map_err(|e| format!("ritual new: {e}"))?;
     report(&path);
     Ok(())
-}
-
-/// `~` and `~/…` are the home directory; anything else is as given.
-fn expand(p: &str) -> String {
-    match p.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            format!("{}{rest}", std::env::var("HOME").unwrap_or_default())
-        }
-        _ => p.to_string(),
-    }
 }

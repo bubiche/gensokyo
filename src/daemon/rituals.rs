@@ -3,14 +3,14 @@
 //! are `crate::ritual`; the schedule is `crate::cron`. This decides and acts.
 
 use super::cards::deliver;
+use super::log::log;
 use super::registry;
 use super::resident::Handle;
-use super::server::log;
 use super::shrine::{self, Shared, Shrine, Start, ask_once, recall, start, taken, valid_name};
 use crate::cron::{self, Schedule, Why};
 use crate::hooks;
 use crate::proto::{Reply, RitualInfo, RitualVerb};
-use crate::ritual::{self, Dir, Ritual, Target, Trust, tilde, when};
+use crate::ritual::{self, Dir, Ritual, Target, Trust, when};
 use crate::tele;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -253,7 +253,7 @@ fn fire(
     alongside: bool,
     now: i64,
 ) -> Result<String, String> {
-    let cwd = r.cwd.as_deref().map(tilde).unwrap_or_default();
+    let cwd = r.cwd.as_deref().map(crate::paths::short).unwrap_or_default();
     log(json!({"ev": "ritual", "slug": r.slug, "ran": label, "alongside": alongside}));
     let said = match r.target() {
         _ if r.headless() => {

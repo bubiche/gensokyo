@@ -47,10 +47,9 @@ pub fn claude(path: Option<&OsStr>) -> Option<PathBuf> {
 /// Whether Claude Code kept a conversation for `session`, which it writes only once a prompt is
 /// submitted: `--resume` of any other session exits 1 with "No conversation found".
 pub fn has_conversation(session: &str) -> bool {
-    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")));
-    let Some(projects) = config.map(|c| c.join("projects")) else { return false };
+    let Some(projects) = crate::paths::claude_dir().map(|c| c.join("projects")) else {
+        return false;
+    };
     let file = format!("{session}.jsonl");
     std::fs::read_dir(projects)
         .into_iter()

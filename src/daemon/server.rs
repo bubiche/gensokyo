@@ -4,6 +4,7 @@
 
 use super::cards;
 use super::ingest::{hook, replay, statusline};
+use super::log::log;
 use super::notify::looked;
 use super::registry::poll;
 use super::resident::Handle;
@@ -12,16 +13,15 @@ use super::shrine::{
     SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
 };
 use super::store::{self, Store};
+use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request};
 use crate::vt::{Frame, KeyEvent, Modes};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::fs::OpenOptions;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
@@ -35,40 +35,13 @@ const FRAME_GAP: Duration = Duration::from_millis(16);
 /// How long a child's synchronized-output block may hold its screen back.
 const SYNC_HOLD: Duration = Duration::from_millis(150);
 
-static LOG: Mutex<Option<File>> = Mutex::new(None);
-
 /// How long an input may wait for room in a resident's queue: one that has stopped reading its
 /// tty would otherwise hold up every request after it on the connection.
 const INPUT_WAIT: Duration = Duration::from_millis(500);
 
-/// One JSON line in `daemon.log`.
-pub fn log(v: Value) {
-    write_log(LOG.lock().unwrap_or_else(|e| e.into_inner()).as_mut(), v);
-}
-
-fn write_log(f: Option<&mut File>, mut v: Value) {
-    v["ts"] = json!(store::now());
-    // One write per line: Display alone would write it in pieces.
-    if let Some(f) = f {
-        let _ = f.write_all(format!("{v}\n").as_bytes());
-    }
-}
-
-/// A panic as one log line. Tokio catches a task's panic and carries on without the task, so
-/// this line is all there is to say it happened. Never waits for the log: the panic may have
-/// come from inside `log`.
-fn panic_hook(p: &std::panic::PanicHookInfo) {
-    let at = p.location().map(|l| format!("{}:{}", l.file(), l.line()));
-    let v = json!({"ev": "panic", "msg": p.payload_as_str(), "at": at});
-    match LOG.try_lock() {
-        Ok(mut f) => write_log(f.as_mut(), v),
-        Err(_) => eprintln!("{v}"),
-    }
-}
-
 pub fn main() -> std::process::ExitCode {
     // Absolute: the daemon moves to / below, and residents inherit it with their own cwd.
-    let root = std::path::absolute(proto::state_dir()).unwrap_or_else(|_| proto::state_dir());
+    let root = std::path::absolute(paths::state_dir()).unwrap_or_else(|_| paths::state_dir());
     // SAFETY: one thread still; the runtime starts below.
     unsafe { std::env::set_var("GENSOKYO_STATE_DIR", &root) };
     let run = root.join("run");
@@ -82,15 +55,7 @@ pub fn main() -> std::process::ExitCode {
     for d in [&root, &run] {
         let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700));
     }
-    let f = OpenOptions::new().create(true).append(true).open(root.join("daemon.log")).ok();
-    // Whatever else reaches stderr lands in the log too, however the daemon was started.
-    if let Some(f) = &f {
-        use std::os::fd::AsRawFd;
-        // SAFETY: dup2 onto fd 2, which this process owns; the file stays open in `LOG`.
-        unsafe { libc::dup2(f.as_raw_fd(), 2) };
-    }
-    *LOG.lock().unwrap_or_else(|e| e.into_inner()) = f;
-    std::panic::set_hook(Box::new(panic_hook));
+    super::log::open(&root.join("daemon.log"));
     let lock =
         OpenOptions::new().create(true).truncate(false).write(true).open(run.join("daemon.lock"));
     let lock = match lock {
@@ -120,7 +85,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 async fn serve(store: Store) -> std::process::ExitCode {
-    let path = proto::socket_path();
+    let path = paths::socket_path();
     // A socket that answers belongs to a daemon for another state dir (one started from inside a
     // resident, which inherits `GENSOKYO_SOCKET`): never take it over.
     if std::os::unix::net::UnixStream::connect(&path).is_ok() {
@@ -151,7 +116,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
     let shrine = Rc::new(RefCell::new(Shrine {
         entries: Vec::new(),
         store,
-        share: proto::share_dir(&exe),
+        share: paths::share_dir(&exe),
         socket: std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
         exe,
         quitting: false,
@@ -208,7 +173,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
 /// clock's first tick, which would otherwise start a missed ritual run in a kept session's place.
 /// The file goes first, so a recall that brings the daemon down is not tried again.
 fn comeback(shrine: &Shared) {
-    let path = proto::comeback_path();
+    let path = paths::comeback_path();
     let Ok(ids) = std::fs::read_to_string(&path) else { return };
     let _ = std::fs::remove_file(&path);
     for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {

@@ -2,8 +2,9 @@
 //! resident's grid in a box, and a modal over it. `render` also returns what every cell does
 //! when clicked, so clicks are resolved against exactly what was drawn.
 
+use crate::paths::tilde;
 use crate::proto::{Card, Resident, RitualInfo, State};
-use crate::tele::{self, tilde};
+use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -565,7 +566,7 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 .collect(),
         ),
         Modal::Cast(c) if c.cards.as_ref().is_none_or(Vec::is_empty) => {
-            let dir = tilde(&crate::proto::config_dir().to_string_lossy(), &m.home);
+            let dir = tilde(&crate::paths::config_dir().to_string_lossy(), &m.home);
             let say = match c.cards {
                 None => "loading the spell cards…".into(),
                 Some(_) => format!("no spell cards: put one in {dir}/spellcards"),
@@ -758,7 +759,7 @@ fn timetable(m: &Model, tt: &Timetable, w: usize) -> (String, Vec<Row>) {
         return (format!(" {} ", r.name), rows);
     }
     if rituals.is_empty() {
-        let dir = tilde(&crate::proto::config_dir().to_string_lossy(), &m.home);
+        let dir = tilde(&crate::paths::config_dir().to_string_lossy(), &m.home);
         return (" timetable ".into(), vec![dim(&format!("nothing is scheduled: {dir}/rituals"))]);
     }
     let order = timetable_order(rituals);

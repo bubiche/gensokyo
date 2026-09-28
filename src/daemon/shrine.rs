@@ -3,10 +3,10 @@
 
 use super::aware::Aware;
 use super::launch;
+use super::log::log;
 use super::pty;
 use super::resident::{self, Handle};
 use super::rituals::Rites;
-use super::server::log;
 use super::store::{self, Record, Store};
 use crate::proto::{self, Reply, State, Summon, Telemetry};
 use crate::tele;

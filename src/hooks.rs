@@ -3,6 +3,7 @@
 //! daemon, and wait on one no longer than twice `DELIVER` (the write, then the answer):
 //! `UserPromptSubmit` holds up the prompt until its hook ends.
 
+use crate::paths;
 use crate::proto::{self, Envelope, Hook, Request};
 use crate::tele;
 use serde_json::Value;
@@ -39,7 +40,7 @@ pub fn hook_main() {
     };
     let req = Request::Hook { resident, hook: reduce(&j, now_ms()) };
     if !deliver(&req) {
-        spool(&proto::state_dir(), &req);
+        spool(&paths::state_dir(), &req);
     }
 }
 
@@ -69,7 +70,7 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
 /// which goes to the spool for the next daemon. No answer in time is a daemon that is there and
 /// busy: it has the request, and spooling it too would replay it twice.
 fn deliver(req: &Request) -> bool {
-    let Ok(mut s) = UnixStream::connect(proto::socket_path()) else { return false };
+    let Ok(mut s) = UnixStream::connect(paths::socket_path()) else { return false };
     let hello = Request::Hello { proto: proto::PROTO, who: "hook".into() };
     let mut b = Vec::new();
     for req in [hello, req.clone()] {
@@ -165,7 +166,7 @@ pub fn statusline_main(id: &str) {
     t.advisor =
         tele::setting(&cwd, "/advisorModel").and_then(|v| v.as_str().map(|a| tele::clean(a, 20)));
     deliver(&Request::Statusline { resident: id.into(), telemetry: t.clone() });
-    let user = (proto::config("STATUSLINE").as_deref() == Some("user"))
+    let user = (paths::config("STATUSLINE").as_deref() == Some("user"))
         .then(|| tele::setting(&cwd, "/statusLine/command"))
         .flatten();
     if let Some(cmd) = user.as_ref().and_then(Value::as_str) {

@@ -5,9 +5,9 @@
 
 use super::aware::Registry;
 use super::ingest::replay;
+use super::log::log;
 use super::notify::after;
 use super::pty;
-use super::server::log;
 use super::shrine::{Shared, taken, valid_name};
 use crate::hooks;
 use serde::Deserialize;

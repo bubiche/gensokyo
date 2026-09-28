@@ -1,6 +1,6 @@
 //! Spell cards on disk and as typed: loading, naming, placeholders and the bytes a resident gets.
 
-use gensokyo::daemon::cards::{fill, find_card, load, needle, parse, shown, typed};
+use gensokyo::card::{fill, find_card, load, needle, parse, shown, typed};
 use std::path::{Path, PathBuf};
 
 fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {

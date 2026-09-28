@@ -2,7 +2,7 @@
 //! for, a persistent ritual's session, its notes, its journal and its headless runs' logs.
 
 use crate::daemon::store::write_atomic;
-use crate::proto;
+use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ pub struct Dir {
 
 impl Dir {
     pub fn of(slug: &str) -> Dir {
-        Dir::at(&proto::state_dir(), slug)
+        Dir::at(&paths::state_dir(), slug)
     }
 
     pub fn at(state: &Path, slug: &str) -> Dir {

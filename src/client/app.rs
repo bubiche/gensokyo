@@ -9,8 +9,8 @@ use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward};
 use super::render::{self, Button, Hit, HitMap, Modal, Model, Stage};
 use crate::cli;
+use crate::paths::{self, tilde};
 use crate::proto::{self, Envelope, Reply, Request, Resident, RitualVerb};
-use crate::tele::tilde;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::terminal;
 use std::collections::HashMap;
@@ -233,9 +233,9 @@ impl App {
     }
 
     fn new() -> App {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = paths::home();
         let exe = std::env::current_exe().unwrap_or_default();
-        let banner = proto::share_dir(&exe)
+        let banner = paths::share_dir(&exe)
             .and_then(|s| std::fs::read_to_string(s.join("banner.txt")).ok())
             .map(|b| b.lines().map(String::from).collect())
             .unwrap_or_default();
@@ -261,8 +261,8 @@ impl App {
             quit: None,
             log,
             t0: Instant::now(),
-            bell: proto::config("NOTIFY_BELL").as_deref() != Some("off"),
-            desktop: proto::config("NOTIFY_DESKTOP").as_deref() != Some("off"),
+            bell: paths::config("NOTIFY_BELL").as_deref() != Some("off"),
+            desktop: paths::config("NOTIFY_DESKTOP").as_deref() != Some("off"),
         }
     }
 
@@ -1038,10 +1038,7 @@ fn now() -> i64 {
 /// A typed path made absolute: `~` is home, and a relative one is under the client's cwd.
 fn expand(p: &str, home: &str) -> PathBuf {
     let p = p.trim();
-    let p = match p.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
-        _ => p.to_string(),
-    };
+    let p = paths::untilde(p, home);
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     if p.is_empty() { here } else { here.join(p) }
 }

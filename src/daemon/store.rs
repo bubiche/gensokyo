@@ -2,7 +2,7 @@
 //! those who left it. Every write is a whole file, renamed into place, and a write that fails
 //! is logged here, whoever asked for it.
 
-use super::server::log;
+use super::log::log;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cell::{RefCell, RefMut};

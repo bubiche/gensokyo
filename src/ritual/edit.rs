@@ -1,7 +1,7 @@
 //! Writing ritual files: `ritual add`, the user's own copy of a shipped one, turning one on or
 //! off, the template `ritual new` opens, and removing one.
 
-use super::{Dir, NAME_RULE, Ritual, SCHEDULES, Target, Trust, check, name_ok, parse, tilde, when};
+use super::{Dir, NAME_RULE, Ritual, SCHEDULES, Target, Trust, check, name_ok, parse, when};
 use crate::daemon::store::write_atomic;
 use crate::frontmatter::quote;
 use jiff::Timestamp;
@@ -76,7 +76,7 @@ pub fn add(
     if path.exists() {
         return Err(format!(
             "{name} is already there: {} (edit that file, or gensokyo ritual edit {name})",
-            tilde(&path.to_string_lossy())
+            crate::paths::short(&path.to_string_lossy())
         ));
     }
     let mut f = format!("---\nname: {name}\n");
@@ -123,7 +123,7 @@ pub fn add(
     std::fs::create_dir_all(rituals).map_err(|e| format!("{}: {e}", rituals.display()))?;
     write_atomic(&path, f.as_bytes())
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;
-    let mut out = vec![format!("wrote {}", tilde(&path.to_string_lossy()))];
+    let mut out = vec![format!("wrote {}", crate::paths::short(&path.to_string_lossy()))];
     if share.is_some_and(|s| s.join("rituals").join(format!("{name}.md")).exists()) {
         out.push(format!(
             "warning: {name} is also one of the shipped examples; yours shadows it from now on"
@@ -149,7 +149,7 @@ pub fn add(
         out.push(format!(
             "  headless: no pane to watch and nobody to answer a prompt, so what it needs goes in \
              allowed_tools; what each run says keeps in {}",
-            tilde(&Dir::of(name).runs().to_string_lossy())
+            crate::paths::short(&Dir::of(name).runs().to_string_lossy())
         ));
     }
     out.push(format!(
@@ -176,7 +176,7 @@ pub fn mine(r: &Ritual, rituals: &Path) -> Result<PathBuf, String> {
 /// `enabled: true|false` in the frontmatter, replacing the line that is there (and any repeat
 /// of it) or added at the end of the block; the rest of the file as it was.
 pub fn set_enabled(path: &Path, on: bool) -> Result<(), String> {
-    let shown = tilde(&path.to_string_lossy());
+    let shown = crate::paths::short(&path.to_string_lossy());
     // Through a symlink (a dotfiles repo, say), not over it.
     let path = &std::fs::canonicalize(path).map_err(|e| format!("{shown}: {e}"))?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("{shown}: {e}"))?;
@@ -227,7 +227,7 @@ pub fn toggle(r: &Ritual, on: bool, now: i64, rituals: &Path) -> Result<Vec<Stri
         out.push(format!(
             "the shipped {}.md is now yours, in {}",
             r.slug,
-            tilde(&path.to_string_lossy())
+            crate::paths::short(&path.to_string_lossy())
         ));
     }
     set_enabled(&path, on)?;
@@ -264,7 +264,7 @@ pub fn remove(r: &Ritual, dir: &Dir, share: Option<&Path>) -> Result<Vec<String>
             r.slug
         ));
     }
-    let shown = tilde(&r.path.to_string_lossy());
+    let shown = crate::paths::short(&r.path.to_string_lossy());
     std::fs::remove_file(&r.path).map_err(|e| format!("could not delete {shown}: {e}"))?;
     let mut out = vec![format!("{} is gone, and {shown} with it", r.slug)];
     if dir.path.is_dir() {
@@ -272,7 +272,7 @@ pub fn remove(r: &Ritual, dir: &Dir, share: Option<&Path>) -> Result<Vec<String>
             .map_err(|e| format!("could not delete {}: {e}", dir.path.display()))?;
         out.push(format!(
             "  its notes and its journal went too, from {}",
-            tilde(&dir.path.to_string_lossy())
+            crate::paths::short(&dir.path.to_string_lossy())
         ));
     }
     if share.is_some_and(|s| s.join("rituals").join(format!("{}.md", r.slug)).exists()) {

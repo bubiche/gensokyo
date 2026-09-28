@@ -4,7 +4,7 @@
 
 use crate::proto::{Limit, Telemetry};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The report, from Claude Code's statusLine JSON (2.1.260: `model.display_name`,
 /// `effort.level`, `context_window.*`, `prompt_cache.hit_ratio`, `cost.*`, and on Pro and Max
@@ -169,16 +169,6 @@ fn eta(s: i64) -> String {
 }
 
 /// 12s, 3m, 2h, 1d.
-/// `~` for `home`, as paths are shown.
-pub fn tilde(p: &str, home: &str) -> String {
-    match p.strip_prefix(home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => p.to_string(),
-    }
-}
-
 pub fn age(s: u64) -> String {
     match s {
         0..60 => format!("{s}s"),
@@ -215,9 +205,7 @@ pub fn git_branch(dir: &Path) -> Option<String> {
 /// The first value at `pointer` along Claude Code's settings chain for `cwd`: the project's
 /// `settings.local.json`, its `settings.json`, then the user's.
 pub fn setting(cwd: &Path, pointer: &str) -> Option<Value> {
-    let user = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))?;
+    let user = crate::paths::claude_dir()?;
     let files = [
         cwd.join(".claude/settings.local.json"),
         cwd.join(".claude/settings.json"),

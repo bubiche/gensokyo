@@ -5,8 +5,8 @@ mod rituals;
 
 pub use conn::{Error, connect_or_start, peer_pid, refusal, request};
 
-use crate::proto::{self, Cast, Reply, Request, Summon};
-use crate::ritual;
+use crate::paths;
+use crate::proto::{Cast, Reply, Request, Summon};
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
@@ -226,11 +226,11 @@ fn broadcast(
     if with.is_some() {
         return Err("broadcast: which card? (gensokyo broadcast lists them)".into());
     }
-    let mine = proto::config_dir().join("spellcards");
+    let mine = paths::config_dir().join("spellcards");
     let mut dirs = vec![mine.clone()];
     dirs.extend(rituals::share().map(|s| s.join("spellcards")));
-    let (cards, unusable) = crate::daemon::cards::load(&dirs);
-    let mine = ritual::tilde(&mine.to_string_lossy());
+    let (cards, unusable) = crate::card::load(&dirs);
+    let mine = crate::paths::short(&mine.to_string_lossy());
     if cards.is_empty() {
         println!("no spell cards: put one in {mine}");
     } else {
@@ -250,7 +250,7 @@ fn broadcast(
     for f in unusable {
         eprintln!(
             "gensokyo: not a usable card name (letters, digits, . _ - and .md): {}",
-            ritual::tilde(&f.to_string_lossy())
+            crate::paths::short(&f.to_string_lossy())
         );
     }
     Ok(())

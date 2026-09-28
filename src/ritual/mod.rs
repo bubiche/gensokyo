@@ -14,7 +14,8 @@ pub use journal::{Dir, Entry};
 
 use crate::cron::Schedule;
 use crate::frontmatter::{self, NAME_RULE};
-use crate::proto::{self, RitualInfo};
+use crate::paths;
+use crate::proto::RitualInfo;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
@@ -128,7 +129,7 @@ pub fn dirs(share: Option<&Path>) -> Vec<PathBuf> {
 
 /// Where the user's own rituals live.
 pub fn mine_dir() -> PathBuf {
-    proto::config_dir().join("rituals")
+    paths::config_dir().join("rituals")
 }
 
 /// Every ritual in `dirs`, the first dir's shadowing the later ones' by file name, sorted by
@@ -159,15 +160,6 @@ pub fn load(dirs: &[PathBuf], share: Option<&Path>) -> (Vec<Ritual>, Vec<PathBuf
     }
     out.sort_by(|a, b| a.slug.cmp(&b.slug));
     (out, unusable)
-}
-
-/// `~` and `~/…` under `$HOME`; anything else as it is.
-pub fn home(p: &str) -> String {
-    let h = std::env::var("HOME").unwrap_or_default();
-    match p.strip_prefix('~') {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{h}{rest}"),
-        _ => p.into(),
-    }
 }
 
 const KEYS: &[&str] = &[
@@ -225,7 +217,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "description" => r.description = some(v),
             "schedule" => r.schedule = v,
             "target" => r.target = v,
-            "cwd" => r.cwd = some(home(&v)),
+            "cwd" => r.cwd = some(crate::paths::expand(&v)),
             "model" => r.model = some(v),
             "effort" => r.effort = some(v),
             "mode" | "permission_mode" => r.mode = some(v),
@@ -268,10 +260,7 @@ pub struct Trust {
 impl Trust {
     /// `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`.
     pub fn path() -> PathBuf {
-        std::env::var_os("CLAUDE_CONFIG_DIR")
-            .or_else(|| std::env::var_os("HOME"))
-            .map_or_else(PathBuf::new, PathBuf::from)
-            .join(".claude.json")
+        crate::paths::claude_json()
     }
 
     /// Read once per use: it is large.
@@ -362,7 +351,7 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             ));
         }
         if !Path::new(cwd).is_dir() {
-            return p(format!("cwd: {} is not a directory", tilde(cwd)));
+            return p(format!("cwd: {} is not a directory", crate::paths::short(cwd)));
         }
         // A run stalled at the trust dialog is alive, so every later fire would skip itself
         // as still going. `claude -p` never shows the dialog.
@@ -370,7 +359,7 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             return p(format!(
                 "cwd: nothing has answered Claude Code's trust prompt for {} (open Claude Code \
                  there once and accept; until then it does not fire)",
-                tilde(cwd)
+                crate::paths::short(cwd)
             ));
         }
     }
@@ -423,7 +412,7 @@ pub fn prompt_text(r: &Ritual, memory: &Path) -> String {
 /// a permission prompt. `--allowedTools` is variadic and last: a flag or `--` must follow.
 pub fn args(r: &Ritual, dir: &Path) -> Vec<String> {
     let mut a = Vec::new();
-    let mcp = r.mcp_config.as_deref().map(home);
+    let mcp = r.mcp_config.as_deref().map(crate::paths::expand);
     let flags = [
         ("--model", r.model.clone()),
         ("--effort", r.effort.clone()),
@@ -449,11 +438,6 @@ pub fn when(t: i64, tz: &TimeZone) -> String {
         Ok(ts) => ts.to_zoned(tz.clone()).strftime("%Y-%m-%d %H:%M").to_string(),
         Err(_) => t.to_string(),
     }
-}
-
-/// `$HOME/x` as `~/x`.
-pub fn tilde(p: &str) -> String {
-    crate::tele::tilde(p, &std::env::var("HOME").unwrap_or_default())
 }
 
 /// The ritual as the timetable shows it. The next fire only for one that will fire.

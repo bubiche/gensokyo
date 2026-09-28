@@ -2,6 +2,7 @@
 //! the daemon that is running with this binary's.
 
 use crate::daemon::store::{Record, Store};
+use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
@@ -77,11 +78,11 @@ pub fn peer_pid(s: &UnixStream) -> Option<i32> {
 /// may have started the daemon meanwhile), and only then spawn it, holding the lock until the
 /// socket answers so the clients queued behind it connect instead of spawning.
 pub fn connect_or_start() -> Result<UnixStream, String> {
-    let sock = proto::socket_path();
+    let sock = paths::socket_path();
     if let Ok(s) = UnixStream::connect(&sock) {
         return Ok(s);
     }
-    let run = proto::state_dir().join("run");
+    let run = paths::state_dir().join("run");
     std::fs::create_dir_all(&run).map_err(|e| format!("{}: {e}", run.display()))?;
     let lock = std::fs::File::create(run.join("client.lock")).map_err(|e| e.to_string())?;
     lock.lock().map_err(|e| format!("client lock: {e}"))?;
@@ -97,7 +98,7 @@ pub fn connect_or_start() -> Result<UnixStream, String> {
             (libc::setsid() != -1).then_some(()).ok_or_else(std::io::Error::last_os_error)
         })
     };
-    let log_from = std::fs::metadata(proto::state_dir().join("daemon.log")).map_or(0, |m| m.len());
+    let log_from = std::fs::metadata(paths::state_dir().join("daemon.log")).map_or(0, |m| m.len());
     let mut child = cmd.spawn().map_err(|e| format!("start the daemon: {e}"))?;
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(5) {
@@ -118,7 +119,7 @@ pub fn connect_or_start() -> Result<UnixStream, String> {
 /// The lines of `daemon.log` written since `from` that say why it stopped, and where the rest
 /// is: older ones are some earlier daemon's.
 fn why(from: u64) -> String {
-    let path = proto::state_dir().join("daemon.log");
+    let path = paths::state_dir().join("daemon.log");
     let all = std::fs::read(&path).unwrap_or_default();
     let text = String::from_utf8_lossy(all.get(from as usize..).unwrap_or_default());
     // A JSON line that is an exit or a panic, or anything written to stderr as it is.
@@ -130,7 +131,7 @@ fn why(from: u64) -> String {
     let mut s: String = lines.iter().rev().map(|l| format!("\n  {l}")).collect();
     s.push_str(&format!(
         "\n  (the daemon's log: {})",
-        crate::ritual::tilde(&path.to_string_lossy())
+        crate::paths::short(&path.to_string_lossy())
     ));
     s
 }
@@ -140,7 +141,7 @@ pub fn request(req: Request, start: bool) -> Result<Reply, Error> {
     let s = if start {
         connect_or_start().map_err(Error::Io)?
     } else {
-        UnixStream::connect(proto::socket_path()).map_err(|_| Error::NotRunning)?
+        UnixStream::connect(paths::socket_path()).map_err(|_| Error::NotRunning)?
     };
     let pid = peer_pid(&s);
     let io = |e: std::io::Error| Error::Io(e.to_string());
@@ -180,12 +181,12 @@ pub fn restart() -> Result<(), String> {
                     your own, outside gensokyo"
             .into());
     }
-    let old = match UnixStream::connect(proto::socket_path()).map(|s| peer_pid(&s)) {
+    let old = match UnixStream::connect(paths::socket_path()).map(|s| peer_pid(&s)) {
         Err(_) => None,
         Ok(None) => return Err("could not tell which process the daemon is".into()),
         Ok(pid) => pid,
     };
-    let store = Store::new(proto::state_dir());
+    let store = Store::new(paths::state_dir());
     let mut live = Vec::new();
     for r in store.load() {
         match r {
@@ -196,8 +197,8 @@ pub fn restart() -> Result<(), String> {
     }
     live.sort_by_key(|r: &Record| (r.slot.unwrap_or(u8::MAX), r.launched));
     let ids: String = live.iter().map(|r| format!("{}\n", r.id)).collect();
-    crate::daemon::store::write_atomic(&proto::comeback_path(), ids.as_bytes())
-        .map_err(|e| format!("{}: {e}", proto::comeback_path().display()))?;
+    crate::daemon::store::write_atomic(&paths::comeback_path(), ids.as_bytes())
+        .map_err(|e| format!("{}: {e}", paths::comeback_path().display()))?;
     let n = live.len();
     match old {
         None => {}

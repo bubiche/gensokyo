@@ -1,7 +1,7 @@
 //! The frontmatter both rituals and spell cards are written in, and the files that ship.
 
+use gensokyo::card;
 use gensokyo::cron::Schedule;
-use gensokyo::daemon::cards;
 use gensokyo::frontmatter::{items, name_ok, quote, read, value};
 use gensokyo::ritual::{self, Trust};
 use std::path::Path;
@@ -80,27 +80,26 @@ fn a_name_starts_with_a_letter_or_digit() {
 
 #[test]
 fn a_card_with_a_line_that_means_nothing_is_listed_as_such_and_not_cast() {
-    let c = cards::parse("pair", "---\ntitle: \"Pair\"   # quoted\npear: required\n---\nhi {peer}");
+    let c = card::parse("pair", "---\ntitle: \"Pair\"   # quoted\npear: required\n---\nhi {peer}");
     assert_eq!((c.title.as_str(), c.pair), ("Pair", false));
     assert_eq!(c.problem.as_deref(), Some("not a card setting: pear"));
     assert_eq!(c.listed().summary, "not cast: not a card setting: pear");
-    let c =
-        cards::parse("pair", "---\r\ntitle: Pair\r\npeer: \"required\"\r\n---\r\nhi {peer}\r\n");
+    let c = card::parse("pair", "---\r\ntitle: Pair\r\npeer: \"required\"\r\n---\r\nhi {peer}\r\n");
     assert_eq!((c.pair, c.problem.clone(), c.body.as_str()), (true, None, "hi {peer}"));
-    let c = cards::parse("pair", "---\npeer: yes\n---\nx");
+    let c = card::parse("pair", "---\npeer: yes\n---\nx");
     assert!(c.problem.unwrap().starts_with("peer: yes"));
     let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fm-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("_x.md"), "x").unwrap();
-    let (cs, bad) = cards::load(std::slice::from_ref(&d));
+    let (cs, bad) = card::load(std::slice::from_ref(&d));
     assert_eq!((cs.len(), bad), (0, vec![d.join("_x.md")]));
 }
 
 #[test]
 fn every_shipped_card_and_ritual_reads_cleanly() {
     let share = Path::new(env!("CARGO_MANIFEST_DIR")).join("share");
-    let (cs, bad) = cards::load(&[share.join("spellcards")]);
+    let (cs, bad) = card::load(&[share.join("spellcards")]);
     assert!(bad.is_empty() && cs.len() >= 4, "{bad:?}");
     for c in &cs {
         assert_eq!(c.problem, None, "{}", c.slug);

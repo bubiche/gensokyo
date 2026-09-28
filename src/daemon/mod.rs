@@ -4,6 +4,7 @@ pub mod aware;
 pub mod cards;
 mod ingest;
 mod launch;
+mod log;
 mod notify;
 pub mod pty;
 pub mod registry;

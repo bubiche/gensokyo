@@ -63,9 +63,10 @@ pub async fn fetch(claude: &Path, env: &[(OsString, OsString)]) -> Option<Vec<Se
 /// How often the spool is replayed and the registry asked (a call costs about 0.12 s).
 const POLL: Duration = Duration::from_secs(3);
 
-/// How long the registry goes unasked while everyone here rests and nobody types or changes
-/// anything: nothing but the user can move a resting session, and the user's typing and every
-/// hook bring the next ask back to `POLL`.
+/// How long the registry goes unasked while everyone here rests, quietly: nobody types, nothing
+/// changes and no resident writes a thing. A turn the user did not start (a peer's message, a
+/// background task) may fire no hook, but it draws; any of these brings the next ask back to
+/// `POLL`.
 const POLL_RESTING: Duration = Duration::from_secs(30);
 
 /// Every `POLL`: the spool, then the registry while anyone is here, less often while all rest.
@@ -82,7 +83,11 @@ pub(super) async fn poll(shrine: Shared) {
             }
             let resting =
                 live().all(|e| e.aware.state() == State::Resting && e.aware.blocked().is_none());
-            let still = !sh.typed && rev == Some(*sh.changed.borrow());
+            let drew = live().any(|e| {
+                let h = e.handle.as_ref().expect("live");
+                asked.is_none_or(|t| h.last_output() > t)
+            });
+            let still = !sh.typed && !drew && rev == Some(*sh.changed.borrow());
             if resting && still && asked.is_some_and(|t| t.elapsed() < POLL_RESTING) {
                 continue;
             }

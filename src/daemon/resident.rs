@@ -62,6 +62,11 @@ impl Handle {
         }
     }
 
+    /// When the child last wrote anything.
+    pub fn last_output(&self) -> Instant {
+        self.last_output.get()
+    }
+
     pub fn frame(&self) -> Frame {
         self.vt.borrow_mut().frame()
     }

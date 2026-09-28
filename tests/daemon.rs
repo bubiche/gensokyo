@@ -865,7 +865,7 @@ fn list_all_shows_the_departed_of_an_earlier_run_and_resume_brings_one_back() {
 }
 
 #[test]
-fn the_registry_is_asked_less_while_everyone_rests_and_again_once_someone_types() {
+fn the_registry_is_asked_less_while_everyone_rests_and_again_once_one_types_or_draws() {
     let d = Daemon::start("backoff", &[]);
     let r = d.summon(json!({"name": "Reimu"}));
     let id = r["id"].as_str().unwrap().to_string();
@@ -880,8 +880,11 @@ fn the_registry_is_asked_less_while_everyone_rests_and_again_once_someone_types(
     let n = calls();
     std::thread::sleep(Duration::from_millis(6500));
     assert_eq!(calls(), n, "asked again while it rested and nothing changed");
-    input(&d, &id, "hello");
+    input(&d, &id, "/later");
     common::wait_for(Duration::from_secs(5), || calls() > n, "an ask after the typing");
+    // Drawing with nobody typing counts too.
+    let n = calls();
+    common::wait_for(Duration::from_secs(9), || calls() > n, "an ask after it drew");
 }
 
 /// The resident's record as the daemon last wrote it, from the shrine or from `departed/`.

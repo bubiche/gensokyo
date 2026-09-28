@@ -8,6 +8,7 @@ use super::registry;
 use super::resident::Handle;
 use super::server::log;
 use super::shrine::{Shared, Shrine, find};
+use crate::frontmatter::{self, name_ok};
 use crate::hooks;
 use crate::proto::{self, Cast, State};
 use serde_json::json;
@@ -30,18 +31,21 @@ pub struct Card {
     /// `peer: required`.
     pub pair: bool,
     pub body: String,
+    /// Why it is not cast: a line in its frontmatter that means nothing, which is most likely a
+    /// typo of one that would have (`pear: required` casting a pair card alone).
+    pub problem: Option<String>,
 }
 
 impl Card {
+    /// The problem first, where the picker and the listing show the summary.
     pub fn listed(&self) -> proto::Card {
         let c = self.clone();
-        proto::Card { slug: c.slug, title: c.title, summary: c.summary, pair: c.pair }
+        let summary = match c.problem {
+            Some(p) => format!("not cast: {p}"),
+            None => c.summary,
+        };
+        proto::Card { slug: c.slug, title: c.title, summary, pair: c.pair }
     }
-}
-
-/// A card's file name, without `.md`, is how it is named from the CLI.
-fn slug_ok(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 /// Every card in `dirs`, the first dir's shadowing the later ones' by file name, sorted by title;
@@ -57,7 +61,7 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<Card>, Vec<PathBuf>) {
             let Some(slug) = name.strip_suffix(".md").filter(|_| !name.starts_with('.')) else {
                 continue;
             };
-            if !slug_ok(slug) {
+            if !name_ok(slug) {
                 unusable.push(f);
                 continue;
             }
@@ -73,42 +77,40 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<Card>, Vec<PathBuf>) {
     (cards, unusable)
 }
 
-/// The frontmatter is the `---` fenced block at the top, one `key: value` a line, read by hand:
-/// nothing in a card can run. A file with no fence is all body.
+/// The frontmatter (`frontmatter::read`) and the prompt under it. A file with no fence is all
+/// body, titled by its name.
 pub fn parse(slug: &str, text: &str) -> Card {
+    let front = frontmatter::read(text, &["title", "summary", "peer"]);
     let mut c = Card {
         slug: slug.into(),
         title: String::new(),
         summary: String::new(),
         pair: false,
-        body: String::new(),
+        body: front.body,
+        problem: None,
     };
-    let mut body = text;
-    if let Some(rest) = text.strip_prefix("---\n") {
-        let (front, after) = match rest.find("\n---\n") {
-            Some(i) => (&rest[..i], &rest[i + 5..]),
-            None => match rest.strip_suffix("\n---") {
-                Some(f) => (f, ""),
-                None => (rest, ""),
-            },
-        };
-        for (k, v) in front.lines().filter_map(|l| l.split_once(':')) {
-            let v = v.trim().to_string();
-            match k.trim() {
-                "title" => c.title = v,
-                "summary" => c.summary = v,
-                "peer" => c.pair = v == "required",
-                _ => {}
-            }
-        }
-        body = after;
+    let mut problems = Vec::new();
+    if !front.unknown.is_empty() {
+        problems.push(format!("not a card setting: {}", front.unknown.join(", ")));
     }
-    // Blank lines after the fence belong to it, not to the prompt.
-    let body = body.trim_start_matches(['\n', '\r']);
-    c.body = body.trim_end().to_string();
+    for f in &front.fields {
+        let v = f.text();
+        match f.key.as_str() {
+            "title" => c.title = v,
+            "summary" => c.summary = v,
+            "peer" => {
+                c.pair = v == "required";
+                if !c.pair && !v.is_empty() {
+                    problems.push(format!("peer: {v} (peer: required, or no peer line)"));
+                }
+            }
+            _ => {}
+        }
+    }
     if c.title.is_empty() {
         c.title = c.slug.clone();
     }
+    c.problem = (!problems.is_empty()).then(|| problems.join("; "));
     c
 }
 
@@ -232,6 +234,9 @@ pub(super) async fn cast(shrine: &Shared, c: Cast) -> Result<String, String> {
         }
         let (cards, _) = load(&dirs(&sh));
         let card = find_card(&cards, &c.card)?.clone();
+        if let Some(p) = &card.problem {
+            return Err(format!("{} is not cast: {p}", card.title));
+        }
         if card.body.is_empty() {
             return Err(format!("{} has no prompt in it, only frontmatter", card.title));
         }

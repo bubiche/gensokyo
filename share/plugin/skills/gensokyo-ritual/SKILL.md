@@ -45,17 +45,22 @@ with a link to each message. If nobody needs me, say so in one line.
 PROMPT
 ```
 
-- `--name` becomes the file name and the run's resident name: letters, digits, `.` `_` `-`.
-- `--schedule` takes five cron fields, `@hourly` `@daily` `@weekly` `@monthly`, or
-  `every 30m`. The fields are **this machine's local time**: 9:05 on weekdays is `5 9 * * 1-5`
-  wherever the user is, and a UTC conversion writes a ritual that fires at the wrong hour while
-  looking correct in what you told them. It is checked before anything is written, and a
-  schedule that never comes round (30 February) is refused.
+- `--name` becomes the file name, and each run's resident name while no resident has it: a
+  letter first, then letters, digits, `.` `_` `-`.
+- `--schedule` takes five cron fields, `@hourly` `@daily` `@weekly` `@monthly` `@yearly`, or
+  `every 30m` / `every 2h`, whose length has to divide the hour or the day (`every 45m` is
+  refused: offer `every 30m` or `every 1h`). The fields are **this machine's local time**: 9:05
+  on weekdays is `5 9 * * 1-5` wherever the user is, and a UTC conversion writes a ritual that
+  fires at the wrong hour while looking correct in what you told them. It is checked before
+  anything is written, and a schedule that never comes round (30 February) is refused.
 - `--cwd` must be a directory that exists; leave it out for the one you are in.
-- `--allowed-tools` can be repeated, or given a comma-separated list. Anything not on it stops
-  the run at a permission dialog until the user answers, which for a 02:00 run means until
-  morning - so name the tools the prompt is going to need. `--mode acceptEdits` is the blunter
-  way; `--model haiku` is worth it for anything that is only reading and summarising.
+- `--allowed-tools` can be repeated, or given a comma-separated list; a comma inside a
+  pattern's parentheses or quotes (`Bash(git commit -m "a, b")`) does not split it. Anything
+  not on it stops the run at a permission dialog until the user answers, which for a 02:00 run
+  means until morning - so name the tools the prompt is going to need. `--mode acceptEdits` is
+  the blunter way; `--model haiku` is worth it for anything that is only reading and
+  summarising. `--effort` and `--mcp-config <file>` go to claude as they are. `--prompt "…"`
+  stands in for `--prompt-file` when the prompt is one line.
 - `--target` is where the fire lands. Leave it out for the default, a fresh resident per run,
   which is the right answer for almost everything - the prompt is written for a session that
   has never seen the job before, and the memory file is what carries continuity.
@@ -77,9 +82,10 @@ PROMPT
   fires often enough to catch itself up - "every 30m" and a job that sometimes takes longer. It
   is a default-target setting; a session that is already there queues its own prompts.
 
-`--keep` and `--overlap` only mean anything for the default target, and `--headless` is a
-`claude -p` of its own so it cannot join a session either: `gensokyo ritual add` refuses them
-together rather than writing a line that does nothing.
+`--keep` is only for the default target without `--headless` (a headless run leaves no
+resident to keep); `--overlap` is for the default target, headless or not; `--headless` is a
+`claude -p` of its own, so it goes with no `--target`. `gensokyo ritual add` refuses any other
+mix rather than writing a line that does nothing.
 
 **Read what the command says back and pass it on.** It prints the next fire, and it warns -
 having written the file - when the directory is one Claude Code has never been trusted in. That
@@ -135,14 +141,15 @@ That is when its permission prompts get answered, and it is much better than fin
 gensokyo ritual list --json           # what is scheduled, when each fires next, what is wrong with one
 gensokyo ritual disable slack-morning # "pause it" - the file stays, the schedule stops
 gensokyo ritual enable slack-morning  # and back on again
-gensokyo ritual log slack-morning     # every fire, every run skipped, every complaint
+gensokyo ritual log slack-morning     # the last 20 fires, skips and complaints (-n N, --all)
 gensokyo ritual edit slack-morning    # opens the file in the user's editor - for them, not for you
 gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and its journal, gone
 ```
 
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
-each ritual's `name`, `enabled`, `schedule`, `next_fire`, `last_run`, `target`, `headless`,
-`keep`, `overlap`, `cwd` and `problem`. A `problem` is why that ritual is not firing, and it is
+each ritual's `name`, `enabled`, `schedule`, `next_fire` (epoch seconds; `next_fire_local` is
+the same minute on this machine's clock), `last_run`, `target`, `headless`, `keep`, `overlap`,
+`cwd`, `problem`, `path` and `shipped`. A `problem` is why that ritual is not firing, and it is
 the answer to "why didn't it run?".
 
 That listing is the whole answer to what the user has scheduled - there is nowhere else on this
@@ -165,9 +172,10 @@ user's own copy of it first; for any other change, `ritual add` the same name, w
 ## What it cannot do yet, and must not be promised
 
 - **Rituals only fire while gensokyo is running.** Closing its window does not stop it, but
-  `gensokyo quit` or a sleeping laptop means no fire; the next start or wake runs what was
-  missed once. Say so if the user is counting on something happening while the machine is
-  off: that is a cloud routine, not a ritual.
+  `gensokyo quit` or a sleeping laptop means no fire; the next start or wake runs the newest
+  missed fire once, if it is under a week old (`--catch-up false` drops misses instead). Say so
+  if the user is counting on something happening while the machine is off: that is a cloud
+  routine, not a ritual.
 - A ritual is one prompt on a schedule. Anything that needs to talk to another resident is the
   `gensokyo-peers` skill, and anything the user wants to fire off by hand at several residents
   at once is a spell card (`gensokyo broadcast`).

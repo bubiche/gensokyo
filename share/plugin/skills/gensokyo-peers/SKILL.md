@@ -5,7 +5,7 @@ description: Required before you send another resident the first message of an e
 
 # Talking to another resident
 
-The other Claude Code sessions on this machine are residents of the same cockpit. `ListAgents`
+The other Claude Code sessions on this machine are residents of the same shrine. `ListAgents`
 names them; so does `gensokyo list`. You reach one with `SendMessage` addressed to its name.
 
 Claude Code keeps no thread. Every message you send arrives as a fresh turn with none of this
@@ -50,7 +50,11 @@ this is the first thing to suspect - and you cannot fix it by asking again the s
 
 ## When not to use this
 
-Saying the same thing to everybody is a spell card, not a conversation: `gensokyo broadcast`,
-or the cockpit's `[ cast ]` button. If the user wants this exchange again later, the thing to
-write is a card in `~/.config/gensokyo/spellcards/` - a file whose body is the opening message,
-with `{self}`, `{peer}`, `{cwd}` and `{residents}` filled in when it is cast.
+Saying the same thing to everybody is a spell card, not a conversation: `gensokyo broadcast
+<card> all|awaiting|idle|<name>`, or the shrine's `[cast c]` button. If the user wants this
+exchange again later, the thing to write is a card in the config dir's `spellcards/` (usually
+`~/.config/gensokyo/spellcards/`): a file whose body is the opening message, with `{self}`,
+`{peer}`, `{cwd}` and `{residents}` filled in when it is cast. A card with `{peer}` in it wants
+`peer: required` in its frontmatter, so that it is only cast at one resident with
+`--with <the other one>`; without that line it can be cast with no peer, and `{peer}` comes out
+empty.

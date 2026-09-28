@@ -507,6 +507,12 @@ fn add_writes_a_file_that_reads_back_the_same() {
     let e = ritual::add(&gone, now, &tz, &nobody, &mine, None).unwrap_err();
     assert!(e.contains("not a directory"), "{e}");
     assert!(!mine.join("g.md").exists());
+    // Any one-line value is written so that it reads back as it was.
+    let odd = r#"a "b" it's C:\x # not a comment"#;
+    let q = Add { name: "q".into(), description: Some(odd.into()), ..a.clone() };
+    let (path, _) = ritual::add(&q, now, &tz, &trust, &mine, None).unwrap();
+    let r = ritual::parse("q", &path, false, &std::fs::read_to_string(&path).unwrap());
+    assert_eq!(r.description.as_deref(), Some(odd));
     let dis = Add { name: "d".into(), disabled: true, headless: true, keep: None, ..a.clone() };
     let (_, lines) = ritual::add(&dis, now, &tz, &trust, &mine, None).unwrap();
     assert!(lines.iter().any(|l| l.contains("disabled, so it will not fire")), "{lines:?}");
@@ -515,10 +521,6 @@ fn add_writes_a_file_that_reads_back_the_same() {
         (Add { name: "9 x".into(), ..a.clone() }, "cannot be a ritual name"),
         (Add { name: "e".into(), prompt: " ".into(), ..a.clone() }, "--prompt-file"),
         (Add { name: "e".into(), schedule: "0 0 30 2 *".into(), ..a.clone() }, "never comes round"),
-        (
-            Add { name: "e".into(), description: Some("a\"b'c".into()), ..a.clone() },
-            "both kinds of quote",
-        ),
         (
             Add { name: "e".into(), model: Some("two words".into()), ..a.clone() },
             "not a single word",

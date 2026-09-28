@@ -30,7 +30,7 @@ enum Out {
 pub struct Handle {
     pub pid: i32,
     out: mpsc::Sender<Out>,
-    /// The newest size wins: a burst of them never drops the last.
+    /// The newest size wins: a burst of them never drops the last, nor does a full queue.
     resize: watch::Sender<(u16, u16)>,
     exit: watch::Receiver<Option<Exit>>,
     last_output: Rc<Cell<Instant>>,
@@ -144,6 +144,8 @@ impl Actor {
     ) {
         let mut buf = vec![0u8; 65536];
         let mut eof = false;
+        // A size the write queue had no room for yet: tried again until it goes.
+        let mut pending: Option<(u16, u16)> = None;
         // Read until wait() returns: a leader cannot finish exiting while its output is unread.
         let status = loop {
             tokio::select! {
@@ -153,14 +155,16 @@ impl Actor {
                     _ => eof = true,
                 },
                 st = child.wait() => break st,
-                // Both sizes change or neither: a resize dropped on a full queue is dropped here too.
-                Ok(()) = resize.changed() => {
-                    let (cols, rows) = *resize.borrow_and_update();
-                    if self.out.try_send(Out::Resize(Size::new(rows.max(1), cols.max(1)))).is_ok() {
-                        self.vt.borrow_mut().resize(cols, rows);
-                        self.rev.send_modify(|r| *r += 1);
-                    }
-                }
+                Ok(()) = resize.changed() => pending = Some(*resize.borrow_and_update()),
+                () = tokio::time::sleep(Duration::from_millis(50)), if pending.is_some() => {}
+            }
+            // Both sizes change or neither: the emulator's follows the child's.
+            if let Some((cols, rows)) = pending
+                && self.out.try_send(Out::Resize(Size::new(rows.max(1), cols.max(1)))).is_ok()
+            {
+                pending = None;
+                self.vt.borrow_mut().resize(cols, rows);
+                self.rev.send_modify(|r| *r += 1);
             }
         };
         // Take what is already there, but no longer than that: the read end is not ours to wait on.

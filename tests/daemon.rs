@@ -373,6 +373,189 @@ fn protocol_errors() {
     assert_eq!(e["error"], "no resident nobody");
 }
 
+/// hello in `proto` as `who`, then `rest`, and every line that comes back before it closes.
+fn talk(d: &Daemon, proto: u32, who: &str, rest: &[Value]) -> Vec<Value> {
+    let s = UnixStream::connect(d.socket()).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut b = format!("{}\n", json!({"t": "hello", "proto": proto, "who": who}));
+    rest.iter().for_each(|r| b += &format!("{r}\n"));
+    (&s).write_all(b.as_bytes()).unwrap();
+    s.shutdown(std::net::Shutdown::Write).unwrap();
+    BufReader::new(s)
+        .lines()
+        .map_while(Result::ok)
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_hook_in_another_protocol_is_heard_and_nothing_else_from_it() {
+    let d = Daemon::start("oldhook", &[]);
+    let r = d.summon(json!({"name": "Reimu"}));
+    d.stub(&r["id"], "ready");
+    // A binary updated under a running resident: its hooks say hello in the new protocol.
+    let stop = json!({"t": "hook", "id": 0, "resident": r["id"],
+                      "hook": {"event": "Stop", "at": 1, "text": "all done"}});
+    for _ in 0..2 {
+        assert_eq!(talk(&d, 99, "hook", std::slice::from_ref(&stop))[0]["t"], "welcome");
+    }
+    wait(|| d.list()[0]["state"] == "awaits", "the hook");
+    let r = talk(&d, 99, "hook", &[json!({"t": "list", "id": 1})]);
+    assert_eq!((&r[0]["t"], &r[1]["error"]), (&json!("welcome"), &json!("say hello first")));
+    assert_eq!(talk(&d, 99, "cli", &[])[0]["error"], "protocol 99, want 4");
+    let refused: Vec<_> = d.log().into_iter().filter(|e| e["ev"] == "refused").collect();
+    assert_eq!(refused.len(), 2, "once per asker and protocol: {refused:?}");
+    assert_eq!(refused[0]["took"], "its hooks and status lines");
+}
+
+#[test]
+fn a_hook_a_daemon_refuses_is_spooled_and_one_it_is_slow_with_is_not() {
+    let d = Daemon::new("refusing", &[]);
+    let (sock, spool) = (d.dir.join("fake.sock"), d.dir.join("spool.jsonl"));
+    let error = r#"{"t":"error","id":0,"error":"protocol 4, want 5"}"#;
+    let welcome = r#"{"t":"welcome","proto":4,"pid":1}"#;
+    for (answer, spooled) in [(Some(error), true), (Some(welcome), false), (None, false)] {
+        let _ = std::fs::remove_file(&sock);
+        let _ = std::fs::remove_file(&spool);
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        // The fake keeps the connection open until the hook has exited: one that waited for
+        // an answer that never comes could only have given up by itself.
+        let (done, hung_up) = std::sync::mpsc::channel::<()>();
+        let fake = std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            let mut hello = String::new();
+            BufReader::new(&s).read_line(&mut hello).unwrap();
+            if let Some(a) = answer {
+                writeln!(&s, "{a}").unwrap();
+            }
+            let _ = hung_up.recv_timeout(Duration::from_secs(20));
+            hello
+        });
+        let mut c = d.command(&["_hook"]);
+        c.env("GENSOKYO_SOCKET", &sock).env("GENSOKYO_RESIDENT", "x");
+        let mut c = c.stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+        c.stdin.take().unwrap().write_all(b"{\"hook_event_name\":\"Stop\"}").unwrap();
+        assert!(c.wait().unwrap().success());
+        done.send(()).unwrap();
+        assert!(fake.join().unwrap().contains("\"who\":\"hook\""));
+        assert_eq!(spool.exists(), spooled, "{answer:?}");
+    }
+}
+
+#[test]
+fn a_daemon_that_cannot_take_its_lock_says_why() {
+    let d = Daemon::new("nolock", &[]);
+    std::fs::create_dir_all(d.dir.join("run/daemon.lock")).unwrap();
+    assert!(!d.command(&["daemon"]).output().unwrap().status.success());
+    let why = d.log().into_iter().find(|e| e["ev"] == "exit").unwrap()["why"].clone();
+    assert!(why.as_str().unwrap().starts_with("run/daemon.lock: "), "{why}");
+}
+
+#[test]
+fn quits_and_a_sigterm_at_once_ask_everyone_to_leave_once() {
+    let d = Daemon::start("quits", &[]);
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let daemon = d.log()[0]["pid"].as_i64().unwrap();
+    let asks: Vec<_> = (0..2)
+        .map(|n| {
+            let s = UnixStream::connect(d.socket()).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+            let hello = json!({"t": "hello", "proto": 4, "who": "test"});
+            writeln!(&s, "{hello}\n{}", json!({"t": "quit", "id": n})).unwrap();
+            s
+        })
+        .collect();
+    unsafe { libc::kill(daemon as i32, libc::SIGTERM) };
+    for s in asks {
+        let mut lines = BufReader::new(s).lines();
+        let replies: Vec<Value> = (0..2)
+            .map(|_| serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap())
+            .collect();
+        assert_eq!((&replies[0]["t"], &replies[1]["t"]), (&json!("welcome"), &json!("done")));
+    }
+    wait(|| !alive(daemon), "the daemon to exit");
+    assert_eq!(d.log().iter().filter(|e| e["ev"] == "stopping").count(), 1);
+    let input = d.stub(&r["id"], "input");
+    assert_eq!(input.matches("/exit").count(), 1, "{input:?}");
+}
+
+#[test]
+fn a_resident_that_stops_reading_does_not_hold_up_the_connection() {
+    let d = Daemon::start("stuck", &[]);
+    let r = d.summon(json!({"name": "Cirno"}));
+    d.stub(&r["id"], "ready");
+    let pid = r["pid"].as_i64().unwrap() as i32;
+    unsafe { libc::kill(pid, libc::SIGSTOP) };
+    let s = UnixStream::connect(d.socket()).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let w = s.try_clone().unwrap();
+    // Whole lines: a tty drops a line it has no room for, and holds back once one is waiting.
+    let bytes = b"frozen\n".repeat(2048);
+    std::thread::spawn(move || {
+        let mut w = std::io::BufWriter::new(w);
+        writeln!(w, "{}", json!({"t": "hello", "proto": 4, "who": "test"})).unwrap();
+        for id in 0..70 {
+            writeln!(w, "{}", json!({"t": "input", "id": id, "who": "Cirno", "bytes": bytes}))
+                .unwrap();
+        }
+        writeln!(w, "{}", json!({"t": "list", "id": 99})).unwrap();
+    });
+    let t = Instant::now();
+    let mut errors = Vec::new();
+    for l in BufReader::new(s).lines() {
+        let v: Value = serde_json::from_str(&l.unwrap()).unwrap();
+        match v["t"].as_str() {
+            Some("list") => break,
+            Some("error") => errors.push(v["error"].as_str().unwrap().to_string()),
+            _ => {}
+        }
+    }
+    assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
+    assert!(!errors.is_empty() && errors.iter().all(|e| e == "Cirno is not reading its input"));
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+}
+
+#[test]
+fn a_ritual_keeps_its_newest_runs_in_departed_and_every_other_record() {
+    let d = Daemon::new("trim", &[]);
+    for dir in ["residents", "departed", "rituals/rounds"] {
+        std::fs::create_dir_all(d.dir.join(dir)).unwrap();
+    }
+    let rec = |id: &str, ritual: Option<&str>, at: Option<i64>| {
+        json!({"id": id, "session": id, "name": "Run", "slot": null, "cwd": "/",
+               "program": "claude", "argv": [], "launched": at.unwrap_or(9000),
+               "departed": at, "ritual": ritual})
+        .to_string()
+    };
+    for n in 0..55 {
+        let id = format!("run{n:02}");
+        std::fs::write(
+            d.dir.join(format!("departed/{id}.json")),
+            rec(&id, Some("rounds"), Some(1000 + n)),
+        )
+        .unwrap();
+    }
+    std::fs::write(d.dir.join("departed/mine.json"), rec("mine", None, Some(1))).unwrap();
+    // The session a persistent ritual keeps is never trimmed, however old.
+    std::fs::write(d.dir.join("rituals/rounds/session"), "run00\n").unwrap();
+    // Retired at start, as the newest run.
+    std::fs::write(d.dir.join("residents/last.json"), rec("last", Some("rounds"), None)).unwrap();
+    d.cli(&["list"]);
+    let mut left: Vec<String> = std::fs::read_dir(d.dir.join("departed"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".json").to_string())
+        .collect();
+    left.sort();
+    let mut want: Vec<String> = (6..55).map(|n| format!("run{n:02}")).collect();
+    want.extend(["last", "mine", "run00"].map(String::from));
+    want.sort();
+    assert_eq!(left, want);
+    let all =
+        d.req(json!({"t": "list", "id": 1, "all": true}))["residents"].as_array().unwrap().len();
+    assert_eq!(all, 52);
+}
+
 /// `gensokyo <args>` as Claude Code runs it inside a resident: `stdin` in, stdout back.
 fn inside(d: &Daemon, args: &[&str], env: &[(&str, &str)], stdin: &[u8]) -> Output {
     let mut c = d.command(args);

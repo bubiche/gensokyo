@@ -16,7 +16,7 @@ use crate::proto::{self, Envelope, Reply, Request};
 use crate::vt::{Frame, KeyEvent, Modes};
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -37,12 +37,32 @@ const SYNC_HOLD: Duration = Duration::from_millis(150);
 
 static LOG: Mutex<Option<File>> = Mutex::new(None);
 
+/// How long an input may wait for room in a resident's queue: one that has stopped reading its
+/// tty would otherwise hold up every request after it on the connection.
+const INPUT_WAIT: Duration = Duration::from_millis(500);
+
 /// One JSON line in `daemon.log`.
-pub fn log(mut v: Value) {
+pub fn log(v: Value) {
+    write_log(LOG.lock().unwrap_or_else(|e| e.into_inner()).as_mut(), v);
+}
+
+fn write_log(f: Option<&mut File>, mut v: Value) {
     v["ts"] = json!(store::now());
     // One write per line: Display alone would write it in pieces.
-    if let Some(f) = LOG.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+    if let Some(f) = f {
         let _ = f.write_all(format!("{v}\n").as_bytes());
+    }
+}
+
+/// A panic as one log line. Tokio catches a task's panic and carries on without the task, so
+/// this line is all there is to say it happened. Never waits for the log: the panic may have
+/// come from inside `log`.
+fn panic_hook(p: &std::panic::PanicHookInfo) {
+    let at = p.location().map(|l| format!("{}:{}", l.file(), l.line()));
+    let v = json!({"ev": "panic", "msg": p.payload_as_str(), "at": at});
+    match LOG.try_lock() {
+        Ok(mut f) => write_log(f.as_mut(), v),
+        Err(_) => eprintln!("{v}"),
     }
 }
 
@@ -62,12 +82,23 @@ pub fn main() -> std::process::ExitCode {
     for d in [&root, &run] {
         let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700));
     }
-    *LOG.lock().unwrap_or_else(|e| e.into_inner()) =
-        OpenOptions::new().create(true).append(true).open(root.join("daemon.log")).ok();
-    let Ok(lock) =
-        OpenOptions::new().create(true).truncate(false).write(true).open(run.join("daemon.lock"))
-    else {
-        return std::process::ExitCode::FAILURE;
+    let f = OpenOptions::new().create(true).append(true).open(root.join("daemon.log")).ok();
+    // Whatever else reaches stderr lands in the log too, however the daemon was started.
+    if let Some(f) = &f {
+        use std::os::fd::AsRawFd;
+        // SAFETY: dup2 onto fd 2, which this process owns; the file stays open in `LOG`.
+        unsafe { libc::dup2(f.as_raw_fd(), 2) };
+    }
+    *LOG.lock().unwrap_or_else(|e| e.into_inner()) = f;
+    std::panic::set_hook(Box::new(panic_hook));
+    let lock =
+        OpenOptions::new().create(true).truncate(false).write(true).open(run.join("daemon.lock"));
+    let lock = match lock {
+        Ok(l) => l,
+        Err(e) => {
+            log(json!({"ev": "exit", "why": format!("run/daemon.lock: {e}")}));
+            return std::process::ExitCode::FAILURE;
+        }
     };
     // The lock comes before the socket: whoever holds it owns the socket path, and a socket file
     // already there is stale. Losing it is not an error (launchd's KeepAlive would retry).
@@ -76,9 +107,14 @@ pub fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
     let _ = std::env::set_current_dir("/");
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
-    let Ok(rt) = rt else { return std::process::ExitCode::FAILURE };
-    let code = tokio::task::LocalSet::new().block_on(&rt, serve(Store { root }));
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            log(json!({"ev": "exit", "why": format!("runtime: {e}")}));
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let code = tokio::task::LocalSet::new().block_on(&rt, serve(Store::new(root)));
     drop(lock);
     code
 }
@@ -125,6 +161,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         views: HashMap::new(),
         conns: 0,
         rites: Default::default(),
+        refused: HashSet::new(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -132,15 +169,17 @@ async fn serve(store: Store) -> std::process::ExitCode {
     // Hooks spooled while no daemon answered: a /clear before the last one stopped, say. Before
     // the first request, so a resume that started this daemon resumes the session it moved to.
     replay(&shrine, 0);
-    tokio::task::spawn_local(poll(shrine.clone()));
-    tokio::task::spawn_local(rituals::clock(shrine.clone()));
-    let quit = Rc::new(Notify::new());
+    comeback(&shrine);
+    tokio::task::spawn_local(supervise("registry poll", shrine.clone(), poll));
+    tokio::task::spawn_local(supervise("ritual clock", shrine.clone(), rituals::clock));
+    let quit = Rc::new(Stop { quit: Notify::new(), left: watch::channel(false).0 });
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),
         signal(SignalKind::hangup()),
     ) else {
+        log(json!({"ev": "exit", "why": "could not take its signals"}));
         return std::process::ExitCode::FAILURE;
     };
     loop {
@@ -150,10 +189,10 @@ async fn serve(store: Store) -> std::process::ExitCode {
                 // Out of fds, say: not a spin.
                 Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
             },
-            _ = quit.notified() => break,
+            _ = quit.quit.notified() => break,
             // As `quit` does: hooks and the CLI are still heard while everyone leaves.
-            _ = term.recv() => stop(&shrine, &quit),
-            _ = int.recv() => stop(&shrine, &quit),
+            _ = term.recv() => { stop(&shrine, &quit); }
+            _ = int.recv() => { stop(&shrine, &quit); }
             _ = hup.recv() => {}
         }
     }
@@ -163,6 +202,55 @@ async fn serve(store: Store) -> std::process::ExitCode {
     }
     log(json!({"ev": "exit", "why": "quit"}));
     std::process::ExitCode::SUCCESS
+}
+
+/// Whoever `gensokyo restart` found in the last daemon, recalled in its order: before the
+/// clock's first tick, which would otherwise start a missed ritual run in a kept session's place.
+/// The file goes first, so a recall that brings the daemon down is not tried again.
+fn comeback(shrine: &Shared) {
+    let path = proto::comeback_path();
+    let Ok(ids) = std::fs::read_to_string(&path) else { return };
+    let _ = std::fs::remove_file(&path);
+    for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        match recall(shrine, id) {
+            Ok(r) => log(json!({"ev": "comeback", "id": id, "name": r.name})),
+            Err(e) => log(json!({"ev": "comeback", "id": id, "error": e})),
+        }
+    }
+}
+
+/// A task the daemon cannot do without (the registry poll, the ritual clock), started again
+/// when it panics: tokio would otherwise end it for good while everything else carried on. One
+/// that keeps panicking stays down, and the log says so.
+async fn supervise<F, T>(what: &'static str, shrine: Shared, task: F)
+where
+    F: Fn(Shared) -> T,
+    T: Future<Output = ()> + 'static,
+{
+    let mut quick = 0;
+    loop {
+        let t = Instant::now();
+        match tokio::task::spawn_local(task(shrine.clone())).await {
+            Err(e) if e.is_panic() => {
+                quick = if t.elapsed() < Duration::from_secs(60) { quick + 1 } else { 1 };
+                let again = quick <= 3;
+                log(json!({"ev": "task", "task": what, "panicked": true, "restarted": again}));
+                if !again {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            _ => return,
+        }
+    }
+}
+
+/// How the daemon stops: everyone asked to leave once, however many ask (SIGTERM, SIGINT,
+/// each `quit`), then the loop ends once each `quit` has had its answer.
+struct Stop {
+    quit: Notify,
+    /// True once the shrine is empty. Each `quit` holds a receiver until its answer is written.
+    left: watch::Sender<bool>,
 }
 
 /// One line for the writer, and a word back once it is written.
@@ -199,7 +287,7 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
 
 /// Requests are read in order. Banish, close, cast and quit run on their own, so a long one holds up
 /// neither the rest nor the screen; their replies come when they finish.
-async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
+async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
     if !same_user(&s) {
         return;
     }
@@ -222,6 +310,9 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
     tokio::task::spawn_local(write_lines(w, rx));
     let mut lines = BufReader::new(r).lines();
     let mut greeted = false;
+    // Greeted in another protocol by a hook: a binary updated under a running resident still
+    // reports, and Hook and Statusline are all it may send.
+    let mut hooks_only = false;
     let (mut watching, mut viewing): (Option<AbortHandle>, Option<AbortHandle>) = (None, None);
     let mut viewed = false;
     while let Ok(Some(line)) = lines.next_line().await {
@@ -237,19 +328,27 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
         };
         let fail = move |error: String| Reply::Error { id, error };
         let reply = match req {
-            Request::Hello { proto, .. } => {
+            Request::Hello { proto, who } => {
                 greeted = proto == proto::PROTO;
-                let reply = match greeted {
+                hooks_only = !greeted && who == "hook";
+                if !greeted {
+                    refused(&mut shrine.borrow_mut(), &who, proto, hooks_only);
+                }
+                let reply = match greeted || hooks_only {
                     true => Reply::Welcome { proto: proto::PROTO, pid: std::process::id() },
                     false => fail(format!("protocol {proto}, want {}", proto::PROTO)),
                 };
                 send(&out, &reply).await;
-                match greeted {
+                match greeted || hooks_only {
                     true => continue,
                     false => break,
                 }
             }
-            _ if !greeted => {
+            ref r
+                if !greeted
+                    && !(hooks_only
+                        && matches!(r, Request::Hook { .. } | Request::Statusline { .. })) =>
+            {
                 send(&out, &fail("say hello first".into())).await;
                 break;
             }
@@ -280,13 +379,11 @@ async fn conn(shrine: Shared, quit: Rc<Notify>, s: UnixStream) {
                 None
             }
             Request::Quit => {
-                let (shrine, out, quit) = (shrine.clone(), out.clone(), quit.clone());
+                let (mut left, out) = (stop(&shrine, &quit), out.clone());
                 tokio::task::spawn_local(async move {
-                    leave_all(&shrine).await;
+                    let _ = left.wait_for(|l| *l).await;
                     let message = "the shrine is empty; the daemon stops".into();
                     send_written(&out, &Reply::Done { id, message }).await;
-                    // Whether or not the asker is still there to hear it.
-                    quit.notify_one();
                 });
                 None
             }
@@ -463,21 +560,42 @@ async fn input(
         let ev = KeyEvent::from_kitty(k.code, k.mods, k.event).ok_or("no such key")?;
         bytes.extend(h.encode(ev));
     }
-    if !bytes.is_empty() && !h.input(&bytes).await {
-        return Err(format!("{name} is not reading"));
+    if bytes.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    match tokio::time::timeout(INPUT_WAIT, h.input(&bytes)).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("{name} has already departed")),
+        Err(_) => Err(format!("{name} is not reading its input")),
+    }
 }
 
-fn stop(shrine: &Shared, quit: &Rc<Notify>) {
-    if std::mem::replace(&mut shrine.borrow_mut().quitting, true) {
-        return;
+/// Logged once per asker and protocol: a hook from an updated binary says hello on every event.
+fn refused(sh: &mut Shrine, who: &str, proto: u32, hooks_only: bool) {
+    let who: String = who.chars().take(40).collect();
+    if sh.refused.insert((who.clone(), proto)) {
+        let took = if hooks_only { "its hooks and status lines" } else { "nothing" };
+        log(
+            json!({"ev": "refused", "who": who, "proto": proto, "want": proto::PROTO, "took": took}),
+        );
     }
-    let (shrine, quit) = (shrine.clone(), quit.clone());
-    tokio::task::spawn_local(async move {
-        leave_all(&shrine).await;
-        quit.notify_one();
-    });
+}
+
+/// Starts everyone leaving, once; gives what turns true when the shrine is empty.
+fn stop(shrine: &Shared, s: &Rc<Stop>) -> watch::Receiver<bool> {
+    let left = s.left.subscribe();
+    if !std::mem::replace(&mut shrine.borrow_mut().quitting, true) {
+        log(json!({"ev": "stopping"}));
+        let (shrine, s) = (shrine.clone(), s.clone());
+        tokio::task::spawn_local(async move {
+            leave_all(&shrine).await;
+            s.left.send_replace(true);
+            // Each `quit` gets its answer written first, whether or not its asker is still there.
+            let _ = tokio::time::timeout(Duration::from_secs(2), s.left.closed()).await;
+            s.quit.notify_one();
+        });
+    }
+    left
 }
 
 /// Bounded: an emulator is allocated at this size for every resident, and every summon after.

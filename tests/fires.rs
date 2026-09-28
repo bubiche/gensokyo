@@ -415,6 +415,17 @@ fn a_headless_run_that_fails_says_so_either_way() {
 }
 
 #[test]
+fn a_headless_run_past_its_limit_is_stopped_and_frees_its_ritual() {
+    let env = [("STUB_P_SLEEP", "30"), ("GENSOKYO_HEADLESS_MS", "500")];
+    let (d, log) = headless_run("hl-limit", &env);
+    assert!(log.contains("--- stopped: still running after "), "{log}");
+    let failed = d.evs("quiet", "failed");
+    assert!(failed[0].ends_with(": still running, so it was stopped"), "{failed:?}");
+    let r = d.verb("run", "quiet");
+    assert_eq!(r["t"], "done", "{r}");
+}
+
+#[test]
 fn a_ritual_that_cannot_fire_says_so_once() {
     let text = "---\nschedule: \"0 * * * *\"\ncwd: /no/such/dir\n---\nDo the rounds.\n";
     let d = Daemon::start("problem", T0 + 120, &[("broken", text)], &[]);

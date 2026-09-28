@@ -19,6 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
 /// How often the schedules are read. A wall-clock tick, never a sleep until the next fire: a
@@ -35,6 +36,10 @@ const READY_WAIT: Duration = Duration::from_secs(60);
 
 /// Headless run logs kept per ritual.
 const RUNS_KEPT: usize = 50;
+
+/// A headless run still going after this is stopped, its whole process group: a `claude -p`
+/// that hangs would otherwise hold its ritual up until the daemon restarts.
+const HEADLESS_LIMIT: Duration = Duration::from_secs(3600);
 
 /// What the daemon keeps about rituals between ticks. None of it outlives the daemon: the
 /// stamps and the journal are on disk, and a queued fire or a complaint is worth no more than
@@ -60,9 +65,20 @@ pub(super) struct Rites {
 /// The ritual clock: `$GENSOKYO_NOW_FILE`'s epoch seconds when set, so tests move time by
 /// hand; else the wall clock. Stamps, the journal, queue life and `keep` all read this.
 pub(super) fn now() -> i64 {
-    std::env::var_os("GENSOKYO_NOW_FILE")
+    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FILE.get_or_init(|| std::env::var_os("GENSOKYO_NOW_FILE").map(PathBuf::from))
+        .as_ref()
         .and_then(|f| std::fs::read_to_string(f).ok()?.trim().parse().ok())
         .unwrap_or_else(super::store::now)
+}
+
+/// `HEADLESS_LIMIT`, or `$GENSOKYO_HEADLESS_MS` for tests, read once.
+fn headless_limit() -> Duration {
+    static LIMIT: OnceLock<Duration> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let ms = std::env::var("GENSOKYO_HEADLESS_MS").ok().and_then(|v| v.parse().ok());
+        ms.map_or(HEADLESS_LIMIT, Duration::from_millis)
+    })
 }
 
 fn load(sh: &Shrine) -> (Vec<Ritual>, Vec<PathBuf>) {
@@ -70,7 +86,6 @@ fn load(sh: &Shrine) -> (Vec<Ritual>, Vec<PathBuf>) {
     ritual::load(&ritual::dirs(share), share)
 }
 
-/// Where `Trust::load` reads from.
 /// The trust file, read again only when it has changed.
 fn trust(shrine: &Shared) -> Rc<Trust> {
     let mtime = std::fs::metadata(Trust::path()).and_then(|m| m.modified()).ok();
@@ -310,7 +325,12 @@ async fn persistent(shrine: &Shared, r: &Ritual, label: &str) {
     let Some(id) = id else {
         match fresh(shrine, r, &d, None) {
             Ok(id) => {
-                let _ = d.set_session(&id);
+                if let Err(e) = d.set_session(&id) {
+                    // The next fire finds no session and starts yet another.
+                    log(
+                        json!({"ev": "ritual", "slug": r.slug, "session": id, "error": e.to_string()}),
+                    );
+                }
             }
             Err(e) => undelivered(shrine, r, &format!("could not start the session it keeps: {e}")),
         }
@@ -405,7 +425,7 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str) {
 
 /// `claude -p` with no pane. Its answer goes to a file rather than a pipe, so a run the daemon
 /// stops under still leaves it (the child is not killed: cutting a turn off halfway would leave
-/// the ritual's notes half written for nothing).
+/// the ritual's notes half written for nothing). One still going after `HEADLESS_LIMIT` is.
 fn headless(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), String> {
     let (claude, env) = shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH")?;
     let cwd = r.cwd.clone().unwrap_or_default();
@@ -444,16 +464,28 @@ fn headless(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), Str
         .stderr(err)
         // Its own group: whatever stops the daemon's group does not cut the run off.
         .process_group(0);
-    let child =
+    let mut child =
         super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
     *shrine.borrow_mut().rites.headless.entry(r.slug.clone()).or_default() += 1;
     let (shrine, slug) = (shrine.clone(), r.slug.clone());
     tokio::task::spawn_local(async move {
         let t = Instant::now();
-        let status = child.wait_with_output().await.map(|o| o.status);
-        let took = tele::age(t.elapsed().as_secs());
-        let code = status.as_ref().ok().and_then(|s| s.code());
-        let (journal, told, tail) = report(&stem, code, &took);
+        let limit = headless_limit();
+        let (journal, told, tail) = match tokio::time::timeout(limit, child.wait()).await {
+            Ok(status) => {
+                let took = tele::age(t.elapsed().as_secs());
+                report(&stem, status.ok().and_then(|s| s.code()), &took)
+            }
+            Err(_) => {
+                stop_group(&mut child).await;
+                let limit = tele::age(limit.as_secs());
+                let journal =
+                    format!("failed (headless, {limit}): still running, so it was stopped");
+                let told =
+                    format!("the headless run was still going after {limit}, and was stopped");
+                (journal, told, format!("--- stopped: still running after {limit}\n"))
+            }
+        };
         let _ = logf.write_all(tail.as_bytes());
         let d = Dir::of(&slug);
         let ok = journal.starts_with("done");
@@ -468,6 +500,17 @@ fn headless(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), Str
         repush(&shrine);
     });
     Ok(())
+}
+
+/// TERM to the run's process group, and KILL to what is left of it a few seconds later.
+async fn stop_group(child: &mut tokio::process::Child) {
+    let Some(pid) = child.id() else { return };
+    // SAFETY: plain libc calls; the group is the child's own (`process_group(0)`).
+    unsafe { libc::killpg(pid as i32, libc::SIGTERM) };
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    // Whether or not the leader went: a tool or MCP server under it may ignore TERM.
+    unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
+    let _ = child.wait().await;
 }
 
 /// `<stem>.<ext>`: the stem ends in a random part, which `with_extension` would replace.
@@ -700,7 +743,7 @@ fn repush(shrine: &Shared) {
 /// Fired now by hand, whatever the schedule says: which is how its prompts get approved once.
 fn run(shrine: &Shared, r: &Ritual) -> Result<String, String> {
     let (now, tz) = (now(), TimeZone::system());
-    if let Some(p) = ritual::problem(r, now, &tz, &Trust::load()) {
+    if let Some(p) = ritual::problem(r, now, &tz, &trust(shrine)) {
         return Err(format!("{}: {p}", r.slug));
     }
     let slug = &r.slug;

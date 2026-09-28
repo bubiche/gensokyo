@@ -1,11 +1,12 @@
 //! The two commands Claude Code runs inside every resident: `_hook` for each hook event, and
 //! `_statusline` for the line at the bottom of its screen. Both always exit 0, never start a
-//! daemon, and never wait on one: `UserPromptSubmit` holds up the prompt until its hook ends.
+//! daemon, and wait on one no longer than twice `DELIVER` (the write, then the answer):
+//! `UserPromptSubmit` holds up the prompt until its hook ends.
 
 use crate::proto::{self, Envelope, Hook, Request};
 use crate::tele;
 use serde_json::Value;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -13,6 +14,9 @@ use std::time::Duration;
 
 /// How long a hook may spend handing its line to the daemon.
 const DELIVER: Duration = Duration::from_millis(300);
+
+/// The most `spool.later.jsonl` holds, in bytes.
+const SPOOL_LATER_MAX: u64 = 256 * 1024;
 
 /// How long a spool renamed aside waits before the poll reads it, in ms.
 pub const SPOOL_SETTLE: i64 = 1000;
@@ -60,8 +64,10 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
     }
 }
 
-/// hello, then the request, and no waiting for an answer: the daemon reads what a closed
-/// connection left behind.
+/// hello, then the request, then the hello's answer, within `DELIVER`. A daemon that refused
+/// the hello (one from before an update, speaking another protocol) has not taken the request,
+/// which goes to the spool for the next daemon. No answer in time is a daemon that is there and
+/// busy: it has the request, and spooling it too would replay it twice.
 fn deliver(req: &Request) -> bool {
     let Ok(mut s) = UnixStream::connect(proto::socket_path()) else { return false };
     let hello = Request::Hello { proto: proto::PROTO, who: "hook".into() };
@@ -70,7 +76,18 @@ fn deliver(req: &Request) -> bool {
         let _ = serde_json::to_writer(&mut b, &Envelope { id: 0, req });
         b.push(b'\n');
     }
-    s.set_write_timeout(Some(DELIVER)).is_ok() && s.write_all(&b).is_ok()
+    if s.set_write_timeout(Some(DELIVER)).is_err() || s.write_all(&b).is_err() {
+        return false;
+    }
+    let _ = s.set_read_timeout(Some(DELIVER));
+    let mut line = Vec::new();
+    match std::io::BufReader::new(&s).read_until(b'\n', &mut line) {
+        // A welcome in another protocol is a daemon that takes hooks from any build, but may
+        // not read this one: the spool has it too, for a daemon of this build.
+        Ok(_) => serde_json::from_slice::<Value>(&line)
+            .is_ok_and(|v| v["t"] == "welcome" && v["proto"] == proto::PROTO),
+        Err(e) => matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    }
 }
 
 /// One line appended to `spool.jsonl`, for the daemon to replay.
@@ -94,6 +111,12 @@ pub fn spool(root: &Path, req: &Request) {
 pub fn take_spool(root: &Path, settle: i64) -> Vec<(String, Hook)> {
     let now = now_ms();
     let _ = std::fs::rename(root.join("spool.jsonl"), root.join(format!("spool.{now}.jsonl")));
+    // Lines an older build could not read, tried again by each daemon as it starts.
+    let later = root.join("spool.later.jsonl");
+    if settle == 0 {
+        let _ = std::fs::rename(&later, root.join(format!("spool.{}.jsonl", now - 1)));
+    }
+    let mut unread = Vec::new();
     let mut files: Vec<_> = std::fs::read_dir(root)
         .into_iter()
         .flatten()
@@ -109,11 +132,19 @@ pub fn take_spool(root: &Path, settle: i64) -> Vec<(String, Hook)> {
     let mut out = Vec::new();
     for f in files {
         for l in std::fs::read_to_string(&f).unwrap_or_default().lines() {
-            if let Ok(Request::Hook { resident, hook }) = serde_json::from_str(l) {
-                out.push((resident, hook));
+            match serde_json::from_str(l) {
+                Ok(Request::Hook { resident, hook }) => out.push((resident, hook)),
+                Ok(_) => {}
+                Err(_) => unread.extend_from_slice(format!("{l}\n").as_bytes()),
             }
         }
         let _ = std::fs::remove_file(&f);
+    }
+    // Kept only while small: past that it is noise no build reads.
+    let size = std::fs::metadata(&later).map_or(0, |m| m.len());
+    if !unread.is_empty() && size + (unread.len() as u64) < SPOOL_LATER_MAX {
+        let f = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&later);
+        let _ = f.and_then(|mut f| f.write_all(&unread));
     }
     out.sort_by_key(|(_, h)| h.at);
     out

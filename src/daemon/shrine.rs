@@ -12,7 +12,7 @@ use crate::proto::{self, Reply, State, Summon, Telemetry};
 use crate::tele;
 use serde_json::json;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -63,6 +63,8 @@ pub(super) struct Shrine {
     pub(super) views: HashMap<u64, View>,
     pub(super) conns: u64,
     pub(super) rites: Rites,
+    /// Hellos refused so far, by who and protocol: each is logged once.
+    pub(super) refused: HashSet<(String, u32)>,
 }
 
 impl Shrine {
@@ -238,9 +240,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         exit: None,
         signal: None,
     };
-    if let Err(e) = sh.store.save(&rec) {
-        log(json!({"ev": "record", "id": id, "error": e.to_string()}));
-    }
+    let _ = sh.store.save(&rec);
     log(
         json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid, "ritual": rec.ritual}),
     );
@@ -299,9 +299,7 @@ pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, Stri
     rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
     (rec.program, rec.argv) = (program, argv);
     (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
-    if let Err(e) = sh.store.restore(&rec) {
-        log(json!({"ev": "record", "id": rec.id, "error": e.to_string()}));
-    }
+    let _ = sh.store.restore(&rec);
     log(
         json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
     );

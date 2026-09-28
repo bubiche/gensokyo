@@ -1,9 +1,18 @@
 //! Records on disk: `residents/<id>.json` for everyone in the shrine, `departed/<id>.json` for
-//! those who left it. Every write is a whole file, renamed into place.
+//! those who left it. Every write is a whole file, renamed into place, and a write that fails
+//! is logged here, whoever asked for it.
 
+use super::server::log;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::cell::{RefCell, RefMut};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// Run records kept in `departed/` per ritual, newest first: one that fires every few minutes
+/// leaves one a run.
+pub const RUNS_KEPT: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
@@ -38,9 +47,16 @@ pub struct Record {
 
 pub struct Store {
     pub root: PathBuf,
+    /// `departed/`, read once and kept current here: every `list --all` and recall wants all
+    /// of it, on the daemon's one thread.
+    gone: RefCell<Option<HashMap<String, Record>>>,
 }
 
 impl Store {
+    pub fn new(root: PathBuf) -> Store {
+        Store { root, gone: RefCell::new(None) }
+    }
+
     pub fn residents(&self) -> PathBuf {
         self.root.join("residents")
     }
@@ -49,25 +65,47 @@ impl Store {
         self.root.join("departed")
     }
 
-    pub fn save(&self, r: &Record) -> std::io::Result<()> {
-        write_atomic(&self.residents().join(format!("{}.json", r.id)), &to_json(r))
+    fn gone(&self) -> RefMut<'_, HashMap<String, Record>> {
+        RefMut::map(self.gone.borrow_mut(), |g| {
+            g.get_or_insert_with(|| {
+                let all = load(&self.departed()).into_iter().flatten();
+                all.map(|r| (r.id.clone(), r)).collect()
+            })
+        })
     }
 
-    /// Out of the shrine, kept for recall.
+    pub fn save(&self, r: &Record) -> std::io::Result<()> {
+        logged(
+            "save",
+            r,
+            write_atomic(&self.residents().join(format!("{}.json", r.id)), &to_json(r)),
+        )
+    }
+
+    /// Out of the shrine, kept for recall. A ritual's run beyond its newest `RUNS_KEPT` goes.
     pub fn retire(&self, r: &Record) -> std::io::Result<()> {
-        write_atomic(&self.departed().join(format!("{}.json", r.id)), &to_json(r))?;
-        remove(&self.residents().join(format!("{}.json", r.id)))
+        let w = write_atomic(&self.departed().join(format!("{}.json", r.id)), &to_json(r))
+            .and_then(|()| remove(&self.residents().join(format!("{}.json", r.id))));
+        self.gone().insert(r.id.clone(), r.clone());
+        if let Some(slug) = &r.ritual {
+            self.trim(slug);
+        }
+        logged("retire", r, w)
     }
 
     /// A record that stays in `departed/`, changed.
     pub fn save_departed(&self, r: &Record) -> std::io::Result<()> {
-        write_atomic(&self.departed().join(format!("{}.json", r.id)), &to_json(r))
+        let w = write_atomic(&self.departed().join(format!("{}.json", r.id)), &to_json(r));
+        self.gone().insert(r.id.clone(), r.clone());
+        logged("save departed", r, w)
     }
 
     /// Back in the shrine: recalled.
     pub fn restore(&self, r: &Record) -> std::io::Result<()> {
-        self.save(r)?;
-        remove(&self.departed().join(format!("{}.json", r.id)))
+        let w = write_atomic(&self.residents().join(format!("{}.json", r.id)), &to_json(r))
+            .and_then(|()| remove(&self.departed().join(format!("{}.json", r.id))));
+        self.gone().remove(&r.id);
+        logged("restore", r, w)
     }
 
     /// Every record in `residents/`, or why one could not be read.
@@ -75,20 +113,42 @@ impl Store {
         load(&self.residents())
     }
 
-    /// One record in `departed/`, by id.
+    /// One departed record, by id.
     pub fn load_departed_id(&self, id: &str) -> Option<Record> {
-        // A hook names it, and anything on the socket can send one.
-        if id.contains('/') {
-            return None;
-        }
-        let b = std::fs::read(self.departed().join(format!("{id}.json"))).ok()?;
-        serde_json::from_slice(&b).ok()
+        self.gone().get(id).cloned()
     }
 
-    /// The records in `departed/` that can be read.
+    /// Every departed record that could be read.
     pub fn load_departed(&self) -> Vec<Record> {
-        load(&self.departed()).into_iter().flatten().collect()
+        self.gone().values().cloned().collect()
     }
+
+    /// The oldest runs of ritual `slug` past `RUNS_KEPT`, gone. Never the session a persistent
+    /// ritual keeps, however old.
+    fn trim(&self, slug: &str) {
+        let kept = crate::ritual::Dir::at(&self.root, slug).session();
+        let mut gone = self.gone();
+        let mut runs: Vec<(Option<i64>, i64, String)> = gone
+            .values()
+            .filter(|r| r.ritual.as_deref() == Some(slug) && Some(&r.id) != kept.as_ref())
+            .map(|r| (r.departed, r.launched, r.id.clone()))
+            .collect();
+        runs.sort_by(|a, b| b.cmp(a));
+        for (.., id) in runs.into_iter().skip(RUNS_KEPT) {
+            gone.remove(&id);
+            if let Err(e) = remove(&self.departed().join(format!("{id}.json"))) {
+                log(json!({"ev": "record", "id": id, "op": "trim", "error": e.to_string()}));
+            }
+        }
+    }
+}
+
+/// A record write's result, logged when it failed: a stale record resumes the wrong session.
+fn logged(op: &str, r: &Record, w: std::io::Result<()>) -> std::io::Result<()> {
+    if let Err(e) = &w {
+        log(json!({"ev": "record", "id": r.id, "op": op, "error": e.to_string()}));
+    }
+    w
 }
 
 fn load(dir: &Path) -> Vec<Result<Record, String>> {

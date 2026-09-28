@@ -292,15 +292,22 @@ fn the_spool_is_read_in_order_and_what_was_just_renamed_waits_a_beat() {
     let ats: Vec<_> = take_spool(&root, 1000).iter().map(|(_, h)| h.at).collect();
     assert_eq!(ats, [10, 20, 30]);
     // The live spool was renamed aside, and a hook that opened it just before may still write.
-    let left: Vec<_> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name()).collect();
-    assert_eq!(left.len(), 1);
+    // A line this build cannot read is kept for a later one, not lost.
+    let mut left: Vec<_> =
+        std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name()).collect();
+    left.sort();
+    assert_eq!(left.len(), 2, "{left:?}");
     assert_ne!(left[0], "spool.jsonl");
+    assert_eq!(left[1], "spool.later.jsonl");
+    assert_eq!(std::fs::read_to_string(root.join("spool.later.jsonl")).unwrap(), "not json\n");
     assert!(take_spool(&root, 1000).is_empty());
     // At start there is nobody to wait for. (A rename in the same ms would land on the first.)
     std::thread::sleep(std::time::Duration::from_millis(5));
     std::fs::write(root.join("spool.jsonl"), format!("{}\n", line(50))).unwrap();
     let ats: Vec<_> = take_spool(&root, 0).iter().map(|(_, h)| h.at).collect();
     assert_eq!(ats, [40, 50]);
+    // Tried again at each start, and kept again while still unread.
+    assert_eq!(std::fs::read_to_string(root.join("spool.later.jsonl")).unwrap(), "not json\n");
     let _ = std::fs::remove_dir_all(&root);
 }
 

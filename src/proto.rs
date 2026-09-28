@@ -386,6 +386,11 @@ pub fn config_dir() -> PathBuf {
     }
 }
 
+/// The ids `gensokyo restart` hands the next daemon to recall as it starts, one a line.
+pub fn comeback_path() -> PathBuf {
+    state_dir().join("run/comeback")
+}
+
 /// `KEY=value` from the config file, the last such line winning; `#` lines are comments.
 pub fn config(key: &str) -> Option<String> {
     let text = std::fs::read_to_string(config_dir().join("config")).ok()?;

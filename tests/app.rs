@@ -303,6 +303,16 @@ fn typing_that_outlives_its_resident_goes_nowhere_and_a_pause_gives_the_keys_bac
 }
 
 #[test]
+fn keys_for_the_shrine_itself_come_as_fast_as_they_like() {
+    // A dialog opened and closed, and the next straight after: nothing was typed to anyone.
+    let mut a = app();
+    host(&mut a, b"t");
+    host(&mut a, b"\x1b");
+    host(&mut a, b"n");
+    assert!(matches!(a.m.modal, Some(Modal::Summon(_))), "{:?}", a.m.modal);
+}
+
+#[test]
 fn a_yes_in_a_burst_of_typing_answers_nothing() {
     let mut a = app();
     // `q` then Enter at once, as the end of a word and a line would come.

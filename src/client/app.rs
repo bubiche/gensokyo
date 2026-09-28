@@ -35,8 +35,8 @@ const TOP: i32 = -(1 << 30);
 const INFO_LIFE: Duration = Duration::from_secs(5);
 const ERROR_LIFE: Duration = Duration::from_secs(10);
 
-/// A key this soon after the one before is typing, not a command: the rest of a sentence meant
-/// for a resident that has just left must not act on the shrine (`a` moving on to another
+/// A key this soon after one typed into a resident is more of that typing, not a command: the
+/// rest of a sentence meant for a resident that has just left must not act on the shrine (`a` moving on to another
 /// resident, then the rest typed into its dialog).
 const TYPING: Duration = Duration::from_secs(1);
 
@@ -278,6 +278,8 @@ pub struct App {
     /// When the last key came, and the one before it.
     typed: Option<Instant>,
     pub(super) before: Option<Instant>,
+    /// When a key last went to a resident, or was dropped as the rest of such typing.
+    talked: Option<Instant>,
     /// Sent back to the live screen, and not yet told it is there: a screen the daemon sent
     /// before it saw that is still scrolled back, and must not take the next key for itself.
     homing: bool,
@@ -331,6 +333,7 @@ impl App {
             said: None,
             typed: None,
             before: None,
+            talked: None,
             homing: false,
             skew: Duration::ZERO,
             log: c.log,
@@ -664,11 +667,14 @@ impl App {
                     None => self.scroll(Scrollback::Live),
                 }
             }
+            self.talked = Some(self.clock());
             self.forward(&c);
         } else if let Some(ch) = keys::chord(&c) {
             // Nothing on screen takes keys, so the letters work without the leader, but only
             // after a pause: typing that outlived its resident goes nowhere.
-            if self.burst(TYPING) {
+            let now = self.clock();
+            if self.talked.is_some_and(|t| now.duration_since(t) < TYPING) {
+                self.talked = Some(now);
                 if let Some(r) = self.focused() {
                     let say = format!("{} has left; what was typed went nowhere", r.name);
                     self.say(Say::Info, say);
@@ -728,7 +734,10 @@ impl App {
         let req = match f {
             Forward::Bytes(bytes) => Request::Input { who, bytes, key: None },
             Forward::Key(k) => Request::Input { who, bytes: Vec::new(), key: Some(k) },
-            Forward::Scroll(rows) => Request::Scroll { who, rows: Some(rows.into()) },
+            Forward::Scroll(rows) => {
+                self.homing = false;
+                Request::Scroll { who, rows: Some(rows.into()) }
+            }
             Forward::Drop => return,
         };
         if let Request::Input { bytes, key, .. } = &req {

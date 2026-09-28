@@ -4,4 +4,5 @@
 pub mod app;
 pub mod framer;
 pub mod keys;
+pub mod modal;
 pub mod render;

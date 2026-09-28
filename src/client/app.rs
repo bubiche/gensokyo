@@ -7,17 +7,19 @@
 
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward};
-use super::render::{self, Button, Hit, HitMap, Modal, Model, Stage};
+use super::modal::{Act, Cast, Modal, Recall, Summon, Timetable};
+use super::render::{self, Button, Hit, HitMap, Model};
 use crate::cli;
-use crate::paths::{self, tilde};
-use crate::proto::{self, Envelope, Reply, Request, Resident, RitualVerb};
+use crate::paths;
+use crate::proto::{self, Envelope, Reply, Request, Resident};
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::terminal;
+use ratatui::layout::Rect;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Stdout, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -122,7 +124,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         signal(SignalKind::hangup()).map_err(err)?,
         signal(SignalKind::terminate()).map_err(err)?,
     );
-    let mut app = App::new();
+    let mut app = App::new(Config::from_env());
     app.send(Request::Hello { proto: proto::PROTO, who: "client".into() });
     app.send(Request::Watch);
     app.list();
@@ -185,8 +187,43 @@ enum Want {
     All,
 }
 
-struct App {
-    m: Model,
+/// What the client takes from its surroundings as it starts, given as values so a test can
+/// build an App without a terminal.
+pub struct Config {
+    /// Shown as `~` in paths.
+    pub home: String,
+    /// Drawn when the shrine is empty.
+    pub banner: Vec<String>,
+    /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`.
+    pub bell: bool,
+    pub desktop: bool,
+    /// `$GENSOKYO_CLIENT_LOG`, opened.
+    pub log: Option<File>,
+    /// `$GENSOKYO_COPY`, a shell command the selection is piped to; `pbcopy` by default.
+    pub copy: String,
+}
+
+impl Config {
+    pub fn from_env() -> Config {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let banner = paths::share_dir(&exe)
+            .and_then(|s| std::fs::read_to_string(s.join("banner.txt")).ok())
+            .map(|b| b.lines().map(String::from).collect())
+            .unwrap_or_default();
+        Config {
+            home: paths::home(),
+            banner,
+            bell: paths::config("NOTIFY_BELL").as_deref() != Some("off"),
+            desktop: paths::config("NOTIFY_DESKTOP").as_deref() != Some("off"),
+            log: std::env::var_os("GENSOKYO_CLIENT_LOG")
+                .and_then(|p| File::options().create(true).append(true).mode(0o600).open(p).ok()),
+            copy: std::env::var("GENSOKYO_COPY").unwrap_or_else(|_| "pbcopy".into()),
+        }
+    }
+}
+
+pub struct App {
+    pub m: Model,
     hits: HitMap,
     /// The host's kitty flags as it last reported them; 0 until it answers, and forever on a
     /// terminal without kitty support.
@@ -201,26 +238,28 @@ struct App {
     /// The grid size last sent.
     size: (u16, u16),
     /// Everyone, departed included, from the last `list --all`.
-    all: Vec<Resident>,
+    pub(super) all: Vec<Resident>,
     lists: HashMap<u64, Want>,
     next: u64,
     /// Socket lines to write, and host bytes to write before the next frame.
-    out: Vec<Vec<u8>>,
-    host: Vec<u8>,
+    pub out: Vec<Vec<u8>>,
+    pub host: Vec<u8>,
     /// Set to leave the loop, with what to print.
     done: Option<String>,
     /// Printed if the daemon hangs up next (after a quit).
-    gone: Option<String>,
+    pub(super) gone: Option<String>,
     /// The daemon's refusal of our hello: another build's.
     refused: Option<String>,
     /// The quit request, whose error means the daemon stays.
-    quit: Option<u64>,
+    pub(super) quit: Option<u64>,
     log: Option<File>,
     t0: Instant,
     /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`: a bell and an OSC 9 notification to the
     /// host when a resident nobody watches comes to need the user.
     bell: bool,
     desktop: bool,
+    /// The shell command a selection is piped to.
+    copy: String,
 }
 
 impl App {
@@ -232,17 +271,15 @@ impl App {
         self.gone.take().ok_or_else(|| "the daemon went away".into())
     }
 
-    fn new() -> App {
-        let home = paths::home();
-        let exe = std::env::current_exe().unwrap_or_default();
-        let banner = paths::share_dir(&exe)
-            .and_then(|s| std::fs::read_to_string(s.join("banner.txt")).ok())
-            .map(|b| b.lines().map(String::from).collect())
-            .unwrap_or_default();
-        let log = std::env::var_os("GENSOKYO_CLIENT_LOG")
-            .and_then(|p| File::options().create(true).append(true).mode(0o600).open(p).ok());
+    pub fn new(c: Config) -> App {
         App {
-            m: Model { capture: true, home, banner, now: now(), ..Model::default() },
+            m: Model {
+                capture: true,
+                home: c.home,
+                banner: c.banner,
+                now: now(),
+                ..Model::default()
+            },
             hits: HitMap::default(),
             host_kitty: 0,
             set_kitty: 0,
@@ -259,10 +296,11 @@ impl App {
             gone: None,
             refused: None,
             quit: None,
-            log,
+            log: c.log,
             t0: Instant::now(),
-            bell: paths::config("NOTIFY_BELL").as_deref() != Some("off"),
-            desktop: paths::config("NOTIFY_DESKTOP").as_deref() != Some("off"),
+            bell: c.bell,
+            desktop: c.desktop,
+            copy: c.copy,
         }
     }
 
@@ -273,7 +311,7 @@ impl App {
         }
     }
 
-    fn send(&mut self, req: Request) -> u64 {
+    pub(super) fn send(&mut self, req: Request) -> u64 {
         let id = self.next;
         self.next += 1;
         let mut l = serde_json::to_vec(&Envelope { id, req }).unwrap_or_default();
@@ -335,57 +373,38 @@ impl App {
         let b = term.backend_mut();
         b.write_all(&std::mem::take(&mut self.host))?;
         b.write_all(b"\x1b[?2026h")?;
-        let mut hits = HitMap::default();
-        let m = &self.m;
-        let frame = term.draw(|f| {
-            hits = render::render(m, f.area(), f.buffer_mut());
-            if let Some(c) = render::cursor(m, f.area()) {
+        term.draw(|f| {
+            self.paint(f.area(), f.buffer_mut());
+            if let Some(c) = render::cursor(&self.m, f.area()) {
                 f.set_cursor_position(c);
             }
         })?;
-        let g = render::grid_rect(frame.area);
-        self.hits = hits;
         let b = term.backend_mut();
         b.write_all(b"\x1b[?2026l")?;
         b.flush()?;
+        Ok(())
+    }
+
+    /// The model drawn into `buf`: what each cell does when clicked is kept for the next
+    /// clicks, and a new grid size goes to the daemon.
+    pub fn paint(&mut self, area: Rect, buf: &mut Buffer) {
+        self.hits = render::render(&self.m, area, buf);
+        let g = render::grid_rect(area);
         if (g.width, g.height) != self.size && g.width > 0 && g.height > 0 {
             self.size = (g.width, g.height);
             self.send(Request::Resize { cols: g.width, rows: g.height });
         }
-        Ok(())
     }
 
-    fn reply(&mut self, line: &str) {
+    /// One line from the daemon.
+    pub fn reply(&mut self, line: &str) {
         let Ok(r) = serde_json::from_str::<Reply>(line) else {
             self.trace(format_args!("bad line {line}"));
             return;
         };
         match r {
             Reply::Welcome { .. } => {}
-            Reply::Rituals { rituals, .. } => {
-                let order =
-                    |m: &Model| render::timetable_order(m.rituals.as_deref().unwrap_or(&[]));
-                let was = match &self.m.modal {
-                    Some(Modal::Timetable(tt)) => order(&self.m)
-                        .get(tt.selected)
-                        .and_then(|&i| self.m.rituals.as_ref()?.get(i))
-                        .map(|r| r.name.clone()),
-                    _ => None,
-                };
-                self.m.rituals = Some(rituals);
-                let now = order(&self.m);
-                let list = self.m.rituals.as_deref().unwrap_or_default();
-                let at = was.and_then(|n| now.iter().position(|&i| list[i].name == n));
-                if let (Some(Modal::Timetable(tt)), Some(at)) = (&mut self.m.modal, at) {
-                    tt.selected = at;
-                }
-                // The ritual it had open is gone: nothing to act on, or to confirm removing.
-                if let Some(Modal::Timetable(tt)) = &mut self.m.modal
-                    && tt.open.as_ref().is_some_and(|n| !list.iter().any(|r| &r.name == n))
-                {
-                    (tt.open, tt.confirm) = (None, false);
-                }
-            }
+            Reply::Rituals { rituals, .. } => self.rituals(rituals),
             Reply::Notice { text } => {
                 let text = crate::tele::clean(&text, 200);
                 if self.desktop {
@@ -507,7 +526,8 @@ impl App {
         }
     }
 
-    fn chunk(&mut self, c: Chunk) {
+    /// One chunk of host input.
+    pub fn chunk(&mut self, c: Chunk) {
         self.trace(format_args!("in {c}"));
         match &c {
             Chunk::Reply { kind: HostReply::KittyFlags(n), .. } => {
@@ -610,9 +630,8 @@ impl App {
     fn copy(&mut self, a: (u16, u16), b: (u16, u16)) {
         let Some(fr) = &self.m.screen else { return };
         let text = render::selected_text(fr, a, b);
-        let cmd = std::env::var("GENSOKYO_COPY").unwrap_or_else(|_| "pbcopy".into());
         let child = std::process::Command::new("/bin/sh")
-            .args(["-c", &cmd])
+            .args(["-c", &self.copy])
             // pbcopy reads bytes in the locale's encoding, and a bare environment has none.
             .env("LC_CTYPE", "UTF-8")
             .stdin(std::process::Stdio::piped())
@@ -659,29 +678,7 @@ impl App {
                 Button::Yes => self.confirm(),
                 Button::No => self.go_back(),
             },
-            Hit::Item(i) => match &mut self.m.modal {
-                Some(Modal::Summon(s)) if s.stage == Stage::Dir => {
-                    if s.selected == Some(i) {
-                        self.confirm();
-                    } else {
-                        s.selected = Some(i);
-                    }
-                }
-                Some(Modal::Timetable(tt)) if tt.open.is_none() => {
-                    tt.selected = i;
-                    self.confirm();
-                }
-                Some(
-                    Modal::Recall { selected, .. } | Modal::Cast(render::Cast { selected, .. }),
-                ) => {
-                    if *selected == i {
-                        self.confirm();
-                    } else {
-                        *selected = i;
-                    }
-                }
-                _ => {}
-            },
+            Hit::Item(i) => self.click_item(i),
             Hit::Modal | Hit::Grid => {}
         }
     }
@@ -697,7 +694,7 @@ impl App {
         self.m.message = None;
         match ch {
             Chord::Summon => {
-                self.m.modal = Some(Modal::Summon(render::Summon::default()));
+                self.m.modal = Some(Modal::Summon(Summon::default()));
                 self.refresh_modal();
             }
             Chord::Banish => {
@@ -706,15 +703,15 @@ impl App {
                 }
             }
             Chord::Recall => {
-                self.m.modal = Some(Modal::Recall { list: Vec::new(), selected: 0 });
+                self.m.modal = Some(Modal::Recall(Recall::default()));
                 self.refresh_modal();
             }
             Chord::Cast => {
-                self.m.modal = Some(Modal::Cast(render::Cast::default()));
+                self.m.modal = Some(Modal::Cast(Cast::default()));
                 self.send(Request::Cards);
             }
             Chord::Timetable => {
-                self.m.modal = Some(Modal::Timetable(render::Timetable::default()));
+                self.m.modal = Some(Modal::Timetable(Timetable::default()));
                 self.send(Request::Rituals);
             }
             Chord::Quit => self.m.modal = Some(Modal::Quit),
@@ -745,282 +742,6 @@ impl App {
             Chord::Cancel | Chord::Unbound => {}
         }
     }
-
-    /// Esc or a modal's cancel: the timetable goes back from a confirm to the ritual and from
-    /// the ritual to the list; everything else closes.
-    fn go_back(&mut self) {
-        match &mut self.m.modal {
-            Some(Modal::Timetable(tt)) if tt.confirm => tt.confirm = false,
-            Some(Modal::Timetable(tt)) if tt.open.is_some() => tt.open = None,
-            _ => self.m.modal = None,
-        }
-    }
-
-    /// Run, pause or resume, or ask to remove, the ritual the timetable has open.
-    fn ritual(&mut self, act: Act) {
-        let Some(Modal::Timetable(tt)) = &self.m.modal else { return };
-        let Some(r) = render::opened(&self.m, tt) else { return };
-        let (name, enabled, shipped) = (r.name.clone(), r.enabled, r.shipped);
-        let (verb, doing) = match act {
-            Act::Run => (RitualVerb::Run, "running"),
-            Act::Remove if shipped => {
-                self.m.message = Some(format!("{name} ships with gensokyo: pause it instead"));
-                return;
-            }
-            Act::Remove => {
-                if let Some(Modal::Timetable(tt)) = &mut self.m.modal {
-                    tt.confirm = true;
-                }
-                return;
-            }
-            Act::Toggle if enabled => (RitualVerb::Disable, "pausing"),
-            Act::Toggle => (RitualVerb::Enable, "resuming"),
-        };
-        self.m.message = Some(format!("{doing} {name}…"));
-        self.send(Request::Ritual { verb, name });
-    }
-
-    /// The departed for recall, newest first, and the recent directories for summon: the
-    /// client's own first, then the shrine's, then the departed's, newest first.
-    fn refresh_modal(&mut self) {
-        let mut departed: Vec<Resident> =
-            self.all.iter().filter(|r| r.departed.is_some()).cloned().collect();
-        departed.sort_by_key(|r| std::cmp::Reverse(r.departed));
-        match &mut self.m.modal {
-            Some(Modal::Recall { list, selected }) => {
-                *selected = (*selected).min(departed.len().saturating_sub(1));
-                *list = departed;
-            }
-            Some(Modal::Summon(s)) => {
-                let here = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
-                let live = self.all.iter().rev().filter(|r| r.departed.is_none());
-                let mut recent = Vec::new();
-                for d in here.into_iter().chain(live.chain(&departed).map(|r| r.cwd.clone())) {
-                    let d = tilde(&d, &self.m.home);
-                    if !recent.contains(&d) {
-                        recent.push(d);
-                    }
-                }
-                s.recent = recent;
-                s.selected = s.selected.filter(|&i| i < s.recent.len());
-            }
-            _ => {}
-        }
-    }
-
-    /// Enter, `y`, or the modal's confirm button.
-    fn confirm(&mut self) {
-        let Some(modal) = self.m.modal.take() else { return };
-        match modal {
-            Modal::Summon(mut s) if s.stage == Stage::Dir => {
-                let chosen = s.selected.and_then(|i| s.recent.get(i).cloned());
-                let dir = expand(chosen.as_deref().unwrap_or(&s.path), &self.m.home);
-                if dir.is_dir() {
-                    (s.stage, s.path, s.error) =
-                        (Stage::Name, tilde(&dir.to_string_lossy(), &self.m.home), None);
-                    s.completions.clear();
-                } else {
-                    s.error = Some(format!("not a directory: {}", dir.display()));
-                }
-                self.m.modal = Some(Modal::Summon(s));
-            }
-            Modal::Summon(s) => {
-                let cwd = expand(&s.path, &self.m.home).to_string_lossy().into_owned();
-                let name = Some(s.name.trim().to_string()).filter(|n| !n.is_empty());
-                self.send(Request::Summon(proto::Summon { cwd, name, ..Default::default() }));
-            }
-            Modal::Banish { id, .. } => {
-                self.send(Request::Banish { who: id });
-            }
-            Modal::Recall { list, selected } => {
-                if let Some(r) = list.get(selected) {
-                    self.send(Request::Recall { who: r.id.clone() });
-                }
-            }
-            Modal::Cast(mut c) => {
-                let choices = render::cast_choices(&self.m, &c);
-                let Some((pick, _)) = choices.get(c.selected.min(choices.len().saturating_sub(1)))
-                else {
-                    self.m.modal = Some(Modal::Cast(c));
-                    return;
-                };
-                let pick = pick.clone();
-                let card = match &c.card {
-                    None => {
-                        c.card = c.cards.iter().flatten().find(|k| k.slug == pick).cloned();
-                        c.selected = 0;
-                        self.m.modal = Some(Modal::Cast(c));
-                        return;
-                    }
-                    Some(k) if k.pair && c.target.is_none() => {
-                        (c.target, c.selected) = (Some(pick), 0);
-                        self.m.modal = Some(Modal::Cast(c));
-                        return;
-                    }
-                    Some(k) => k.clone(),
-                };
-                let (targets, peer) = match c.target {
-                    Some(t) => (vec![t], Some(pick)),
-                    None => (vec![pick], None),
-                };
-                self.send(Request::Cast(proto::Cast { card: card.slug, targets, peer }));
-                self.m.message = Some(format!("casting {}…", card.title));
-            }
-            Modal::Timetable(mut tt) => {
-                match (&tt.open, tt.confirm) {
-                    (Some(name), true) => {
-                        self.m.message = Some(format!("removing {name}…"));
-                        let name = name.clone();
-                        self.send(Request::Ritual { verb: RitualVerb::Remove, name });
-                        (tt.open, tt.confirm) = (None, false);
-                    }
-                    (None, _) => {
-                        let list = self.m.rituals.as_deref().unwrap_or_default();
-                        let order = render::timetable_order(list);
-                        let i = order.get(tt.selected.min(order.len().saturating_sub(1)));
-                        tt.open = i.map(|&i| list[i].name.clone());
-                    }
-                    _ => {}
-                }
-                self.m.modal = Some(Modal::Timetable(tt));
-            }
-            Modal::Quit => {
-                self.quit = Some(self.send(Request::Quit));
-                self.gone = Some("the shrine is empty; the daemon stopped".into());
-            }
-            Modal::Help => {}
-        }
-    }
-
-    fn modal_key(&mut self, c: &Chunk) {
-        let k = ModalKey::of(c);
-        let last = match &self.m.modal {
-            Some(Modal::Cast(c)) => render::cast_choices(&self.m, c).len().saturating_sub(1),
-            Some(Modal::Timetable(_)) => {
-                self.m.rituals.as_ref().map_or(0, Vec::len).saturating_sub(1)
-            }
-            _ => 0,
-        };
-        let Some(modal) = self.m.modal.as_mut() else { return };
-        match (modal, k) {
-            (_, ModalKey::Esc) => self.go_back(),
-            (Modal::Help, _) => self.m.modal = None,
-            (Modal::Quit | Modal::Banish { .. }, ModalKey::Enter | ModalKey::Text('y')) => {
-                self.confirm()
-            }
-            (Modal::Quit | Modal::Banish { .. }, ModalKey::Text('n')) => self.m.modal = None,
-            (Modal::Cast(c), k) => match k {
-                ModalKey::Up | ModalKey::Text('k') => {
-                    c.selected = c.selected.min(last).saturating_sub(1)
-                }
-                ModalKey::Down | ModalKey::Text('j') => c.selected = (c.selected + 1).min(last),
-                ModalKey::Enter => self.confirm(),
-                _ => {}
-            },
-            (Modal::Timetable(tt), k) if tt.confirm => match k {
-                ModalKey::Enter | ModalKey::Text('y') => self.confirm(),
-                ModalKey::Text('n') => tt.confirm = false,
-                _ => {}
-            },
-            (Modal::Timetable(tt), k) if tt.open.is_some() => match k {
-                ModalKey::Text('r') => self.ritual(Act::Run),
-                ModalKey::Text('p') => self.ritual(Act::Toggle),
-                ModalKey::Text('x') => self.ritual(Act::Remove),
-                _ => {}
-            },
-            (Modal::Timetable(tt), k) => match k {
-                ModalKey::Up | ModalKey::Text('k') => {
-                    tt.selected = tt.selected.min(last).saturating_sub(1)
-                }
-                ModalKey::Down | ModalKey::Text('j') => tt.selected = (tt.selected + 1).min(last),
-                ModalKey::Enter => self.confirm(),
-                _ => {}
-            },
-            (Modal::Recall { list, selected }, k) => match k {
-                ModalKey::Up => *selected = selected.saturating_sub(1),
-                ModalKey::Down => *selected = (*selected + 1).min(list.len().saturating_sub(1)),
-                ModalKey::Enter => self.confirm(),
-                _ => {}
-            },
-            (Modal::Summon(s), k) => match (s.stage, k) {
-                (_, ModalKey::Enter) => self.confirm(),
-                (Stage::Dir, ModalKey::Up) => {
-                    s.selected = s.selected.and_then(|i| i.checked_sub(1))
-                }
-                (Stage::Dir, ModalKey::Down) => {
-                    let n = s.recent.len();
-                    s.selected = match s.selected {
-                        None if n > 0 => Some(0),
-                        Some(i) if i + 1 < n => Some(i + 1),
-                        other => other,
-                    };
-                }
-                (Stage::Dir, ModalKey::Tab) => {
-                    let home = self.m.home.clone();
-                    complete(s, &home);
-                }
-                (Stage::Dir, ModalKey::Back) => {
-                    s.path.pop();
-                    (s.selected, s.error) = (None, None);
-                }
-                (Stage::Dir, ModalKey::Text(ch)) => {
-                    s.path.push(ch);
-                    (s.selected, s.error) = (None, None);
-                }
-                (Stage::Dir, ModalKey::Paste(t)) => {
-                    s.path.push_str(t.trim_end_matches(['\r', '\n']));
-                    s.selected = None;
-                }
-                (Stage::Name, ModalKey::Back) => {
-                    s.name.pop();
-                }
-                (Stage::Name, ModalKey::Text(ch)) => s.name.push(ch),
-                (Stage::Name, ModalKey::Paste(t)) => s.name.push_str(t.trim()),
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-}
-
-/// A host chunk as a modal reads it.
-enum ModalKey {
-    Text(char),
-    Paste(String),
-    Enter,
-    Esc,
-    Tab,
-    Back,
-    Up,
-    Down,
-    Other,
-}
-
-impl ModalKey {
-    fn of(c: &Chunk) -> ModalKey {
-        match c {
-            // One character per read is typing; more is a burst, taken as a paste.
-            Chunk::Text(t) if t.chars().count() == 1 => {
-                ModalKey::Text(t.chars().next().unwrap_or(' '))
-            }
-            Chunk::Text(t) => ModalKey::Paste(t.clone()),
-            Chunk::Paste(b) => ModalKey::Paste(String::from_utf8_lossy(b).into_owned()),
-            Chunk::Key { key: Some(k), .. } if k.event != 3 => match (k.code, k.mods & 0x0f) {
-                (13, _) => ModalKey::Enter,
-                (27, _) => ModalKey::Esc,
-                (9, 0) => ModalKey::Tab,
-                (127 | 8, _) => ModalKey::Back,
-                (code, 0 | 1) => char::from_u32(code).map_or(ModalKey::Other, ModalKey::Text),
-                _ => ModalKey::Other,
-            },
-            Chunk::Key { raw, key: None } => match raw.as_slice() {
-                b"\x1b[A" | b"\x1bOA" => ModalKey::Up,
-                b"\x1b[B" | b"\x1bOB" => ModalKey::Down,
-                _ => ModalKey::Other,
-            },
-            _ => ModalKey::Other,
-        }
-    }
 }
 
 /// The host's size, from the tty itself.
@@ -1033,59 +754,4 @@ fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
-}
-
-/// A typed path made absolute: `~` is home, and a relative one is under the client's cwd.
-fn expand(p: &str, home: &str) -> PathBuf {
-    let p = p.trim();
-    let p = paths::untilde(p, home);
-    let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    if p.is_empty() { here } else { here.join(p) }
-}
-
-/// Tab: the directories under the typed path's parent that start with its last part. One match
-/// is filled in; several fill in what they share and are listed.
-fn complete(s: &mut render::Summon, home: &str) {
-    let (dir, prefix) = match s.path.rfind('/') {
-        Some(i) => (&s.path[..=i], &s.path[i + 1..]),
-        None => ("", s.path.as_str()),
-    };
-    let base = expand(if dir.is_empty() { "." } else { dir }, home);
-    let mut names: Vec<String> = std::fs::read_dir(&base)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.starts_with(prefix) && (prefix.starts_with('.') || !n.starts_with('.')))
-        .collect();
-    names.sort();
-    let shared = match names.as_slice() {
-        [] => {
-            s.completions.clear();
-            return;
-        }
-        [one] => format!("{one}/"),
-        [first, rest @ ..] => {
-            let mut n = rest.iter().fold(first.len(), |n, r| {
-                first.bytes().zip(r.bytes()).take(n).take_while(|(a, b)| a == b).count()
-            });
-            // `café` and `cafè` share a byte of the é.
-            while !first.is_char_boundary(n) {
-                n -= 1;
-            }
-            first[..n].to_string()
-        }
-    };
-    s.path = format!("{dir}{shared}");
-    s.completions = if names.len() > 1 { names } else { Vec::new() };
-    s.selected = None;
-}
-
-/// What the timetable's buttons do to the ritual it has open.
-enum Act {
-    Run,
-    /// Pause it, or resume it.
-    Toggle,
-    Remove,
 }

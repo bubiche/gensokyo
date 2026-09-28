@@ -1,8 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
-use gensokyo::client::render::{
-    self, Button, Cast, Hit, HitMap, Modal, Model, Stage, Summon, Timetable,
-};
+use gensokyo::client::modal::{self, Cast, Modal, Recall, Stage, Summon, Timetable};
+use gensokyo::client::render::{self, Button, Hit, HitMap, Model};
 use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
@@ -209,7 +208,9 @@ fn screens() -> Vec<(&'static str, Model)> {
         ),
         (
             "recall",
-            with(&|m| m.modal = Some(Modal::Recall { list: departed.clone(), selected: 0 })),
+            with(&|m| {
+                m.modal = Some(Modal::Recall(Recall { list: departed.clone(), selected: 0 }))
+            }),
         ),
         ("cast-card", with(&|m| m.modal = Some(cast(None, None)))),
         ("cast-target", with(&|m| m.modal = Some(cast(Some(1), None)))),
@@ -386,7 +387,7 @@ fn modal_items_resolve() {
     }
     assert!(resolves(&map, Hit::Button(Button::Yes)));
     let list = (0..20).map(|i| resident(1, &format!("R{i}"), "x", Some(NOW - i))).collect();
-    m.modal = Some(Modal::Recall { list, selected: 15 });
+    m.modal = Some(Modal::Recall(Recall { list, selected: 15 }));
     let map = hits(&m, AREA);
     // A long list scrolls to keep the selection in view.
     assert!(resolves(&map, Hit::Item(15)));
@@ -397,17 +398,17 @@ fn modal_items_resolve() {
 fn cast_offers_groups_then_the_living_and_never_the_target_as_peer() {
     let mut m = shrine();
     let Some(Modal::Cast(c)) = Some(cast(Some(1), None)) else { unreachable!() };
-    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    let picks: Vec<String> = modal::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
     assert_eq!(picks, ["all", "awaiting", "idle", "id-Reimu", "id-Marisa"]);
     let Some(Modal::Cast(c)) = Some(cast(Some(0), None)) else { unreachable!() };
-    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    let picks: Vec<String> = modal::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
     assert_eq!(picks, ["id-Reimu", "id-Marisa"]);
     let Some(Modal::Cast(c)) = Some(cast(Some(0), Some("id-Reimu"))) else { unreachable!() };
-    let picks: Vec<String> = render::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
+    let picks: Vec<String> = modal::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
     assert_eq!(picks, ["id-Marisa"]);
     // Marisa leaves while the modal is open: she is no longer offered.
     m.residents[1].departed = Some(NOW);
-    assert!(render::cast_choices(&m, &c).is_empty());
+    assert!(modal::cast_choices(&m, &c).is_empty());
     m.modal = Some(Modal::Cast(c));
     let map = hits(&m, AREA);
     assert!(!map.0.iter().any(|(_, h)| matches!(h, Hit::Item(_))));
@@ -417,11 +418,11 @@ fn cast_offers_groups_then_the_living_and_never_the_target_as_peer() {
 fn the_timetable_lists_soonest_first_and_offers_what_each_ritual_allows() {
     let list = rituals();
     let names: Vec<&str> =
-        render::timetable_order(&list).into_iter().map(|i| list[i].name.as_str()).collect();
+        modal::timetable_order(&list).into_iter().map(|i| list[i].name.as_str()).collect();
     assert_eq!(names, ["evening-notes", "slack-morning", "inbox-zero", "broken", "nightly-checks"]);
-    assert_eq!(render::when_short("2026-09-21 23:00", "2026-09-21"), "23:00");
-    assert_eq!(render::when_short("2026-09-22 09:05", "2026-09-21"), "Tue 09:05");
-    assert_eq!(render::when_short("2026-10-05 08:00", "2026-09-21"), "10-05 08:00");
+    assert_eq!(modal::when_short("2026-09-21 23:00", "2026-09-21"), "23:00");
+    assert_eq!(modal::when_short("2026-09-22 09:05", "2026-09-21"), "Tue 09:05");
+    assert_eq!(modal::when_short("2026-10-05 08:00", "2026-09-21"), "10-05 08:00");
     let mut m = shrine();
     m.rituals = Some(list);
     m.modal = Some(timetable(None, false));

@@ -2,8 +2,9 @@
 //! resident's grid in a box, and a modal over it. `render` also returns what every cell does
 //! when clicked, so clicks are resolved against exactly what was drawn.
 
+use super::modal::{Modal, when_short};
 use crate::paths::tilde;
-use crate::proto::{Card, Resident, RitualInfo, State};
+use crate::proto::{Resident, RitualInfo, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -43,114 +44,6 @@ pub struct Model {
     pub today: String,
     /// The timetable, once the daemon has sent it.
     pub rituals: Option<Vec<RitualInfo>>,
-}
-
-#[derive(Clone, Debug)]
-pub enum Modal {
-    Summon(Summon),
-    Banish {
-        id: String,
-        name: String,
-    },
-    /// The departed, newest first.
-    Recall {
-        list: Vec<Resident>,
-        selected: usize,
-    },
-    /// A spell card, then who gets it, then whom a pair card's target talks to.
-    Cast(Cast),
-    Timetable(Timetable),
-    Quit,
-    Help,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Timetable {
-    /// Into `timetable_order`.
-    pub selected: usize,
-    /// The ritual whose detail is shown, by name.
-    pub open: Option<String>,
-    /// Its removal asked, waiting for a yes.
-    pub confirm: bool,
-}
-
-/// The timetable's order: soonest fire first, then the rest by name. Indices into `rituals`.
-pub fn timetable_order(rituals: &[RitualInfo]) -> Vec<usize> {
-    let mut v: Vec<usize> = (0..rituals.len()).collect();
-    v.sort_by(|&a, &b| {
-        let (a, b) = (&rituals[a], &rituals[b]);
-        let key = |r: &RitualInfo| (r.next_fire.is_none(), r.next_fire, r.name.clone());
-        key(a).cmp(&key(b))
-    });
-    v
-}
-
-/// `YYYY-MM-DD HH:MM` said short: the time alone today, the weekday within the week, else the
-/// month and day.
-pub fn when_short(local: &str, today: &str) -> String {
-    let Some((date, time)) = local.split_once(' ') else { return local.to_string() };
-    if date == today {
-        return time.to_string();
-    }
-    let parse = |d: &str| d.parse::<jiff::civil::Date>().ok();
-    let days = parse(date).zip(parse(today)).map(|(d, t)| (d - t).get_days());
-    match (days, parse(date)) {
-        (Some(1..=6), Some(d)) => format!("{} {time}", d.strftime("%a")),
-        _ => format!("{} {time}", date.get(5..).unwrap_or(date)),
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Cast {
-    /// None until the daemon has said.
-    pub cards: Option<Vec<Card>>,
-    /// Card files left out for their names.
-    pub unusable: Vec<String>,
-    /// The card picked, then the target picked (a group or a resident's id).
-    pub card: Option<Card>,
-    pub target: Option<String>,
-    pub selected: usize,
-}
-
-/// The cast modal's choices where it stands: what each sends, and its line. Residents are read
-/// from the model as it is now, so one that left meanwhile is simply not offered.
-pub fn cast_choices(m: &Model, c: &Cast) -> Vec<(String, String)> {
-    let Some(card) = &c.card else {
-        let cards = c.cards.iter().flatten();
-        let pair = |k: &Card| if k.pair { "  (pair)" } else { "" };
-        return cards.map(|k| (k.slug.clone(), format!("{}{}", k.title, pair(k)))).collect();
-    };
-    let groups =
-        [("all", "everyone"), ("awaiting", "everyone who needs you"), ("idle", "everyone resting")];
-    let groups = groups.iter().filter(|_| !card.pair && c.target.is_none());
-    let live = m.residents.iter().filter(|r| r.departed.is_none());
-    let live = live.filter(|r| c.target.as_ref() != Some(&r.id)).map(|r| {
-        let slot = r.slot.map_or("-".into(), |s| s.to_string());
-        let line = format!("{slot} {} {:<12} {}", r.state.glyph(), r.name, tilde(&r.cwd, &m.home));
-        (r.id.clone(), line)
-    });
-    groups.map(|(v, l)| (v.to_string(), l.to_string())).chain(live).collect()
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Summon {
-    pub stage: Stage,
-    /// Recent directories, newest first.
-    pub recent: Vec<String>,
-    /// The highlighted recent directory; None is the typed path.
-    pub selected: Option<usize>,
-    pub path: String,
-    /// Tab completions of `path`. In the name stage `path` is the directory chosen.
-    pub completions: Vec<String>,
-    pub name: String,
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Stage {
-    #[default]
-    Dir,
-    Name,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,10 +97,10 @@ impl HitMap {
     }
 }
 
-const DIM: Style = Style::new().fg(Color::DarkGray);
-const BUTTON: Style = Style::new().fg(Color::Cyan);
-const PICK: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
-const ERROR: Style = Style::new().fg(Color::LightRed);
+pub(super) const DIM: Style = Style::new().fg(Color::DarkGray);
+pub(super) const BUTTON: Style = Style::new().fg(Color::Cyan);
+pub(super) const PICK: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
+pub(super) const ERROR: Style = Style::new().fg(Color::LightRed);
 /// A resident that needs the user.
 const GOLD: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
 
@@ -505,168 +398,35 @@ pub fn style(s: vt::Style) -> Style {
 }
 
 /// One line of a modal.
-enum Row {
+pub(super) enum Row {
     Text(String, Style),
     /// A clickable list row, highlighted when selected.
     Item(usize, String, bool),
     Buttons(Vec<(&'static str, Button)>),
 }
 
+impl Row {
+    pub(super) fn text(s: &str) -> Row {
+        Row::Text(s.to_string(), Style::new())
+    }
+
+    pub(super) fn dim(s: &str) -> Row {
+        Row::Text(s.to_string(), DIM)
+    }
+
+    pub(super) fn yes_no(yes: &'static str, no: &'static str) -> Row {
+        Row::Buttons(vec![(yes, Button::Yes), (no, Button::No)])
+    }
+
+    pub(super) fn close() -> Row {
+        Row::Buttons(vec![("[close esc]", Button::No)])
+    }
+}
+
+/// The open modal, centred over the grid, sized to its widest line.
 fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     use Row::*;
-    let t = |s: &str| Text(s.to_string(), Style::new());
-    let dim = |s: &str| Text(s.to_string(), DIM);
-    let yes_no =
-        |yes: &'static str, no: &'static str| Buttons(vec![(yes, Button::Yes), (no, Button::No)]);
-    let (title, mut rows): (String, Vec<Row>) = match md {
-        Modal::Summon(s) if s.stage == Stage::Dir => {
-            let typed = if s.selected.is_none() { PICK } else { Style::new() };
-            let mut rows = vec![
-                t("Where?"),
-                Text(format!("{}{}█", mark(s.selected.is_none()), s.path), typed),
-            ];
-            if !s.completions.is_empty() {
-                rows.push(dim(&s.completions.join("  ")));
-            }
-            if !s.recent.is_empty() {
-                rows.push(dim("recent"));
-                rows.extend(window(s.recent.len(), s.selected.unwrap_or(0), 8).map(|i| {
-                    let sel = s.selected == Some(i);
-                    Item(i, format!("{}{}", mark(sel), tilde(&s.recent[i], &m.home)), sel)
-                }));
-            }
-            (" summon ".into(), rows)
-        }
-        Modal::Summon(s) => (
-            " summon ".into(),
-            vec![
-                t(&format!("In {}", tilde(&s.path, &m.home))),
-                Text(format!("name: {}█", s.name), PICK),
-                dim("Enter picks a random name when this is empty"),
-            ],
-        ),
-        Modal::Banish { name, .. } => (
-            " banish ".into(),
-            vec![t(&format!("Banish {name}?")), dim("It gets HUP, then TERM, then KILL.")],
-        ),
-        Modal::Recall { list, .. } if list.is_empty() => {
-            (" recall ".into(), vec![dim("Nobody has departed.")])
-        }
-        Modal::Recall { list, selected } => (
-            " recall ".into(),
-            window(list.len(), *selected, 12)
-                .map(|i| {
-                    let r = &list[i];
-                    let when = r.departed.map_or(String::new(), |d| ago(m.now - d) + " ago");
-                    let home = tilde(&r.cwd, &m.home);
-                    let line =
-                        format!("{}{:<12} {:>7}  {home}", mark(i == *selected), r.name, when);
-                    Item(i, line, i == *selected)
-                })
-                .collect(),
-        ),
-        Modal::Cast(c) if c.cards.as_ref().is_none_or(Vec::is_empty) => {
-            let dir = tilde(&crate::paths::config_dir().to_string_lossy(), &m.home);
-            let say = match c.cards {
-                None => "loading the spell cards…".into(),
-                Some(_) => format!("no spell cards: put one in {dir}/spellcards"),
-            };
-            (" cast ".into(), vec![dim(&say)])
-        }
-        Modal::Cast(c) => {
-            let choices = cast_choices(m, c);
-            let sel = c.selected.min(choices.len().saturating_sub(1));
-            let (title, head) = match (&c.card, &c.target) {
-                (None, _) => (" cast ".to_string(), "Which spell card?".to_string()),
-                (Some(k), None) => (format!(" {} ", k.title), "On whom?".into()),
-                (Some(k), Some(t)) => {
-                    let who =
-                        m.residents.iter().find(|r| &r.id == t).map_or(t.as_str(), |r| &r.name);
-                    (format!(" {} ", k.title), format!("{who} talks to whom?"))
-                }
-            };
-            let mut rows = vec![t(&head)];
-            if choices.is_empty() {
-                rows.push(dim("Nobody is here to cast at."));
-            }
-            rows.extend(
-                window(choices.len(), sel, 10)
-                    .map(|i| Item(i, format!("{}{}", mark(i == sel), choices[i].1), i == sel)),
-            );
-            match c.cards.iter().flatten().nth(sel).filter(|_| c.card.is_none()) {
-                Some(k) if !k.summary.is_empty() => rows.push(dim(&k.summary)),
-                _ => {}
-            }
-            if c.card.is_none() && !c.unusable.is_empty() {
-                let names: Vec<_> =
-                    c.unusable.iter().map(|p| p.rsplit('/').next().unwrap_or(p)).collect();
-                rows.push(dim(&format!("file names not usable: {}", names.join(" "))));
-            }
-            (title, rows)
-        }
-        Modal::Timetable(tt) => timetable(m, tt, g.width.min(72).saturating_sub(4) as usize),
-        Modal::Quit => (
-            " quit ".into(),
-            vec![t("Quit the shrine?"), dim("Everyone gets /exit, then the daemon stops.")],
-        ),
-        Modal::Help => {
-            const KEYS: [(&str, &str); 10] = [
-                ("n", "summon"),
-                ("b", "banish"),
-                ("r", "recall"),
-                ("c", "cast"),
-                ("x", "close"),
-                ("t", "timetable"),
-                ("q", "quit"),
-                ("?", "help"),
-                ("m", "mouse capture"),
-                ("d", "detach"),
-            ];
-            let mut rows = vec![t("Ctrl-] then a key:")];
-            rows.extend(KEYS.chunks(2).map(|p| {
-                let right = p.get(1).map_or(String::new(), |(k, v)| format!(" {k}  {v}"));
-                t(&format!("  {}  {:<15}{right}", p[0].0, p[0].1))
-            }));
-            rows.extend(["  1-9  focus that slot", "  Ctrl-]  a literal Ctrl-]"].map(t));
-            (" help ".into(), rows)
-        }
-    };
-    let error = match md {
-        Modal::Summon(s) => s.error.as_deref(),
-        _ => None,
-    };
-    if let Some(e) = error {
-        rows.push(Text(e.to_string(), ERROR));
-    }
-    rows.push(match md {
-        Modal::Summon(_) => yes_no("[summon ⏎]", "[cancel esc]"),
-        Modal::Banish { .. } => yes_no("[banish y]", "[cancel n]"),
-        Modal::Recall { list, .. } if list.is_empty() => Buttons(vec![("[close esc]", Button::No)]),
-        Modal::Recall { .. } => yes_no("[recall ⏎]", "[cancel esc]"),
-        Modal::Cast(c) if c.cards.as_ref().is_none_or(Vec::is_empty) => {
-            Buttons(vec![("[close esc]", Button::No)])
-        }
-        Modal::Cast(c) if c.card.as_ref().is_some_and(|k| !k.pair || c.target.is_some()) => {
-            yes_no("[cast ⏎]", "[cancel esc]")
-        }
-        Modal::Cast(_) => yes_no("[next ⏎]", "[cancel esc]"),
-        Modal::Timetable(tt) if tt.confirm => yes_no("[yes y]", "[no n]"),
-        Modal::Timetable(tt) => match opened(m, tt) {
-            Some(r) => {
-                let toggle = if r.enabled { "[pause p]" } else { "[resume p]" };
-                let mut b =
-                    vec![("[run now r]", Button::RunRitual), (toggle, Button::ToggleRitual)];
-                if !r.shipped {
-                    b.push(("[remove x]", Button::RemoveRitual));
-                }
-                b.push(("[back esc]", Button::No));
-                Buttons(b)
-            }
-            None => Buttons(vec![("[close esc]", Button::No)]),
-        },
-        Modal::Quit => yes_no("[quit y]", "[cancel n]"),
-        Modal::Help => Buttons(vec![("[close esc]", Button::No)]),
-    });
+    let (title, rows) = md.view(m, g.width.min(72).saturating_sub(4) as usize);
     let text_w = |r: &Row| match r {
         Text(s, _) | Item(_, s, _) => width(s),
         Buttons(b) => b.iter().map(|(l, _)| width(l) + 1).sum(),
@@ -701,92 +461,9 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     }
 }
 
-/// The ritual the timetable has open, if it is still there.
-pub fn opened<'a>(m: &'a Model, tt: &Timetable) -> Option<&'a RitualInfo> {
-    let name = tt.open.as_ref()?;
-    m.rituals.iter().flatten().find(|r| &r.name == name)
-}
-
-/// `w` is the widest a line can be in the modal: long ones are wrapped to it.
-fn timetable(m: &Model, tt: &Timetable, w: usize) -> (String, Vec<Row>) {
-    use Row::*;
-    let dim = |s: &str| Text(s.to_string(), DIM);
-    let Some(rituals) = &m.rituals else {
-        return (" timetable ".into(), vec![dim("loading the rituals…")]);
-    };
-    if let Some(r) = opened(m, tt) {
-        let field = |k: &str, v: &str| Text(format!("{k:<9} {v}"), Style::new());
-        let wrapped = |s: &str, st: Style| wrap(s, w, 3).into_iter().map(move |l| Text(l, st));
-        let mut rows = Vec::new();
-        if tt.confirm {
-            rows.push(Text(format!("Remove {}?", r.name), Style::new()));
-            rows.extend(wrapped(
-                "Its file, its notes and its journal go, and do not come back.",
-                DIM,
-            ));
-            return (format!(" {} ", r.name), rows);
-        }
-        if let Some(d) = &r.description {
-            rows.push(Text(d.clone(), Style::new()));
-        }
-        let on = if r.enabled { "" } else { "  (paused)" };
-        rows.push(field("schedule", &format!("{}{on}", r.schedule)));
-        let next = match (&r.next_fire_local, r.enabled) {
-            (_, false) => "paused".to_string(),
-            (Some(l), true) => l.clone(),
-            (None, true) => "never".into(),
-        };
-        rows.push(field("next", &next));
-        let headless = if r.headless { ", headless" } else { "" };
-        rows.push(field("target", &format!("{}{headless}", r.target)));
-        if let Some(c) = &r.cwd {
-            rows.push(field("in", &tilde(c, &m.home)));
-        }
-        let last = r.last_run.map_or("never".into(), |t| ago(m.now - t) + " ago");
-        rows.push(field("last ran", &last));
-        if let Some(l) = &r.last {
-            rows.extend(wrapped(l, DIM));
-        }
-        if r.running {
-            rows.push(Text("a run of it is going now".into(), Style::new().fg(Color::Yellow)));
-        }
-        if let Some(p) = &r.problem {
-            rows.extend(wrapped(p, ERROR));
-        }
-        if r.shipped {
-            rows.extend(wrapped("An example gensokyo ships: pause it, or edit a copy.", DIM));
-        }
-        return (format!(" {} ", r.name), rows);
-    }
-    if rituals.is_empty() {
-        let dir = tilde(&crate::paths::config_dir().to_string_lossy(), &m.home);
-        return (" timetable ".into(), vec![dim(&format!("nothing is scheduled: {dir}/rituals"))]);
-    }
-    let order = timetable_order(rituals);
-    let sel = tt.selected.min(order.len() - 1);
-    let nw = rituals.iter().map(|r| width(&r.name)).max().unwrap_or(0).min(20) as usize;
-    let rows = window(order.len(), sel, 12)
-        .map(|i| {
-            let r = &rituals[order[i]];
-            let next = match (&r.next_fire_local, r.enabled) {
-                (_, false) => "paused".to_string(),
-                (Some(l), true) => when_short(l, &m.today),
-                (None, true) => "—".into(),
-            };
-            let on = if r.enabled { "on " } else { "off" };
-            let flag = if r.problem.is_some() { "!" } else { " " };
-            let desc = r.description.as_deref().unwrap_or("");
-            let name: String = r.name.chars().take(nw).collect();
-            let line = format!("{}{name:<nw$} {on} {next:<11}{flag} {desc}", mark(i == sel));
-            Item(i, line, i == sel)
-        })
-        .collect();
-    (" timetable ".into(), rows)
-}
-
 /// `s` in lines of at most `w` columns, broken at spaces where it can be, at most `n` of them;
 /// the last ends in `…` when some was left over.
-fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
+pub(super) fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
     let mut lines: Vec<String> = vec![String::new()];
     for word in s.split(' ') {
         let cur = lines.last_mut().expect("never empty");
@@ -824,12 +501,12 @@ fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
 }
 
 /// The selection marker, so it shows without colour too.
-fn mark(selected: bool) -> &'static str {
+pub(super) fn mark(selected: bool) -> &'static str {
     if selected { "› " } else { "  " }
 }
 
 /// Up to `n` indices around `selected`, so it stays in view.
-fn window(len: usize, selected: usize, n: usize) -> std::ops::Range<usize> {
+pub(super) fn window(len: usize, selected: usize, n: usize) -> std::ops::Range<usize> {
     let start = (selected + 1).saturating_sub(n).min(len.saturating_sub(n));
     start..len.min(start + n)
 }
@@ -882,11 +559,11 @@ fn centered(buf: &mut Buffer, g: Rect, y: u16, s: &str, style: Style) {
     }
 }
 
-fn width(s: &str) -> u16 {
+pub(super) fn width(s: &str) -> u16 {
     ratatui::text::Line::raw(s).width() as u16
 }
 
-fn ago(s: i64) -> String {
+pub(super) fn ago(s: i64) -> String {
     match s.max(0) {
         s @ 0..60 => format!("{s}s"),
         s @ 60..3600 => format!("{}m", s / 60),

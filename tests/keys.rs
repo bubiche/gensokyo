@@ -3,7 +3,7 @@
 //! mouse reports for the grid.
 
 use gensokyo::client::framer::{Chunk, Framer, Key, Mouse};
-use gensokyo::client::keys::{self, Chord, Forward, LEADER};
+use gensokyo::client::keys::{self, Chord, Forward, LEADER, Scrollback};
 use gensokyo::vt::{KeyEvent, Modes, Vt};
 
 /// The chunks one host read gives, with any ESC held back released.
@@ -136,6 +136,7 @@ fn chord_after_the_leader() {
         ("m", Chord::Capture),
         ("d", Chord::Detach),
         ("x", Chord::Close),
+        ("[", Chord::ScrollBack),
         ("1", Chord::Focus(1)),
         ("9", Chord::Focus(9)),
         ("0", Chord::Unbound),
@@ -201,4 +202,36 @@ fn wheel_without_child_mouse_scrolls() {
     assert_eq!(keys::mouse(&m(64, true), 1, 1, &main), Forward::Scroll(-3));
     assert_eq!(keys::mouse(&m(65, true), 1, 1, &main), Forward::Scroll(3));
     assert_eq!(keys::mouse(&m(0, true), 1, 1, &main), Forward::Drop, "a click");
+}
+
+#[test]
+fn keys_that_move_through_the_scrollback() {
+    use Scrollback::*;
+    let s = |b: &[u8]| keys::scrollback(&one(b));
+    for (b, want) in [
+        (&b"k"[..], By(-1)),
+        (b"j", By(1)),
+        (b"\x1b[A", By(-1)),
+        (b"\x1b[B", By(1)),
+        (b"\x1b[5~", Pages(-1)),
+        (b"\x1b[6~", Pages(1)),
+        (b"b", Pages(-1)),
+        (b" ", Pages(1)),
+        (b"g", Top),
+        (b"\x1b[H", Top),
+        (b"G", Live),
+        (b"\x1b[F", Live),
+        (b"q", Live),
+        (b"\x1b", Live),
+        (b"\x1b[27u", Live),
+        // Kitty's all-as-escapes form of a letter, and its release.
+        (b"\x1b[107u", By(-1)),
+        (b"\x1b[107;1:3u", Stay),
+    ] {
+        assert_eq!(s(b), Some(want), "{b:?}");
+    }
+    // Anything else is the resident's: typing, Enter, a chord, a paste.
+    for b in [&b"x"[..], b"\r", b"\x1b[107;5u", b"\x1b[200~k\x1b[201~", b"hello"] {
+        assert_eq!(s(b), None, "{b:?}");
+    }
 }

@@ -6,7 +6,7 @@
 //! through as they came.
 
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
-use super::keys::{self, Chord, Forward};
+use super::keys::{self, Chord, Forward, Scrollback};
 use super::modal::{Act, Cast, Modal, Recall, Summon, Timetable};
 use super::render::{self, Button, Hit, HitMap, Message, Model, Say};
 use crate::cli;
@@ -27,6 +27,9 @@ use tokio::sync::mpsc;
 
 /// At most one frame this often: about 60 fps while a resident streams output.
 const FRAME: Duration = Duration::from_millis(16);
+
+/// Rows back that are surely past the top of any scrollback: the daemon stops at the top.
+const TOP: i32 = -(1 << 30);
 
 /// How long a message stays: long enough to read, and an error longer.
 const INFO_LIFE: Duration = Duration::from_secs(5);
@@ -606,6 +609,12 @@ impl App {
         } else if self.m.modal.is_some() {
             self.modal_key(&c);
         } else if self.live().is_some() {
+            if self.scrolled() {
+                match keys::scrollback(&c) {
+                    Some(s) => return self.scroll(s),
+                    None => self.scroll(Scrollback::Live),
+                }
+            }
             self.forward(&c);
         } else if let Some(ch) = keys::chord(&c) {
             // Nothing on screen takes keys, so the letters work without the leader.
@@ -619,12 +628,37 @@ impl App {
         self.input(who, f);
     }
 
+    /// The resident on screen is showing its scrollback, not its live screen.
+    fn scrolled(&self) -> bool {
+        self.m.screen.as_ref().is_some_and(|s| s.back > 0)
+    }
+
+    /// The scrollback moved. The live screen is taken as reached at once, so the next key
+    /// goes to the resident even before the daemon's damage says so.
+    fn scroll(&mut self, s: Scrollback) {
+        let Some(who) = self.live() else { return };
+        let page = i32::from(self.size.1.max(2) - 1);
+        let rows = match s {
+            Scrollback::By(n) => Some(n),
+            Scrollback::Pages(n) => Some(n * page),
+            Scrollback::Top => Some(TOP),
+            Scrollback::Live => None,
+            Scrollback::Stay => return,
+        };
+        if rows.is_none()
+            && let Some(fr) = &mut self.m.screen
+        {
+            fr.back = 0;
+        }
+        self.send(Request::Scroll { who, rows });
+    }
+
     fn input(&mut self, who: String, f: Forward) {
         let req = match f {
             Forward::Bytes(bytes) => Request::Input { who, bytes, key: None },
             Forward::Key(k) => Request::Input { who, bytes: Vec::new(), key: Some(k) },
-            // Daemon scrollback is not there yet.
-            Forward::Scroll(_) | Forward::Drop => return,
+            Forward::Scroll(rows) => Request::Scroll { who, rows: Some(rows.into()) },
+            Forward::Drop => return,
         };
         if let Request::Input { bytes, key, .. } = &req {
             self.trace(format_args!("out {} {key:?}", Esc(bytes)));
@@ -784,6 +818,13 @@ impl App {
                 if let Some(who) = self.live() {
                     self.input(who, Forward::Key(keys::LEADER));
                 }
+            }
+            Chord::ScrollBack if self.m.modes.alt => {
+                self.say(Say::Info, "a full-screen program has no scrollback");
+            }
+            Chord::ScrollBack => {
+                let half = i32::from(self.size.1.max(2) / 2);
+                self.scroll(Scrollback::By(-half));
             }
             Chord::Cancel | Chord::Unbound => {}
         }

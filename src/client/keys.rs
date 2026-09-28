@@ -108,6 +108,8 @@ pub enum Chord {
     Capture,
     Detach,
     Close,
+    /// Back through the resident's scrollback, half a screen.
+    ScrollBack,
     /// Slot 1 to 9.
     Focus(u8),
     /// The leader twice: send the resident one Ctrl-], as `Forward::Key(LEADER)`.
@@ -153,9 +155,60 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'm' => Chord::Capture,
         'd' => Chord::Detach,
         'x' => Chord::Close,
+        '[' => Chord::ScrollBack,
         '1'..='9' => Chord::Focus(ch as u8 - b'0'),
         _ => Chord::Unbound,
     })
+}
+
+/// What a key does while the resident on screen is scrolled back through its scrollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scrollback {
+    /// Rows, negative back.
+    By(i32),
+    /// Screens, negative back.
+    Pages(i32),
+    Top,
+    /// Back to the live screen, and the key goes no further.
+    Live,
+    /// A release: nothing.
+    Stay,
+}
+
+/// A key as the scrollback reads it: rows and pages as less and a terminal's scrollback have
+/// them, Esc and q to leave. None is any other key, which goes back to the live screen and on
+/// to the resident.
+pub fn scrollback(c: &Chunk) -> Option<Scrollback> {
+    use Scrollback::*;
+    let ch = match c {
+        Chunk::Text(t) if t.chars().count() == 1 => t.chars().next(),
+        Chunk::Key { key: Some(k), .. } if k.event == 3 => return Some(Stay),
+        Chunk::Key { key: Some(k), .. } if k.mods & !LOCKS == 0 => match k.code {
+            27 => return Some(Live),
+            code => char::from_u32(code),
+        },
+        Chunk::Key { raw, key: None } => {
+            return match raw.as_slice() {
+                b"[A" | b"OA" => Some(By(-1)),
+                b"[B" | b"OB" => Some(By(1)),
+                b"[5~" => Some(Pages(-1)),
+                b"[6~" => Some(Pages(1)),
+                b"[H" | b"OH" | b"[1~" | b"[7~" => Some(Top),
+                b"[F" | b"OF" | b"[4~" | b"[8~" => Some(Live),
+                _ => None,
+            };
+        }
+        _ => None,
+    };
+    match ch? {
+        'k' => Some(By(-1)),
+        'j' => Some(By(1)),
+        'b' => Some(Pages(-1)),
+        'f' | ' ' => Some(Pages(1)),
+        'g' => Some(Top),
+        'G' | 'q' => Some(Live),
+        _ => None,
+    }
 }
 
 /// A host mouse report over the grid, at grid cell `x`, `y` (1-based). With the child's mouse

@@ -8,7 +8,7 @@ use gensokyo::proto::{Reply, Resident, RitualInfo, State};
 use gensokyo::vt::{Frame, Modes, Run, Style};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 fn app() -> App {
@@ -138,6 +138,52 @@ fn a_resident_nobody_watches_rings_and_says_why() {
     daemon(&mut a, notify(false));
     assert_eq!(a.host, b"\x07\x1b]9;Marisa awaits\x07");
     assert_eq!(said(&a), Some("✦ Marisa awaits"));
+}
+
+#[test]
+fn the_wheel_and_the_chord_scroll_back_and_keys_move_or_leave() {
+    let mut a = shrine();
+    let area = Rect::new(0, 0, 120, 40);
+    a.paint(area, &mut Buffer::empty(area));
+    sent(&mut a);
+    let rows = |out: &[Value]| -> Vec<Value> { out.iter().map(|r| r["rows"].clone()).collect() };
+    // The wheel over the grid, up then down.
+    host(&mut a, b"\x1b[<64;40;10M\x1b[<65;40;10M");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll", "scroll"]);
+    assert_eq!(rows(&out), [json!(-3), json!(3)]);
+    // Half the 38-row grid back.
+    host(&mut a, b"\x1d[");
+    assert_eq!(rows(&sent(&mut a)), [json!(-19)]);
+    // Until the daemon says it is scrolled back, keys are the resident's.
+    host(&mut a, b"k");
+    assert_eq!(kinds(&sent(&mut a)), ["input"]);
+    let scrolled = |a: &mut App, back| {
+        let frame = Frame { cols: 80, rows: vec![], back, history: 400, ..Frame::default() };
+        let modes = Modes::default();
+        daemon(a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes });
+    };
+    scrolled(&mut a, 19);
+    host(&mut a, b"k");
+    host(&mut a, b"\x1b[6~");
+    host(&mut a, b"g");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll", "scroll", "scroll"]);
+    assert_eq!(rows(&out)[..2], [json!(-1), json!(37)]);
+    assert!(out[2]["rows"].as_i64().unwrap() < -10_000);
+    // q is home again, and nothing for the resident; the next k is the resident's at once.
+    host(&mut a, b"q");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll"]);
+    assert!(out[0].get("rows").is_none(), "{out:?}");
+    host(&mut a, b"k");
+    assert_eq!(kinds(&sent(&mut a)), ["input"]);
+    // Typing while scrolled back goes home and then to the resident.
+    scrolled(&mut a, 5);
+    host(&mut a, b"x");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll", "input"]);
+    assert_eq!(out[1]["bytes"], json!([b'x']));
 }
 
 fn said(a: &App) -> Option<&str> {

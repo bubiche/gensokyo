@@ -192,6 +192,13 @@ fn screens() -> Vec<(&'static str, Model)> {
         ),
         ("departed", with(&|m| m.focused = Some("id-Cirno".into()))),
         (
+            "scrolled",
+            with(&|m| {
+                let fr = m.screen.as_mut().unwrap();
+                (fr.back, fr.history) = (120, 3400);
+            }),
+        ),
+        (
             "empty",
             with(&|m| {
                 m.residents.clear();

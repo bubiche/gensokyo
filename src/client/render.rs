@@ -10,6 +10,7 @@ use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Widget};
 
 /// The sidebar's width, its box included.
@@ -145,10 +146,12 @@ fn focused(m: &Model) -> Option<&Resident> {
     m.residents.iter().find(|r| Some(&r.id) == m.focused.as_ref())
 }
 
-/// Where the host cursor goes: the focused resident's, when it shows one and no modal is open.
+/// Where the host cursor goes: the focused resident's, when it shows one on its live screen
+/// and no modal is open.
 pub fn cursor(m: &Model, area: Rect) -> Option<(u16, u16)> {
     let g = grid_rect(area);
-    let (x, y) = m.screen.as_ref()?.cursor?;
+    let fr = m.screen.as_ref().filter(|fr| fr.back == 0)?;
+    let (x, y) = fr.cursor?;
     let live = focused(m)?.departed.is_none();
     (live && m.modal.is_none() && x < g.width && y < g.height).then(|| (g.x + x, g.y + y))
 }
@@ -171,7 +174,12 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
         }
         None => " the shrine is empty ".into(),
     };
-    let block = Block::bordered().title(title).border_style(DIM);
+    let mut block = Block::bordered().title(title).border_style(DIM);
+    // Scrolled back, the way home is on the box, in the colour of a resident that needs you.
+    if let Some(fr) = m.screen.as_ref().filter(|fr| fr.back > 0 && f.is_some()) {
+        let s = format!(" ↑ {} of {} · esc returns ", fr.back, fr.history);
+        block = block.title_top(Line::styled(s, GOLD).right_aligned());
+    }
     let g = block.inner(main);
     block.render(main, buf);
     match f {

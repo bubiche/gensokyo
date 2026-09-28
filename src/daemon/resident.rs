@@ -66,6 +66,11 @@ impl Handle {
         self.vt.borrow_mut().frame()
     }
 
+    /// The live screen as text, however far back the view is: what a check on typed text reads.
+    pub fn live_text(&self) -> Vec<String> {
+        self.vt.borrow_mut().live_text()
+    }
+
     /// Moves the view through the scrollback (`Vt::scroll`). The view is the resident's, not
     /// a client's: every client showing it scrolls with it.
     pub fn scroll(&self, rows: Option<i32>) {

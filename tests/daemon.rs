@@ -1139,3 +1139,57 @@ fn a_card_reaches_everyone_free_and_names_whoever_holds_a_dialog() {
     assert!(!e.status.success());
     assert!(String::from_utf8_lossy(&e.stderr).contains("no spell card 'nope'"));
 }
+
+/// A resident with scrollback holding an earlier paste, as `[Pasted text …]`, on view.
+fn with_a_pasted_past(d: &Daemon) -> (Value, Client, Screen) {
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let mut c = Client::new(d);
+    c.send(json!({"t": "view", "who": r["id"]}));
+    let mut s = Screen::default();
+    s.wait_for(&mut c, "stub-claude");
+    let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
+    let paste = format!("\x1b[200~{}\x1b[201~\r", lines.join("\r"));
+    c.send(json!({"t": "input", "who": r["id"], "bytes": paste.as_bytes()}));
+    s.wait_for(&mut c, "> line59");
+    (r, c, s)
+}
+
+/// A cast at `r` while another client keeps scrolling it back.
+fn cast_while_scrolling(d: &Daemon, r: &Value) -> Value {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let (st, sock, who) = (stop.clone(), d.socket(), r["id"].clone());
+    let wheel = std::thread::spawn(move || {
+        let (mut w, _l) = common::connect(&sock);
+        while !st.load(Ordering::Relaxed) {
+            let _ = writeln!(w, "{}", json!({"t": "scroll", "who": who, "rows": -3}));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    let done = d.req(json!({"t": "cast", "id": 6, "card": "hi", "targets": [r["id"]]}));
+    stop.store(true, Ordering::Relaxed);
+    wheel.join().unwrap();
+    done
+}
+
+#[test]
+fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
+    let d = Daemon::start("castscroll", &[("STUB_HOOKS", "1")]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nSay hi to {self}.").unwrap();
+    // It lands: seen on the live screen, however far back the view is.
+    let (r, ..) = with_a_pasted_past(&d);
+    let done = cast_while_scrolling(&d, &r);
+    assert_eq!(done["t"], "done", "{done}");
+    // It never shows: an old paste in the scrollback is not taken for it, and no Enter follows.
+    let (r, mut c, mut s) = with_a_pasted_past(&d);
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"/mute\r"}));
+    s.wait_for(&mut c, "muted");
+    let done = cast_while_scrolling(&d, &r);
+    assert!(done["error"].as_str().unwrap_or("").contains("never showed"), "{done}");
+    // Muted, it would sit out the quit's /exit.
+    d.req(json!({"t": "banish", "id": 7, "who": r["id"]}));
+}

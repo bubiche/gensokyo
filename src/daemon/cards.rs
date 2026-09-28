@@ -223,9 +223,10 @@ pub(super) async fn deliver(
         return Err("was not typed into: the daemon is stopping".into());
     }
     let needle = needle(&clean(text));
-    // The paste is looked for on the live screen, where it lands.
+    // The paste is looked for on the live screen, where it lands, even if a client scrolls
+    // back while it is on its way.
     h.to_live();
-    let before = h.frame().text();
+    let before = h.live_text();
     // More rows than before: an echo of the last cast still on screen does not count.
     let was = shown(&before, &needle);
     let mut changes = h.changes();
@@ -236,7 +237,7 @@ pub(super) async fn deliver(
     }
     let until = tokio::time::Instant::from_std(pasted + SHOW_WAIT);
     loop {
-        let now = h.frame().text();
+        let now = h.live_text();
         if now != before && shown(&now, &needle) > was {
             break;
         }

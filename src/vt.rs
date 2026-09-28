@@ -182,6 +182,18 @@ impl Vt {
         (history.saturating_sub(bar.offset) as u32, history as u32)
     }
 
+    /// The live screen's rows as text, wherever the view is: the view is put back as it was.
+    pub fn live_text(&mut self) -> Vec<String> {
+        let bar = self.term.scrollbar().unwrap();
+        if self.scrolled().0 == 0 {
+            return self.frame().text();
+        }
+        self.term.scroll_viewport(ScrollViewport::Bottom);
+        let text = self.frame().text();
+        self.term.scroll_viewport(ScrollViewport::Row(bar.offset as usize));
+        text
+    }
+
     /// The visible screen as style runs.
     pub fn frame(&mut self) -> Frame {
         let snap = self.render.update(&self.term).unwrap();

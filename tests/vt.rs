@@ -158,6 +158,20 @@ enum Event {
 }
 
 #[test]
+fn the_live_screen_is_read_wherever_the_view_is_and_the_view_stays() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let live = vt.live_text();
+    vt.scroll(Some(-12));
+    let shown = vt.frame().text();
+    assert_eq!(vt.live_text(), live);
+    assert_eq!((vt.scrolled().0, vt.frame().text()), (12, shown));
+    assert_eq!(live[3], "line 29");
+}
+
+#[test]
 fn scrollback_holds_its_place_while_output_comes_and_clamps_at_both_ends() {
     let mut vt = Vt::new(20, 5);
     for i in 0..30 {

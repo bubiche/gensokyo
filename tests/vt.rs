@@ -157,6 +157,77 @@ enum Event {
     Other,
 }
 
+#[test]
+fn scrollback_holds_its_place_while_output_comes_and_clamps_at_both_ends() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let top = |vt: &mut Vt| vt.frame().text()[0].clone();
+    let f = vt.frame();
+    assert_eq!((f.back, f.history, f.cursor), (0, 26, Some((0, 4))));
+    vt.scroll(Some(-10));
+    let f = vt.frame();
+    // Scrolled back, the cursor would be drawn over history.
+    assert_eq!((f.back, f.history, f.cursor, top(&mut vt).as_str()), (10, 26, None, "line 16"));
+    // Output while reading history leaves the view on the same rows.
+    for i in 30..33 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    assert_eq!((vt.scrolled(), top(&mut vt).as_str()), ((13, 29), "line 16"));
+    vt.scroll(Some(-1000));
+    assert_eq!((vt.scrolled(), top(&mut vt).as_str()), ((29, 29), "line 0"));
+    vt.scroll(Some(1000));
+    assert_eq!(vt.scrolled(), (0, 29));
+    // Past the bottom is live again: it follows the output.
+    vt.feed(b"line 33\r\n");
+    assert_eq!((vt.scrolled().0, top(&mut vt).as_str()), (0, "line 30"));
+    // A resize keeps the view as far back as it was, as a new viewer's nudge of a row does.
+    vt.scroll(Some(-5));
+    vt.resize(20, 4);
+    assert_eq!(vt.scrolled().0, 5);
+    vt.resize(20, 5);
+    assert_eq!(vt.scrolled().0, 5);
+    vt.resize(30, 8);
+    vt.resize(10, 3);
+    assert_eq!(vt.scrolled().0, 5);
+    // The ends are reached by asking for more than there is, however much.
+    let all = vt.scrolled().1;
+    for (n, back) in [(i32::MIN, all), (i32::MAX, 0), (-(1 << 30), all)] {
+        vt.scroll(Some(n));
+        assert_eq!(vt.scrolled().0, back, "{n}");
+    }
+    vt.scroll(None);
+    let f = vt.frame();
+    assert_eq!(f.back, 0);
+    assert!(f.cursor.is_some());
+}
+
+#[test]
+fn the_alternate_screen_has_no_scrollback_to_move_through() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    vt.feed(b"\x1b[?1049h\x1b[Hfull screen");
+    assert_eq!(vt.scrolled(), (0, 0));
+    vt.scroll(Some(-5));
+    let f = vt.frame();
+    assert_eq!((f.back, f.history, f.text()[0].as_str()), (0, 0, "full screen"));
+    assert!(f.cursor.is_some());
+    vt.feed(b"\x1b[?1049l");
+    assert_eq!(vt.scrolled(), (0, 26));
+}
+
+#[test]
+fn scrollback_is_measured_in_bytes_and_keeps_thousands_of_rows() {
+    let mut vt = Vt::new(80, 24);
+    let line = format!("{}\r\n", "x".repeat(76));
+    vt.feed(line.repeat(3000).as_bytes());
+    // 10_000 taken as lines kept 861 rows here; 10 MB keeps about 13,800.
+    assert_eq!(vt.scrolled().1, 3000 - 24 + 1);
+}
+
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }

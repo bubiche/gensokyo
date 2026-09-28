@@ -9,7 +9,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 /// Writes queued for the child; a child that stops reading its tty fills this, and whatever
 /// is sent to it then waits (input) or is dropped (query replies, which it is not reading).
@@ -36,6 +36,8 @@ pub struct Handle {
     last_output: Rc<Cell<Instant>>,
     vt: Rc<RefCell<Vt>>,
     rev: watch::Receiver<u64>,
+    /// Asks the actor to count a change the output did not make: a scroll.
+    poke: Rc<Notify>,
 }
 
 impl Handle {
@@ -62,6 +64,20 @@ impl Handle {
 
     pub fn frame(&self) -> Frame {
         self.vt.borrow_mut().frame()
+    }
+
+    /// Moves the view through the scrollback (`Vt::scroll`). The view is the resident's, not
+    /// a client's: every client showing it scrolls with it.
+    pub fn scroll(&self, rows: Option<i32>) {
+        self.vt.borrow_mut().scroll(rows);
+        self.poke.notify_one();
+    }
+
+    /// Back to the live screen, before anything is typed: nobody types into history.
+    pub fn to_live(&self) {
+        if self.vt.borrow().scrolled().0 > 0 {
+            self.scroll(None);
+        }
     }
 
     pub fn modes(&self) -> Modes {
@@ -108,10 +124,17 @@ pub fn start(spawn: pty::Spawn) -> std::io::Result<Handle> {
     let last_output = Rc::new(Cell::new(Instant::now()));
     let vt = Rc::new(RefCell::new(Vt::new(cols, rows)));
     let (rev_tx, rev) = watch::channel(0);
+    let poke = Rc::new(Notify::new());
     tokio::task::spawn_local(writer(w, out_rx));
-    let actor = Actor { vt: vt.clone(), rev: rev_tx, out: out.clone(), last: last_output.clone() };
+    let actor = Actor {
+        vt: vt.clone(),
+        rev: rev_tx,
+        out: out.clone(),
+        last: last_output.clone(),
+        poke: poke.clone(),
+    };
     tokio::task::spawn_local(actor.run(r, child, resize_rx, exit_tx));
-    Ok(Handle { pid, out, resize, exit, last_output, vt, rev })
+    Ok(Handle { pid, out, resize, exit, last_output, vt, rev, poke })
 }
 
 /// Resizes go through the write half, in order with the bytes around them.
@@ -132,6 +155,7 @@ struct Actor {
     rev: watch::Sender<u64>,
     out: mpsc::Sender<Out>,
     last: Rc<Cell<Instant>>,
+    poke: Rc<Notify>,
 }
 
 impl Actor {
@@ -157,6 +181,7 @@ impl Actor {
                 st = child.wait() => break st,
                 Ok(()) = resize.changed() => pending = Some(*resize.borrow_and_update()),
                 () = tokio::time::sleep(Duration::from_millis(50)), if pending.is_some() => {}
+                () = self.poke.notified() => self.rev.send_modify(|r| *r += 1),
             }
             // Both sizes change or neither: the emulator's follows the child's.
             if let Some((cols, rows)) = pending

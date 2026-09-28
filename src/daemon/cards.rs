@@ -223,6 +223,8 @@ pub(super) async fn deliver(
         return Err("was not typed into: the daemon is stopping".into());
     }
     let needle = needle(&clean(text));
+    // The paste is looked for on the live screen, where it lands.
+    h.to_live();
     let before = h.frame().text();
     // More rows than before: an echo of the last cast still on screen does not count.
     let was = shown(&before, &needle);

@@ -731,6 +731,72 @@ fn unview_stops_the_screen() {
     assert_eq!(f["rev"], 1);
 }
 
+/// How far back a frame or a damage says the view is.
+fn back(ev: &Value) -> Option<u64> {
+    match ev["t"].as_str() {
+        Some("frame") => ev["frame"]["back"].as_u64(),
+        Some("damage") => ev["back"].as_u64(),
+        _ => None,
+    }
+}
+
+#[test]
+fn scrollback_is_the_residents_and_typing_brings_it_back_to_the_live_screen() {
+    let d = Daemon::start("scroll", &[("STUB_HOOKS", "1")]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nSay hi to {self}.").unwrap();
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let mut c = Client::new(&d);
+    c.send(json!({"t": "view", "who": r["id"]}));
+    let mut s = Screen::default();
+    s.wait_for(&mut c, "stub-claude");
+    // One paste, which the stub echoes whole without a hook per line.
+    let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
+    let paste = format!("\x1b[200~{}\x1b[201~\r", lines.join("\r"));
+    c.send(json!({"t": "input", "who": r["id"], "bytes": paste.as_bytes()}));
+    s.wait_for(&mut c, "> line59");
+
+    c.send(json!({"t": "scroll", "who": r["id"], "rows": -10}));
+    let ev = c.until("the view 10 rows back", |ev| s.apply(ev) && back(ev) == Some(10));
+    assert!(ev["history"].as_u64().or(ev["frame"]["history"].as_u64()).unwrap() > 10, "{ev}");
+    assert!(!s.has("> line59") && s.has("> line49"), "{:?}", s.rows);
+    // Another client showing it sees the same rows: the view is the resident's.
+    let mut c2 = Client::new(&d);
+    c2.send(json!({"t": "view", "who": r["id"]}));
+    let f = c2.until("the second viewer's frame", |v| v["t"] == "frame");
+    assert_eq!(back(&f), Some(10));
+    // A focus report is not typing, and leaves the view where it is.
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"\x1b[I"}));
+    c.send(json!({"t": "list", "id": 5}));
+    c.until("the list after the focus report", |v| v["t"] == "list");
+    let mut c3 = Client::new(&d);
+    c3.send(json!({"t": "view", "who": r["id"]}));
+    assert_eq!(back(&c3.until("a third frame", |v| v["t"] == "frame")), Some(10));
+
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"typed\r"}));
+    c.until("the live screen", |ev| s.apply(ev) && back(ev) == Some(0));
+    // The stub reads the focus report as part of the line: a tab before it on screen.
+    s.wait_for(&mut c, "typed");
+    c2.until("the live screen, for the other viewer too", |ev| back(ev) == Some(0));
+
+    // A card is looked for on the live screen, so casting one scrolls there first.
+    c.send(json!({"t": "scroll", "who": r["id"], "rows": -5}));
+    c.until("the view 5 rows back", |ev| s.apply(ev) && back(ev) == Some(5));
+    let done = d.req(json!({"t": "cast", "id": 6, "card": "hi", "targets": [r["id"]]}));
+    assert_eq!(done["t"], "done", "{done}");
+    c.until("the live screen after the cast", |ev| s.apply(ev) && back(ev) == Some(0));
+
+    c.send(json!({"t": "scroll", "id": 7, "who": "nobody", "rows": -1}));
+    let e = c.until("a scroll error", |v| v["t"] == "error");
+    assert_eq!((e["id"].as_u64(), &e["error"]), (Some(7), &json!("no resident nobody")));
+    d.req(json!({"t": "banish", "who": r["id"]}));
+    c.send(json!({"t": "scroll", "id": 8, "who": r["id"]}));
+    let e = c.until("a scroll error for the departed", |v| v["t"] == "error" && v["id"] == 8);
+    assert!(e["error"].as_str().unwrap().contains("already departed"), "{e}");
+}
+
 #[test]
 fn recall_resumes_a_banished_resident_with_its_flags() {
     let d = Daemon::start("recall", &[]);

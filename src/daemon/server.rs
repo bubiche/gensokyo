@@ -358,7 +358,13 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::Input { who, bytes, key } => {
                 input(&shrine, &who, bytes, key).await.err().map(fail)
             }
-            Request::Scroll { .. } => Some(fail("no scrollback in this daemon".into())),
+            Request::Scroll { who, rows } => match live(&shrine, &who) {
+                Ok((_, _, h)) => {
+                    h.scroll(rows);
+                    None
+                }
+                Err(e) => Some(fail(e)),
+            },
             Request::Resize { cols, rows } => {
                 resize(&shrine, cols, rows);
                 None
@@ -402,6 +408,10 @@ async fn input(
         return Ok(());
     }
     shrine.borrow_mut().typed = true;
+    // A focus report is the terminal's, not typing: it leaves the view where it is.
+    if !matches!(bytes.as_slice(), b"\x1b[I" | b"\x1b[O") {
+        h.to_live();
+    }
     match tokio::time::timeout(INPUT_WAIT, h.input(&bytes)).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!("{name} has already departed")),

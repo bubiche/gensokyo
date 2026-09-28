@@ -22,7 +22,7 @@ use libghostty_vt::screen::CellWide;
 use libghostty_vt::style::{RgbColor, StyleColor, Underline};
 use libghostty_vt::terminal::{
     ColorScheme, ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode,
-    ModeKind, Options, PrimaryDeviceAttributes, SecondaryDeviceAttributes,
+    ModeKind, Options, PrimaryDeviceAttributes, ScrollViewport, SecondaryDeviceAttributes,
     TertiaryDeviceAttributes,
 };
 use libghostty_vt::{RenderState, Terminal};
@@ -30,6 +30,11 @@ use libghostty_vt::{RenderState, Terminal};
 /// The colours reported for OSC 10/11: iTerm2's default dark profile.
 const FG: RgbColor = RgbColor { r: 0xc7, g: 0xc7, b: 0xc7 };
 const BG: RgbColor = RgbColor { r: 0, g: 0, b: 0 };
+
+/// Scrollback per resident, in bytes, whatever the C header's "lines" says: measured, 10_000
+/// kept a single page (861 rows at 80 columns), and this, Ghostty's own default, keeps about
+/// 13,800 rows at 80 columns and 5,400 at 200.
+const SCROLLBACK: usize = 10_000_000;
 
 /// DECXCPR, which Claude Code's fullscreen renderer sends and Ghostty leaves unanswered.
 const XCPR: &[u8] = b"\x1b[?6n";
@@ -48,7 +53,8 @@ pub struct Vt {
 impl Vt {
     pub fn new(cols: u16, rows: u16) -> Vt {
         let (cols, rows) = (cols.max(1), rows.max(1));
-        let mut term = Terminal::new(Options { cols, rows, max_scrollback: 10_000 }).unwrap();
+        let max_scrollback = SCROLLBACK;
+        let mut term = Terminal::new(Options { cols, rows, max_scrollback }).unwrap();
         let replies = Rc::new(RefCell::new(Vec::new()));
         let r = replies.clone();
         term.on_pty_write(move |_, b| r.borrow_mut().extend_from_slice(b)).unwrap();
@@ -123,8 +129,15 @@ impl Vt {
         (self.term.cols().unwrap(), self.term.rows().unwrap())
     }
 
+    /// Scrolled back, the view stays as far from the live screen as it was: a new viewer's
+    /// nudge resizes by a row and back, and would move everyone's view otherwise.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        let back = self.scrolled().0;
         self.term.resize(cols.max(1), rows.max(1), 0, 0).unwrap();
+        let now = self.scrolled().0;
+        if back > 0 && now != back {
+            self.term.scroll_viewport(ScrollViewport::Delta(now as isize - back as isize));
+        }
     }
 
     /// Whether DEC private mode `n` is set (2004 bracketed paste, 2026 synchronized output, ...).
@@ -148,6 +161,25 @@ impl Vt {
             focus: self.mode(1004),
             alt: self.mode(1049) || self.mode(1047) || self.mode(47),
         }
+    }
+
+    /// Moves the view through the scrollback: `rows` back (negative) or forward, clamped at
+    /// either end, or with none, back to the live screen. Scrolled back, the view stays on the
+    /// same rows while output comes in, and the cursor is not shown. The alternate screen has no
+    /// scrollback, so there it does nothing.
+    pub fn scroll(&mut self, rows: Option<i32>) {
+        self.term.scroll_viewport(match rows {
+            Some(n) => ScrollViewport::Delta(n as isize),
+            None => ScrollViewport::Bottom,
+        });
+    }
+
+    /// Rows the view is scrolled back from the live screen, and rows of scrollback there are.
+    /// A few nanoseconds, against a frame's couple of hundred microseconds.
+    pub fn scrolled(&self) -> (u32, u32) {
+        let bar = self.term.scrollbar().unwrap();
+        let history = bar.total.saturating_sub(bar.len);
+        (history.saturating_sub(bar.offset) as u32, history as u32)
     }
 
     /// The visible screen as style runs.
@@ -187,7 +219,8 @@ impl Vt {
             runs.retain(|r| !r.text.is_empty());
             rows.push(runs);
         }
-        Frame { cols: self.term.cols().unwrap(), rows, cursor, back: 0, history: 0 }
+        let (back, history) = self.scrolled();
+        Frame { cols: self.term.cols().unwrap(), rows, cursor, back, history }
     }
 
     /// Encodes a key the way the child asked for: its kitty flags, modifyOtherKeys and

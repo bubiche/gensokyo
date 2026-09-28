@@ -1,191 +1,119 @@
 # gensokyo
 
-A bash + tmux cockpit for running several Claude Code sessions side by side:
-named residents in a status bar, a tab each, click one to work in it, desktop notifications
-when one needs you, broadcast "spell cards", and scheduled "rituals".
+Several Claude Code sessions side by side, one shown at a time. Each session is a **resident**
+of the shrine: a sidebar lists them all with what each is doing, the one you pick fills the rest
+of the screen, and a resident that needs you — a permission prompt, a question, a finished turn
+nobody has read — turns gold and rings. Prompts can be cast at several residents at once
+(**spell cards**) and fired on a schedule (**rituals**).
 
-**Status:** pre-alpha. The cockpit, summon/banish/list/recall, the status bar, the "needs you" notifications, the per-resident telemetry (model, context, cost, usage) and the spell cards work. So do rituals: ask a resident for one in words and it writes it, the cockpit's own clock fires it into a resident you can watch, and the shrine's timetable, the bar's next-fire field and `gensokyo ritual` are how you see it and stop it. A ritual fires into a fresh tab, into no tab at all (`headless`, which logs what it said), or into a resident that is already there.
+**Status:** pre-release. One Rust binary: a daemon that owns every resident's terminal, and a
+client that draws the shrine. It needs macOS and is built for iTerm2; other terminals mostly
+work. There is no installer yet: build it from source (below).
 
 ## Requirements
 
-**To run a release:** macOS, iTerm2 3.5 or newer, and Claude Code (≥ 2.1.224).
-Nothing else. tmux and jq are vendored from their official dependency-free builds
-(`vendor/README.md`).
+- macOS, and Claude Code (`claude` on `PATH`, 2.1.224 or newer).
+- iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
+  keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
+- To build: Rust (the version in `.tool-versions`), Zig **0.16.0** exactly (the pinned Ghostty
+  builds with nothing else; `zig version` says which you have), and git.
 
-Started from an iTerm2 tab, `gensokyo` runs its tmux session in control mode: the residents
-get a native iTerm2 tab each, the chips live in iTerm2's status bar, and no key belongs
-to gensokyo. Anywhere else — another terminal, or `gensokyo --tty` in iTerm2 — the plain tmux
-client draws the cockpit itself, with its own status bar and the `Ctrl-Space` keys. One tmux
-server serves both, but its status line can only be set up one way at a time, so detach one
-kind of client before attaching the other. `gensokyo doctor` says which one you are about to
-get, who is attached, and whether iTerm2 has the gensokyo profile that carries the chips.
-
-One iTerm2 setting has to be yours: **Settings > General > tmux > "When attaching, restore
-window as" > Tabs in the attaching window**. At what iTerm2 ships instead, every resident gets a
-macOS window of its own, and clicking one in the shrine opens yet another window rather than
-raising its tab. `gensokyo doctor` says which of the two you are set to; it never writes the
-setting, or any other iTerm2 preference.
-
-`gensokyo iterm setup` is the one file gensokyo may add: a *dynamic profile* named "gensokyo" in
-`~/Library/Application Support/iTerm2/DynamicProfiles/`, which iTerm2 picks up the moment it is
-written. It inherits everything — font, colours, keys — from your default profile and adds one
-thing to it, the status bar: one component for the chips, and one that holds only the residents
-who need you, drawn in gensokyo's gold so that it is the part of the bar your eye goes to.
-Start the cockpit from a tab using that profile (Profiles menu, or set it as the default) and
-the chips appear. `gensokyo iterm remove` deletes the file again; both refuse to touch a
-`gensokyo.json` they did not write.
-
-**To develop** (not needed for the release):
-
-| Tool | Why | Install |
-|---|---|---|
-| `shellcheck` | every commit is shellcheck-clean (`shellcheck -x -s bash bin/gensokyo tests/run.sh tests/stub-claude`, `-s sh install.sh uninstall.sh scripts/vendor.sh scripts/release.sh`; `-x` follows the `lib/*.sh` and `tests/cases/*.sh` sources) | `brew install shellcheck` |
-| `curl` | fetches the vendored binaries | preinstalled on macOS |
-| Claude Code | the real acceptance tests spawn real sessions | https://code.claude.com |
-
-`/bin/bash` 3.2 is the target for `bin/gensokyo` and the `lib/*.sh` files it sources
-(records, registry, tmux server and bar, attach, resident commands, recall, the shrine tab,
-hooks and notifications, telemetry, the iTerm2 profile); `install.sh` and `scripts/*.sh` are
-POSIX `sh`. Do not use bash 4 features.
-
-## Developing
+## Building
 
 ```sh
-git clone … gensokyo && cd gensokyo
-scripts/vendor.sh          # fetch tmux + jq for this machine into vendor/<os>-<arch>/
-scripts/vendor.sh --status
-bin/gensokyo doctor        # which tmux / jq / claude will be used, versions, server state
-bin/gensokyo               # attach the cockpit (--tty for the plain tmux client, --detach for the server alone)
-bin/gensokyo help          # command list; --json is the same for tools
-bin/gensokyo new ~/dev/x -n Marisa   # a resident in a tab of its own; also close <name>, list
-bin/gensokyo resume [Marisa]         # who has departed; with a name, bring that one back
-bin/gensokyo ritual                  # what is scheduled; also add, run, enable, disable, log, edit, new, remove
-bin/gensokyo reload                  # after changing bin/gensokyo or lib/*.sh: run the new code (Ctrl-Space l)
-bin/gensokyo quit                    # ask everyone to /exit, then close the cockpit (Ctrl-Space g q)
-tests/run.sh                         # unit tests + a headless smoke test with the stub claude (-v for names)
-                                     # the harness lives there, the tests in tests/cases/*.sh
-                                     # about 4 minutes, and SILENT until the end unless you pass -v:
-                                     # only failures print, so no output means nothing has failed yet.
-                                     # run one at a time - two at once fight over the same tmux sockets
-scripts/release.sh --out /tmp/x      # build the release tarballs from this checkout (--help for the rest)
+git clone https://github.com/bubiche/gensokyo && cd gensokyo
+scripts/ghostty.sh              # the pinned Ghostty source into vendor/, checked; needs zig 0.16.0
+cargo build --release           # target/release/gensokyo, linked against system libraries only
 ```
 
-Cutting a release: bump `VERSION` in `bin/gensokyo`, commit, then `git tag v0.1.0` and
-`git push --tags`. The tag runs `.github/workflows/release.yml` on a macOS runner — shellcheck,
-`bash -n`, and the vendored binaries downloaded and verified against their pins — then
-`scripts/release.sh` builds the three tarballs and the run publishes them with `SHA256SUMS`,
-a one-line `VERSION` and `install.sh` as release assets. The `VERSION` asset is
-how `curl | sh` and `gensokyo update` find the newest release: GitHub serves
-`releases/latest/download/VERSION` for whatever release is newest, so neither has to ask the
-API, which rate-limits by address. Running the workflow by hand (`workflow_dispatch`) does the
-checks and publishes nothing. The suite is not part of the job, because it starts real tmux
-servers and wants a quiet machine: run `tests/run.sh` yourself before tagging.
+Put `target/release/gensokyo` on your `PATH`; a symlink to it is fine, and finds the shipped
+names, cards and rituals in the checkout it was built in (`GENSOKYO_SHARE` points elsewhere).
 
-## Installing
+After a rebuild, `gensokyo restart` replaces the running daemon with the new binary and brings
+every resident back into its own conversation. Run it from a terminal of your own, not from
+inside a resident.
+
+## The shrine
+
+`gensokyo` with no command opens the shrine, starting the daemon if it is not running. The
+daemon keeps running after the client leaves: closing the terminal or detaching (`Ctrl-] d`)
+leaves every resident as it was, and `gensokyo` again shows them.
+
+Keys go to the resident on screen, except the **leader**, `Ctrl-]`, and the key after it. The
+sidebar's foot says so (` ^] then a key `), and once the leader is pressed the sidebar lists
+what comes next:
+
+| `Ctrl-]` then | |
+|---|---|
+| `n` / `c` | summon a resident / cast a spell card |
+| `b` / `r` | banish the one on screen / recall a departed one |
+| `t` | the timetable of rituals |
+| `x` | close the one on screen (`/exit`; a departed one leaves the sidebar) |
+| `j` / `k` | the next / previous resident in the sidebar |
+| `a` | the next resident that needs you |
+| `1`–`9` | the resident in that slot |
+| `[` | scroll back through the resident's scrollback |
+| `m` | mouse capture on or off |
+| `d` | detach: the client leaves, the residents keep running |
+| `q` | quit: every resident `/exit`s and the daemon stops |
+| `?` | help, with the glyphs |
+| `Ctrl-]` | send the resident a `Ctrl-]` of its own |
+
+With nobody on screen, or a departed resident on screen, the keys work without the leader.
+The wheel scrolls back through a resident's scrollback too. Scrolled back, `j`/`k` move a row,
+`b`/`f` a screen, `g` goes to the top and `q` or Esc back to the live screen, and anything
+else you type goes back to the live screen and to the resident. A resident's scrollback is its
+own, so two clients showing it scroll together.
+
+In a dialog, Enter does the main thing, Esc goes back one stage, and `y`/`n` answer the
+yes-or-no ones.
+
+Everything is also a click: the sidebar's lines focus a resident, and every button carries the
+key that does the same thing (`[summon n]`). `[mouse: shrine m]` turns mouse capture off, which
+hands selection back to iTerm2; with it on, a drag in the resident's screen selects text and
+copies it with `pbcopy` (`GENSOKYO_COPY` names another command).
+
+A resident that has left — `/exit`, a banish, a crash — stays in the sidebar as departed, with
+`[recall r]` and `[close x]`. Recall brings it back into its own conversation with the flags it
+was summoned with; `Ctrl-] r` lists everyone who has departed, this run or an earlier one.
+`Ctrl-] q` asks every resident to `/exit` and stops the daemon; the next `gensokyo` offers them
+all back under recall.
+
+The same things from a shell, for scripts and for the residents' own skills:
 
 ```sh
-curl -fsSL https://github.com/bubiche/gensokyo/releases/latest/download/install.sh | sh
-                                # the release: into ~/.gensokyo, linked at ~/.local/bin/gensokyo
-gensokyo doctor                 # shows which copy is on PATH, the plugin dir and what resolved
-gensokyo iterm setup            # add the "gensokyo" iTerm2 profile (iterm remove takes it away)
+gensokyo list [--all] [--json]          # who is here: slot, state, directory, model, context
+gensokyo new ~/dev/x -n Marisa -m haiku # summon; --prompt gives it a first prompt
+gensokyo resume [Marisa]                # the departed; with a name, slot or id, bring one back
+gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
+gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar
+gensokyo broadcast status-report all    # cast a spell card
+gensokyo ritual                         # what is scheduled (the section below)
+gensokyo quit                           # everyone /exit, then the daemon stops
+gensokyo restart                        # a new daemon, the same residents
+gensokyo help <command>                 # every command has its own
 ```
 
-From a checkout, or from a release tarball unpacked by hand, the same script installs what is
-already there instead of downloading anything:
+## When a resident needs you
 
-```sh
-./install.sh                    # links ~/.local/bin/gensokyo -> bin/gensokyo; fetches tmux + jq if needed
-./install.sh --bin-dir ~/bin    # another link directory (or GENSOKYO_BIN_DIR)
-./install.sh --no-fetch         # never download; needs vendored or system tmux >= 3.3 and jq >= 1.6
-```
+Every resident is launched with `--settings` carrying a few hooks and a status line (they merge
+with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a resident is
+doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished turn you
+have not seen, `✧` a question it asked. A resident that needs you is gold. When it is not the
+one on screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
+(OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
 
-`install.sh` is POSIX `sh`, writes nothing outside the gensokyo directory except that one
-symlink, and prints the `export PATH=…` line if the link directory is not on your PATH. It
-decides which of the two it is doing by looking beside itself: piped into `sh` there is no
-`bin/gensokyo` next to it, so it downloads the newest release for this Mac, checks it against
-the release's `SHA256SUMS` and refuses to unpack a tarball that does not match. Options go
-after `sh -s --` when it is piped (`… | sh -s -- --dir ~/opt/gensokyo`), and `--version 0.1.0`
-takes a particular release rather than the newest. Running from the checkout without installing
-also works (`bin/gensokyo`); a resident's shell finds that copy as `$GENSOKYO_BIN`.
-
-```sh
-gensokyo update                 # fetch the newest release and swap this install for it
-gensokyo update --check         # only say what is out there
-gensokyo uninstall              # remove the link and the profile, then ask about config and state
-```
-
-`update` replaces the install tree in one rename after it has verified the download, so an
-interrupted update leaves the old one working; your config, state and rituals live outside the
-tree and are not touched. In a git checkout it refuses and tells you to `git pull`. `uninstall`
-removes the symlinks that point at that copy and the `gensokyo.json` profile if gensokyo wrote
-it, then asks before deleting `~/.config/gensokyo`, `~/.local/state/gensokyo` and the install
-tree itself — `--yes` answers yes to both, `--keep-data` keeps the first. It refuses while the
-cockpit is running (`gensokyo quit` first), and it never deletes a git checkout. Neither command
-touches Claude Code, its settings or its sessions.
-
-If `gensokyo` itself is already gone — the tree deleted, or only the symlink removed — there is
-a standalone `uninstall.sh` beside `install.sh`, in the tarballs and as a release asset:
-
-```sh
-curl -fsSL https://github.com/bubiche/gensokyo/releases/latest/download/uninstall.sh | sh
-                                # says what is left; deletes nothing
-… | sh -s -- --yes              # delete all of it (--keep-data keeps config, rituals, records)
-```
-
-It asks no questions, so nothing is ever deleted without `--yes`, and it assumes nothing about
-the install tree. gensokyo writes in four places and nowhere else — its own tree,
-`~/.config/gensokyo`, `~/.local/state/gensokyo` and one iTerm2 dynamic profile of its own — and
-those four are what it looks for, plus a `gensokyo` symlink pointing into a tree and a tmux
-socket left behind by a stopped server. It refuses to remove anything while the cockpit is still
-running, and leaves alone a `gensokyo.json` that carries somebody else's Guid.
-
-`bin/gensokyo`
-reads no `~/.tmux.conf` and never edits `~/.claude/settings.json`: it runs its own tmux server
-(`tmux -L gensokyo`) with `share/tmux.conf`, and per-user tweaks go in `~/.config/gensokyo/`
-(`config` for KEY=value settings such as `PREFIX=C-Space`, `tmux.conf` sourced last).
-
-## Using the cockpit
-
-`gensokyo` in an iTerm2 tab opens the cockpit: gensokyo's own first tab, the **shrine**, and one
-iTerm2 tab per resident after it. No key belongs to gensokyo there — everything is a click.
-
-- The shrine draws a line per resident and a row of buttons under them. Click `[ summon ]`,
-  click one of the directories it offers (or `other directory…` and type a path, Tab completes),
-  type a name or press Enter for a random one: a tab appears with that resident in it.
-- Click a resident's line in the shrine, or its tab in the tab bar, to work in it. A resident
-  fills its tab; nothing is ever split, tiled or zoomed, and you can drag a tab out to watch two
-  at once.
-- `[ banish ]` asks which resident and then asks again before interrupting one: it stops
-  mid-thought and its tab shows the departed screen, where `[ close ]` finally lets the tab go.
-  `[ recall ]` lists everyone who has departed, this run or an earlier one; `[ quit ]` closes
-  the whole cockpit.
-- `[ cast ]` sends one prompt to several residents at once; the section below is about that.
-- Every button carries the letter that does the same thing (`[ summon n ]`) for when your hands
-  are already on the keyboard, and `[ ? ]` lists them all.
-
-Shell > tmux > Detach leaves everyone running; `gensokyo` again brings all the tabs back. The
-CLI (`gensokyo new`, `close`, `resume`, `list`, `broadcast`, `quit`) does the same things for
-scripts and for gensokyo's own use, but nothing in the cockpit needs you to type it.
-
-With the plain tmux client — `gensokyo --tty`, or any terminal that is not iTerm2 — the
-shrine is a window instead of a tab, and the same actions are on `Ctrl-Space g` and a letter,
-with `Ctrl-Space g ?` listing them.
-
-`gensokyo reload` (the `reload` button on the shrine tab, or `Ctrl-Space l` under `--tty`)
-runs the code that is on disk now: the tmux options, the key bindings, the bar style, the
-pinned binaries, and the two processes gensokyo runs of its own - the shrine's loop and the
-clock behind the status bar - without touching a single resident. Editing `lib/*.sh` does not
-reach anything already running, so this is what to press after a change; two things it cannot
-reach are the settings a resident was launched with (a change to the hooks needs that resident
-recalled) and the environment the tmux server itself inherited, such as `PATH` or a newly
-vendored tmux, which needs the cockpit restarted.
+The status line reports feed the rest: each sidebar line shows the model and context used, the
+title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
+and cost, and the sidebar's foot has the account's 5-hour and weekly usage. Inside the resident,
+gensokyo draws its own one-line status line; `STATUSLINE=user` in the config runs your own
+`statusLine` command instead, with the same input.
 
 ## Spell cards
 
-A **spell card** is a prompt in a file. `[ cast ]` on the shrine tab asks which card, then who
-gets it — everyone, everyone who needs you, everyone who is resting, or one resident — and
-types it into each of their prompts, exactly as if you had typed it there yourself. Four ship
-with gensokyo:
+A **spell card** is a prompt in a file. `Ctrl-] c` asks which card, then who gets it —
+everyone, everyone who needs you, everyone resting, or one resident — and types it into each
+one's prompt as if you had typed it there. Four ship with gensokyo:
 
 | Card | What it asks for |
 |---|---|
@@ -194,9 +122,9 @@ with gensokyo:
 | `Review Sign "Second Opinion"` | one resident asks another to review its uncommitted diff, and iterates until it hears LGTM |
 | `Time Sign "Wrap Up"` | summarize the session, leave the tree clean, then go quiet |
 
-Your own go in `~/.config/gensokyo/spellcards/<name>.md`, and writing one is writing a file —
-ask any Claude Code session to do it. The name uses letters, digits, `.`, `_` and `-`. A little
-frontmatter is optional; the rest is the prompt:
+Your own go in `~/.config/gensokyo/spellcards/<name>.md`, and a card of yours shadows a shipped
+one of the same name. The name is letters, digits, `.`, `_` and `-`, starting with a letter or
+digit. A little frontmatter is optional; the rest is the prompt:
 
 ```markdown
 ---
@@ -209,50 +137,33 @@ whether it agrees, and say that its reply must come back to you as a SendMessage
 addressed to {self}.
 ```
 
-Four placeholders are filled in for each resident the card reaches: `{self}` is its own name,
-`{cwd}` its directory, `{residents}` the names of the other live residents (or `nobody`), and
-`{peer}` the resident you pick after the target. A card whose frontmatter says
-`peer: required` is a **pair card**: it goes to one resident, and the shrine asks who that
-resident should talk to.
+`{self}` is the resident's own name, `{cwd}` its directory, `{residents}` the other live
+residents (or `nobody`), and `{peer}` the resident you pick after the target. A card with
+`peer: required` is a **pair card**: it goes to one resident, and the shrine asks whom it talks
+to. A frontmatter line that means nothing (`pear: required`) keeps the card from being cast,
+and the picker says why.
 
-Residents talk to each other with `SendMessage`, and Claude Code keeps no thread of such an
-exchange — so the rules of one live in the card's own text, where they cost a resident nothing
-until that card is cast. The sentence that matters most is the reply address: **a card that
-asks for an answer has to say that the answer comes back as a `SendMessage` addressed to
-`{self}`**. Told only what the reply should look like, the resident being asked writes its
-findings into its own pane, where the resident waiting for them never sees it — and the wait
-looks exactly like `SendMessage` being broken. `Review Sign "Second Opinion"` says it; so
-should yours.
+Residents talk to each other with `SendMessage`, and Claude Code keeps no thread of an
+exchange, so a card that asks for an answer has to say that **the answer comes back as a
+`SendMessage` addressed to `{self}`**. Told only what the reply should look like, the resident
+asked writes it into its own screen, where the one waiting never sees it.
 
-Casting never types into a resident that has something open — a permission or plan dialog, a
-question of its own, or the workspace-trust dialog a session shows the first time it is
-summoned into a directory. The card would go into the dialog and the Enter after it would
-*answer* the dialog, which is not what you asked for. Those residents are named and left out
-rather than skipped quietly, and a card that does not reach a resident's prompt is reported as
-not sent rather than counted:
+Casting never types into a resident that has something open — a permission dialog, a
+question of its own, the trust dialog of a new directory — because the Enter after the card
+would answer the dialog. Those residents are named and left out, and a card that does not show
+up in a resident's prompt is reported as not sent:
 
 ```
 $ gensokyo broadcast status-report all
-gensokyo: broadcast: Cirno is still starting up; left out
-cast Spirit Sign "Status Report" on 2 residents
+cast Spirit Sign "Status Report" on Reimu and Sakuya; Marisa has a dialog waiting for you; left out
 ```
-
-Casting also clears a resident's gold `✦`: gensokyo typed for you, so whatever it was waiting
-to be told, it has been.
-
-`gensokyo broadcast` is the same thing for scripts: `gensokyo broadcast` alone lists the cards,
-`gensokyo broadcast status-report all` casts one, and
-`gensokyo broadcast second-opinion Marisa --with Sakuya` casts a pair card. A card is named by
-its filename or its title, or by enough of either to pick out one card. There is no way to
-broadcast free text: telling one resident something is typing in its pane, and a prompt worth
-sending to everybody is worth a file.
 
 ## Rituals
 
 A ritual is standing work on a schedule: a markdown file that says when to run, where, and what
-to ask for. The cockpit's clock checks the schedules every twenty seconds, and a ritual that has
-come round is summoned as a resident of its own - a tab you can watch, take over, or ignore. The
-tab you were working in keeps the focus.
+to ask. The daemon's clock checks the schedules every twenty seconds, and a ritual that has come
+round is summoned as a resident of its own, which you can watch, take over or ignore. The
+resident on screen keeps the focus.
 
 ```
 ~/.config/gensokyo/rituals/slack-morning.md
@@ -270,244 +181,94 @@ Check Slack for anything addressed to me since your last run, summarize what
 needs a reply, and list the open questions.
 ```
 
-A ritual with `headless: true` gets no pane and no tab: the run is a `claude -p` in the
-background, and what it said lands in a log of its own beside the ritual's notes, with a
-notification when it finishes. That is the shape for work whose answer you want and whose working
-you do not - and because there is nobody to answer a permission prompt, a tool such a run needs
-belongs in its `allowed_tools`, which the log says by name when one was refused. It needs no
-answer to Claude Code's workspace-trust dialog either: `claude -p` never shows one.
+The shortest way to one is to ask a resident: *"every weekday at 9:05 check Slack for messages
+to me and summarize them"*. Its `gensokyo-ritual` skill says back what it is about to schedule,
+where, and what it will need permission for, and writes the file once you agree. "Pause that"
+and "what have I got scheduled?" work the same way.
 
-```sh
-gensokyo ritual log inbox-zero       # the journal, and the newest headless run's log under it
-```
+- **`target`**: `new` (the default) is a fresh session per fire. `persistent` keeps one session
+  for the ritual: the first fire starts it and every later fire is typed into it, recalling it
+  first if it has left. `target: <name>` types the prompt into a resident you run yourself.
+  A fire that cannot be delivered says so in the journal and as a notification.
+- **`headless: true`**: no resident at all; the run is a `claude -p` in the background, what it
+  said goes to a log beside the ritual's notes, and a run still going after an hour is stopped.
+  Nobody is there to answer a permission prompt, so what it needs goes in `allowed_tools`; the
+  log names any tool it was refused.
+- **`keep`**: how long a finished run's resident stays, `2h` by default; idle time, so typing
+  in it starts the count again. `keep: forever` leaves it to you.
+- **`overlap`**: a fire while the last run is still going is skipped; `parallel` runs a second
+  one beside it and `queue` runs it as soon as the first is done (one deep, dropped after an
+  hour).
+- **`catch_up`**: a fire missed while the machine slept or the daemon was down is made up once,
+  for the newest miss within a week; `catch_up: false` makes up nothing.
 
-`target` decides where a fire lands. The default is `new`, a fresh session per run - a clean
-context, and it fails independently of every other run. `target: persistent` gives the ritual one
-session of its own instead: the first fire starts it, every later fire is typed into it, and if it
-has departed - or its cockpit stopped - the fire recalls it first. That is for a job where one
-ongoing conversation is the point, and the bill and the compaction come with it. `target: <name>`
-types the prompt into a resident you manage yourself, and gets the prompt alone: that session was
-summoned by hand, so gensokyo will not make it ask permission for a file outside its directory
-every morning. Either way, a fire that cannot be delivered - nobody of that name, a departed
-screen, a dialog holding the resident open - says so in the journal and in a notification instead
-of going missing.
-
-A finished run's tab does not stay for ever: `keep` is how long it sits there after the run
-ends, `2h` unless the ritual says otherwise, and when it runs out the resident is asked to leave
-and its tab goes - the journal says so, and the session is still in `gensokyo resume`. `keep`
-counts idle time, so anything you type in that tab puts its whole life back, and a run waiting
-on a permission prompt has not finished and is never taken. `keep: forever` leaves the tab to
-you.
-
-A default run is a fresh session, so nothing accumulates a year of context - and every prompt it
-is sent carries a sentence naming the ritual's own `memory.md`, which is where the continuity
-lives: what it already handled, what it is waiting on. A fire missed while the machine slept is
-made up once, at the next start, for the most recent miss within a week.
-
-A fire that lands while the last run is still going is skipped and says so in the log; `overlap`
-is how to say otherwise. `parallel` starts a second run beside the first, and `queue` holds the
-fire and runs it as soon as the ritual is free - one fire deep, newest wins, and a fire whose run
-took over an hour to get out of the way is dropped rather than started that late, with the log
-saying which. It is a `target: new` setting, since only a fresh run per fire can collide with
-itself: a prompt sent into a session that is mid-turn is queued by Claude Code.
-
-The shortest way to a ritual is to ask a resident for one: *"every weekday at 9:05 check Slack
-for messages to me and summarize them"*. It has a skill for exactly this, so it will say back
-what it is about to schedule, where, and what it will need permission for, and write the file
-once you agree. "Pause that" and "what have I got scheduled?" go the same way.
+Every fire's prompt names the ritual's own `memory.md`, so a fresh session per run still knows
+what it handled last time.
 
 By hand, or to see what is there:
 
 ```sh
-gensokyo ritual                      # what is scheduled, when each fires next, and anything wrong with one
-gensokyo ritual new nightly-checks   # a template in $EDITOR; it arrives disabled
-gensokyo ritual run nightly-checks   # fire it now - which is how you approve its prompts once
-gensokyo ritual log nightly-checks   # every fire, skip and complaint
+gensokyo ritual                      # what is scheduled, when each fires next, and why one is not firing
+gensokyo ritual new nightly-checks   # a commented template in $EDITOR; it arrives paused
+gensokyo ritual run nightly-checks   # fire it now: the way to approve its prompts once
+gensokyo ritual log nightly-checks   # its fires, skips and complaints, and the newest headless log
 gensokyo ritual disable slack-morning
-gensokyo ritual remove slack-morning # the file, its notes and its journal: gone, and not undone
-gensokyo ritual add --name x --schedule '@daily' --cwd . --prompt-file p.txt   # what the skill calls
+gensokyo ritual remove slack-morning # the file, its notes and its journal, for good
 ```
 
-The shrine tab's `[ timetable t ]` is the same thing without the typing: every ritual with the
-minute it fires next, and clicking one gives you its schedule, its last run, what is wrong with
-it if anything, and the buttons worth having there - `[ run now ]`, `[ pause ]` and a
-`[ remove ]` that asks before it deletes anything. The
-next fire is also on the shrine's main screen and in the status bar, so a schedule you set up
-this morning is visible without asking anything.
+`Ctrl-] t` is the **timetable**: every ritual with when it fires next; pick one for its
+schedule, its last run, what is wrong with it if anything, and run now, pause or resume, and
+remove (which asks). The ritual that fires next is always on the sidebar's `⏲` line.
 
-Three examples ship, paused, in `share/rituals/`: `slack-morning`, `nightly-checks` and
-`inbox-zero`. They are there to be copied - `gensokyo ritual edit slack-morning` takes a copy
-into `~/.config/gensokyo/rituals/` and opens that, so an update cannot overwrite your version
-and your version cannot be lost in the install tree. Each one names a directory that is not on
-your machine on purpose; that is the line to change first.
+Three examples ship paused in `share/rituals/`: `slack-morning`, `nightly-checks` and
+`inbox-zero`. `gensokyo ritual edit slack-morning` makes a copy of yours and opens it; each
+names a directory that is not on your machine, which is the line to change first. Run a new
+ritual by hand once before leaving it to the clock. A directory Claude Code has never been
+trusted in is refused with the reason: a run that stops at the trust dialog would sit there,
+and every later fire would skip itself as still going.
 
-Run a new ritual by hand once before leaving it to the clock: whatever it asks permission for,
-you can approve in the pane and then write into `allowed_tools` (or set `mode: acceptEdits`), and
-a run nobody is there to answer just waits with a gold chip until you look at it. A directory
-Claude Code has never been trusted in is refused with the reason, because a run that stops at
-that dialog is alive - and would make every later fire skip itself as "still going".
-
-### Firing on a day you never opened a terminal
-
-Nothing fires while the cockpit is down: the clock that checks the schedules is a process in the
-tmux server, so a ritual set for nine in the morning wants gensokyo already running at nine. That
-is what `gensokyo --detach` is for - the server and the clock, no window, no attach - and this is
-how to have it run without remembering to:
-
-```sh
-gensokyo ritual login setup    # launchd starts the cockpit when you log in
-gensokyo ritual login          # whether it is on, which copy it starts, and what it last said
-gensokyo ritual login remove   # stop it; a cockpit already running keeps running
-```
-
-`setup` writes one launch agent of gensokyo's own to
-`~/Library/LaunchAgents/io.github.bubiche.gensokyo.plist` and hands it to launchd, which runs it
-then and there - so you find out it works now rather than at your next login. `gensokyo
-uninstall` and `uninstall.sh` take it away again, and launchd's own configuration is never
-touched. Anything the agent says goes to `login.log` in the state directory, which
-`gensokyo ritual login` reads back to you, and `gensokyo doctor` has a line for it.
-
-Two things are worth knowing. A login agent runs with almost no `PATH`
-(`/usr/bin:/bin:/usr/sbin:/sbin`), and `claude` is not on it, so `setup` records the `PATH` you
-ran it with and the agent uses that - meaning a `claude` that later moves somewhere your shell
-finds a different way wants a `setup` again. And there is one agent per Mac, not one per copy of
-gensokyo: two would race for the same tmux socket at login, so setting up from a second copy
-replaces the first. `gensokyo ritual login` always prints the copy in the agent, which is not
-necessarily the one you asked.
-
-This is still a machine that has to be awake and logged in. Rituals that must fire whatever the
-lid is doing belong in Claude Code's own `/schedule` cloud routines; `catch_up` covers a laptop
-that slept through one.
-
-## When a resident needs you
-
-Every resident is launched with `--settings` carrying a few hooks (they merge with the user's
-own hooks, nothing in `~/.claude` changes). The hooks call `gensokyo _hook`, which records what
-the resident waits for and turns its chip gold: `✦` for a permission prompt or a finished turn
-nobody has looked at yet, `✧` for a question it asked. The glyph goes on that resident's tab
-title too, so the tab bar shows who is waiting. The first transition into a waiting state also
-brings a desktop notification (`osascript` on macOS, `notify-send` on Linux when present) and a
-terminal bell, which marks the tab in iTerm2. Under the plain client it shows a tmux message
-on top of that; iTerm2 draws no tmux messages, so none is sent to it. Desktop alert and bell
-are skipped when you are already watching that resident: in iTerm2, when it is the application
-in front and the tab you are looking at is that resident's - not merely the last cockpit tab
-you visited, since an ordinary iTerm2 tab beside the cockpit counts as looking away; with the
-plain client, when its pane is on screen in a client you touched in the last ten seconds.
-Nothing repeats while the resident keeps waiting, and typing in the resident clears the flag.
-`~/.config/gensokyo/config` can set `NOTIFY_TOAST`, `NOTIFY_DESKTOP` or `NOTIFY_BELL` to `off`.
-macOS asks once whether your terminal application may show notifications; `gensokyo doctor`
-reminds you.
-
-## Departing and coming back
-
-`/exit` inside a resident (or the shrine's `[ banish ]`, or `gensokyo close Youmu`) ends the
-Claude Code session; the tab stays and shows `Youmu has left the shrine` with `[ recall ]` and
-`[ close ]` to click, or `r` and `x` to press. The session is Claude Code's, so it can be
-resumed as long as its transcript exists under `~/.claude/projects/`. The shrine's `[ recall ]`
-button lists everyone who has departed, newest first, including residents from earlier runs of
-the cockpit (their records move to the state directory's `departed/` when the tmux server
-restarts); clicking one brings it back, into its own tab if that is still open and otherwise
-into a new one. `Ctrl-Space g r` is the same list under `--tty`, and `gensokyo resume` is the
-command behind both — with a name, slot or session id it recalls that one, alone it prints the
-list, and `--json` gives the same to tools. A recalled resident keeps its session id, name and
-transcript, gets the same launch flags as at summon time, and the hooks and status line again;
-the first prompt given at summon is not replayed.
-
-The shrine's `[ quit ]` button closes the whole cockpit, and asks before it does: everyone still
-here is asked to `/exit`, and once they have gone - or twenty seconds later, whichever comes
-first - the tmux server stops, which takes the shrine, the clock and every tab with it; in iTerm2
-that is the tmux tabs, and the window they were in stays. `gensokyo quit` and, under `--tty`,
-`Ctrl-Space g q` do the same thing. Nothing is lost by it: the next `gensokyo` finds the
-records of everyone who was here and offers them all back under `[ recall ]`.
-
-Claude Code asks its workspace trust question the first time it runs in a directory. That
-dialog appears inside the pane like any other prompt; the hooks do not fire before it is
-answered, so a fresh resident that sits in `starting` for long is usually waiting for that.
-
-## What each resident reports
-
-The same `--settings` points the resident's Claude Code status line at `gensokyo _statusline`.
-Claude Code feeds it JSON after every API response (model, effort, context window, cache hit
-rate, cost, and on Pro/Max/Team accounts the 5-hour and weekly usage); gensokyo keeps the last
-report per resident under its state directory and shows it everywhere:
-
-- **Chips**: `1 ✦ Reimu Sonnet 42%`, model and context used. In iTerm2's status bar (left),
-  where a resident who needs you comes first; row 1 of the tmux bar under `--tty`, where the
-  chip itself turns gold. They follow a hook at once and are refreshed every three seconds.
-- **Needs you**: `✦ Reimu · ✧ Marisa needs you`, in iTerm2's second status bar component and
-  in gold — the one thing in the bar with a colour of its own. An iTerm2 component's colour
-  covers all of its text, so the only way to say one thing more loudly than the rest is to give
-  it a component to itself; when nobody is waiting it holds nothing and no gold appears. Under
-  `--tty` there is no such thing: the chip is already gold there, with a `✦ 2` count at the
-  right of row 1. The colour is `COLOR_AWAIT` from your config, read when the profile is
-  written — change it and run `gensokyo iterm setup` again.
-- **Usage**: the account-wide numbers from the newest report,
-  `5h ▓▓▓░░░░░░░ 37% ↻2h11m   wk ▓▓▓▓▓▓░░░░ 62% ↻3d4h` (hidden on API-key accounts), after the
-  chips in iTerm2's status bar, or at the right of row 2 under `--tty`.
-- **The shrine tab**: gensokyo's own first tab draws a line per resident - slot, state, name,
-  directory, branch, the same telemetry as the border, and what a resident who needs you is
-  waiting for. It redraws every three seconds and the moment a hook has news. Click a resident
-  to bring its tab to the front, and the buttons under them to summon, banish or recall one;
-  every button carries the letter that does the same thing, and `?` lists them.
-- **Pane border**: `1 Reimu · gensokyo ⎇ main · Sonnet 5→⚖ Opus · high · plan · ⚡91% · $0.42`:
-  directory and branch (read from `.git/HEAD`, no git needed), model and advisor model (from
-  the resident's settings chain), effort, permission mode (from the hooks: known after the first
-  prompt; a Shift+Tab shows at the next prompt), session cache hit rate, cost. Unknown fields
-  are left out.
-- **Inside the pane**: gensokyo's own one-line status line,
-  `Sonnet 5→⚖ Opus · medium · ▓░░░░░░░░░ 12% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m`
-  (context bar with the window size, session and per-turn cache, cost, lines added/removed, age).
-  Prefer your own Claude Code status line? `STATUSLINE=user` in the config makes gensokyo run
-  your `statusLine` command with the same JSON after recording it, output untouched.
-- **`gensokyo list`** (and `Ctrl-Space g w` under `--tty`) adds a line per resident with all
-  of it plus the age of the data, and a `usage` line; `list --json` carries the same under `telemetry`
-  (null until the first report) and `branch`.
-
-Numbers refresh only when Claude Code calls the API, so a resident idle for hours shows its
-last values; the age tells. Sessions not started by gensokyo have no telemetry.
-
-Environment overrides for tests and CI: `GENSOKYO_TMUX`, `GENSOKYO_JQ`, `GENSOKYO_CLAUDE`
-(binaries), `GENSOKYO_STATE_DIR`, `GENSOKYO_CONFIG_DIR`, `GENSOKYO_SOCKET`, `GENSOKYO_ITERM_DIR`
-(where the dynamic profile is written). `tests/stub-claude` stands in
-for `claude` (registry, names, /rename, /exit) so the cockpit runs without Claude Code or a login:
-`GENSOKYO_CLAUDE=$PWD/tests/stub-claude GENSOKYO_SOCKET=t bin/gensokyo`. `tests/run.sh` does exactly
-that on its own socket and state dir, so it can run in CI.
+Rituals fire only while the daemon runs, and on a machine that is awake. A laptop whose lid was
+shut through a fire makes it up at the next tick after it wakes.
 
 ## What residents are told
 
-Almost nothing, on purpose: a resident's context window is your budget, and anything gensokyo
-teaches it sits there for the whole session whether it is used or not. Everything the cockpit
-does is a click, so no resident is taught how to start, close, recall or switch between the
-others — you do that yourself, in one gesture, and their contexts stay yours to spend.
+Almost nothing, on purpose: a resident's context window is your budget. Each is launched,
+without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
+`--append-system-prompt`: the name it lives under, that the first message of an exchange with
+another session is the `gensokyo-peers` skill's to write, and that standing schedules are
+gensokyo's, not Claude Code's own. The two skills carry what a click cannot: `gensokyo-peers`
+writes an opening message that says who is asking, what is wanted, the round cap and the reply
+address; `gensokyo-ritual` turns "every weekday at 9:05" into a ritual file. Only a skill's
+description sits in a resident's context; the rest is read when it is used.
 
-What every resident is launched with, per session and without touching `~/.claude`, is
-`--plugin-dir share/plugin` and a three-sentence `--append-system-prompt`: the name it is
-living under, that the other sessions in `claude agents` can be written to with `SendMessage`
-but that the first message of an exchange is the `gensokyo-peers` skill's to write, and that a
-standing schedule belongs to gensokyo rather than to Claude Code's own scheduling. The last two
-are the only things a click cannot express.
+## Files
 
-The plugin carries two skills, and both are there for the same reason: they are the work a
-click cannot express. Casting a spell card is a button and needs no words spent on it, and a
-card's own text carries whatever rules that card needs — but an exchange you start by *typing*
-("get Sakuya to review this") has no card to carry them, and the rules are not guessable:
-Claude Code keeps no thread, so the opening message has to name who is asking, what is wanted,
-the reply shape, the round cap, and above all the reply address. That is `gensokyo-peers`. A
-schedule is the other: a ritual is a file with a cron line, a directory and a prompt written
-for a session that will not remember this conversation, and "every weekday at 9:05" is not a
-file anyone wants to write by hand. That is `gensokyo-ritual`, which also carries the two
-things a scheduled run cannot be trusted to get right on its own — say back what it is about to
-create before creating it, and pass on the warning when the directory has never had Claude
-Code's trust prompt answered. Only the frontmatter description of a skill sits in a resident's
-context; the rest is read if and when it is used.
+- `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `rituals/`.
+  `GENSOKYO_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gensokyo`.
+- `~/.local/state/gensokyo/`: `residents/` and `departed/` (one JSON record each),
+  `daemon.log`, `run/` (the socket and locks) and each ritual's notes and journal.
+  `GENSOKYO_STATE_DIR` moves it.
 
-Both skills are named in that paragraph as prohibitions — *never* compose that first message
-yourself, *never* use Claude Code's own scheduling — and that phrasing is doing real work. A
-resident merely told it *may* use `gensokyo-peers` does not: asked to "get Aya to review the
-uncommitted diff", it writes a perfectly reasonable message that never says where the answer
-should go, and the review lands in Aya's own pane where nobody is looking. Named as a
-prohibition, the same request loads the skill and the message comes back.
+## Developing
 
-The resident being written *to* is taught nothing at all: given one well-formed message it
-keeps the convention it was addressed with, tag and all, without ever having been told the
-format.
+```sh
+scripts/ghostty.sh                       # once, and again whenever its pin changes
+cargo nextest run                        # the suite, about 25 s (cargo test works too, slower)
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+```
+
+CI runs the same three on macOS. The tests start real daemons on the stub in
+`tests/stub-claude`, which stands in for `claude` (hooks, the registry, `/exit`), each in a
+state directory of its own under `target/`, so nothing touches yours and no Claude Code login is
+needed. A changed screen snapshot fails its test and leaves a `.snap.new` beside the old one in
+`tests/snapshots/`; read it, then `cargo insta review` (cargo-insta) or rename it over the old.
+
+- `src/daemon/`: the daemon, on one thread: the shrine, each resident's PTY and emulator
+  (libghostty-vt), the socket, hooks, spell cards and the ritual clock.
+- `src/client/`: the shrine's screen (ratatui), keys, mouse and selection.
+- `src/cli/`: the commands; `src/proto.rs` is the socket's NDJSON.
+- `src/vt.rs`: the emulator adapter; `src/ritual/` and `src/card.rs` the two file formats.
+
+`GENSOKYO_CLAUDE` points at another `claude`, `GENSOKYO_CLIENT_LOG` writes the client's own
+trace, and `daemon.log` has one JSON line per event, panics included.

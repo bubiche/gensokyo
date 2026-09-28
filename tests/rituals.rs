@@ -400,6 +400,8 @@ fn a_rituals_dir_keeps_its_stamp_session_journal_and_runs() {
         std::fs::write(d.runs().join(format!("2026092{i}-090000.1.log")), "").unwrap();
         std::fs::write(d.runs().join(format!("2026092{i}-090000.1.json")), "").unwrap();
     }
+    // The oldest is still going: its files stay whatever its age.
+    std::fs::write(d.runs().join("20260921-090000.1.pid"), "").unwrap();
     d.trim_runs(2);
     let mut left: Vec<String> = std::fs::read_dir(d.runs())
         .unwrap()
@@ -409,6 +411,9 @@ fn a_rituals_dir_keeps_its_stamp_session_journal_and_runs() {
     assert_eq!(
         left,
         [
+            "20260921-090000.1.json",
+            "20260921-090000.1.log",
+            "20260921-090000.1.pid",
             "20260924-090000.1.json",
             "20260924-090000.1.log",
             "20260925-090000.1.json",

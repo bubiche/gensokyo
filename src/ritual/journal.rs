@@ -111,7 +111,8 @@ impl Dir {
         self.path.join("runs")
     }
 
-    /// The newest `keep` runs, each a name like `<time>.<pid>` with its files beside it.
+    /// The newest `keep` runs, each a name like `<time>.<pid>` with its files beside it, and
+    /// every run still going (its `.pid` is there), however old.
     pub fn trim_runs(&self, keep: usize) {
         let files: Vec<PathBuf> = std::fs::read_dir(self.runs())
             .into_iter()
@@ -123,8 +124,14 @@ impl Dir {
         let mut runs: Vec<String> = files.iter().filter_map(|p| run(p)).collect();
         runs.sort();
         runs.dedup();
-        let drop = &runs[..runs.len().saturating_sub(keep)];
-        for f in files.iter().filter(|p| run(p).is_some_and(|r| drop.contains(&r))) {
+        let going = |r: &String| {
+            files
+                .iter()
+                .any(|p| run(p).as_ref() == Some(r) && p.extension().is_some_and(|x| x == "pid"))
+        };
+        let drop: Vec<&String> =
+            runs[..runs.len().saturating_sub(keep)].iter().filter(|r| !going(r)).collect();
+        for f in files.iter().filter(|p| run(p).is_some_and(|r| drop.contains(&&r))) {
             let _ = std::fs::remove_file(f);
         }
     }

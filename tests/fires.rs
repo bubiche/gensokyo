@@ -288,6 +288,14 @@ fn headless_run(name: &str, env: &[(&str, &str)]) -> (Daemon, String) {
 }
 
 #[test]
+fn what_a_headless_run_leaves_behind_goes_with_it() {
+    let (d, _) = headless_run("hl-left", &[("STUB_P_LEAVE", "1")]);
+    let left = std::fs::read_to_string(d.dir.join("stub/left.pid")).unwrap();
+    let left: i32 = left.trim().parse().unwrap();
+    wait(|| !alive(left), "what the run left behind to go");
+}
+
+#[test]
 fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
     let (d, log) = headless_run("headless", &[("STUB_P_DENY", "Bash")]);
     assert!(log.contains("stub -p ran in"), "{log}");
@@ -393,10 +401,14 @@ fn a_headless_run_that_ended_between_daemons_is_journaled_by_the_next() {
     // It finishes, and writes its result, while no daemon is there.
     wait(|| !alive(pid), "the run to finish on its own");
     assert!(d.evs("quiet", "done").is_empty());
+    // A while later: the time it took is to its last write, not to the next daemon.
+    std::thread::sleep(Duration::from_secs(4));
     d.cli(&["list"]);
     wait(|| !d.evs("quiet", "done").is_empty(), "the next daemon's journal line");
     let done = d.evs("quiet", "done");
     assert!(done[0].contains(": stub -p ran in "), "{done:?}");
+    let secs = done[0].strip_prefix("done (headless, ").and_then(|t| t.split('s').next());
+    assert!(secs.and_then(|s| s.parse::<u64>().ok()).is_some_and(|s| s <= 4), "{done:?}");
     assert!(pid_file(&runs).is_none(), "its pid file stayed");
 }
 

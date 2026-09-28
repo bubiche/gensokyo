@@ -161,10 +161,17 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
         let left = limit.saturating_sub(age(&run));
         let ended = match child {
             Some(mut c) => match tokio::time::timeout(left, c.wait()).await {
-                Ok(st) => Some(match st.ok().and_then(|s| s.code()) {
-                    Some(code) => Ended::Exit(code),
-                    None => Ended::Signal,
-                }),
+                Ok(st) => {
+                    // What it started and left behind (a tool, an MCP server) goes with it. The
+                    // group outlives its leader only while such a member does, so the id is
+                    // still the run's.
+                    // SAFETY: plain killpg on the run's own group, just after its leader ended.
+                    unsafe { libc::killpg(run.pid, libc::SIGTERM) };
+                    Some(match st.ok().and_then(|s| s.code()) {
+                        Some(code) => Ended::Exit(code),
+                        None => Ended::Signal,
+                    })
+                }
                 Err(_) => {
                     stop_group(run.pid, Some(&mut c)).await;
                     None
@@ -185,8 +192,14 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
                 }
             }
         };
+        // One that ended while no daemon was there took until its last write, not until now.
+        let took = match ended {
+            Some(Ended::Unseen) => last_write(&run.stem)
+                .map_or(age(&run).as_secs(), |t| (t - run.started).max(0) as u64),
+            _ => age(&run).as_secs(),
+        };
         let (journal, told, tail) = match ended {
-            Some(e) => report(&run.stem, e, &tele::age(age(&run).as_secs())),
+            Some(e) => report(&run.stem, e, &tele::age(took)),
             None => {
                 let limit = tele::age(limit.as_secs());
                 let journal =
@@ -239,6 +252,13 @@ async fn stop_group(pid: i32, child: Option<&mut tokio::process::Child>) {
             unsafe { libc::killpg(pid, libc::SIGKILL) };
         }
     }
+}
+
+/// When a run last wrote its answer or its errors, epoch seconds.
+fn last_write(stem: &Path) -> Option<i64> {
+    let at = |ext| std::fs::metadata(part(stem, ext)).and_then(|m| m.modified()).ok();
+    let t = ["json", "err"].into_iter().filter_map(at).max()?;
+    t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
 }
 
 /// `<stem>.<ext>`: the stem ends in a random part, which `with_extension` would replace.

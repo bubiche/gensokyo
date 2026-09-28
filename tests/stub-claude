@@ -98,6 +98,11 @@ if [ -n "$printing" ]; then
   # worked, one whose tools were refused with nobody there to ask, one that failed before it
   # started, and one still going when something else asks whether it is.
   [ -n "${STUB_P_SLEEP:-}" ] && sleep "$STUB_P_SLEEP"
+  # A tool or MCP server that outlives the run, in its process group.
+  if [ -n "${STUB_P_LEAVE:-}" ]; then
+    sleep 300 </dev/null >/dev/null 2>&1 &
+    echo $! > "$STUB_STATE/left.pid"
+  fi
   if [ -n "${STUB_P_FAIL:-}" ]; then
     echo "stub-claude: $STUB_P_FAIL" >&2
     exit 1

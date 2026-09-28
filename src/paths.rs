@@ -44,12 +44,16 @@ pub fn config(key: &str) -> Option<String> {
 }
 
 /// `$GENSOKYO_SHARE`, else `share/` beside the binary or up to three levels above it (a build
-/// tree).
+/// tree), looking from the binary a symlink on `PATH` points at too.
 pub fn share_dir(exe: &Path) -> Option<PathBuf> {
     if let Some(s) = std::env::var_os("GENSOKYO_SHARE") {
         return Some(s.into());
     }
-    exe.ancestors().skip(1).take(4).map(|d| d.join("share")).find(|s| s.join("names.txt").is_file())
+    let near = |exe: &Path| {
+        let mut dirs = exe.ancestors().skip(1).take(4).map(|d| d.join("share"));
+        dirs.find(|s| s.join("names.txt").is_file())
+    };
+    near(exe).or_else(|| near(&std::fs::canonicalize(exe).ok()?))
 }
 
 /// `$GENSOKYO_SOCKET`, else `run/gensokyo.sock` in the state dir, else, when that is past the

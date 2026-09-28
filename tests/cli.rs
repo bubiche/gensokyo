@@ -79,6 +79,21 @@ fn help_names_every_verb_and_each_verb_has_its_own() {
 }
 
 #[test]
+fn a_symlink_on_path_still_finds_the_shipped_files() {
+    let e = Env::new("link");
+    let link = e.dir.join("bin/gensokyo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(BIN, &link).unwrap();
+    let o = Command::new(&link)
+        .arg("broadcast")
+        .envs(stub_env(&e.dir))
+        .env_remove("GENSOKYO_SHARE")
+        .output()
+        .unwrap();
+    assert!(o.status.success() && out(&o).contains("status-report"), "{}", err(&o));
+}
+
+#[test]
 fn a_mistake_is_refused_before_any_daemon_starts() {
     let e = Env::new("refused");
     let o = e.run(&["lst"]);

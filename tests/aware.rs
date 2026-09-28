@@ -1,6 +1,8 @@
 //! What a resident is doing, from hook payloads (recorded from Claude Code 2.1.260) and
 //! registry snapshots; and its status line report.
 
+mod common;
+
 use gensokyo::daemon::aware::{Aware, Registry};
 use gensokyo::daemon::registry;
 use gensokyo::hooks::{reduce, take_spool};
@@ -278,10 +280,7 @@ fn idle_prompt_stands_in_for_a_stop_that_never_came() {
 
 #[test]
 fn the_spool_is_read_in_order_and_what_was_just_renamed_waits_a_beat() {
-    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("spool-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    let root = common::fresh("spool");
     let line = |at: i64| {
         json!({"t": "hook", "resident": "r", "hook": {"event": "Stop", "at": at}}).to_string()
     };

@@ -1,19 +1,16 @@
 //! The daemon end to end, with tests/stub-claude as every resident: each test gets its own state
 //! dir and socket, drives the daemon over the socket, and quits it at the end.
 
+mod common;
+
+use common::{BIN, Daemon, fresh, hello, next, wait};
+use gensokyo::proto::PROTO;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
-
-const BIN: &str = env!("CARGO_BIN_EXE_gensokyo");
-
-struct Daemon {
-    dir: PathBuf,
-    env: Vec<(String, String)>,
-}
 
 impl Daemon {
     /// Started by a CLI call, as a user's first `gensokyo` starts it. `env` reaches the
@@ -25,58 +22,13 @@ impl Daemon {
     }
 
     fn new(name: &str, env: &[(&str, &str)]) -> Daemon {
-        let dir =
-            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("d-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut all = vec![
-            ("GENSOKYO_STATE_DIR".to_string(), dir.display().to_string()),
-            (
-                "GENSOKYO_CLAUDE".into(),
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude").into(),
-            ),
-            ("STUB_STATE".into(), dir.join("stub").display().to_string()),
-            ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
-            ("CLAUDE_CONFIG_DIR".into(), dir.join("claude").display().to_string()),
-            ("GENSOKYO_CONFIG_DIR".into(), dir.join("conf").display().to_string()),
+        let mut extra = vec![
+            ("CLAUDE_CODE_CHILD_SESSION".to_string(), "1".to_string()),
             ("TERM_PROGRAM".into(), "iTerm.app".into()),
             ("ITERM_SESSION_ID".into(), "w0t0p0".into()),
         ];
-        all.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-        assert!(dir.join("run/gensokyo.sock").as_os_str().len() < 104);
-        Daemon { dir, env: all }
-    }
-
-    fn command(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(BIN);
-        c.args(args).envs(self.env.iter().map(|(k, v)| (k, v))).env_remove("GENSOKYO_SOCKET");
-        c
-    }
-
-    fn cli(&self, args: &[&str]) -> Output {
-        let out = self.command(args).stdin(Stdio::null()).output().unwrap();
-        assert!(
-            out.status.success(),
-            "gensokyo {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        out
-    }
-
-    fn socket(&self) -> PathBuf {
-        self.dir.join("run/gensokyo.sock")
-    }
-
-    /// hello, one request, its reply.
-    fn req(&self, req: Value) -> Value {
-        let s = UnixStream::connect(self.socket()).expect("connect");
-        s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-        let mut w = s.try_clone().unwrap();
-        writeln!(w, "{}\n{req}", json!({"t": "hello", "proto": 4, "who": "test"})).unwrap();
-        let mut lines = BufReader::new(s).lines();
-        let welcome: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-        assert_eq!(welcome["t"], "welcome");
-        serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
+        extra.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        Daemon::at(fresh(&format!("d-{name}")), extra)
     }
 
     fn summon(&self, extra: Value) -> Value {
@@ -86,41 +38,6 @@ impl Daemon {
         assert_eq!(r["t"], "summoned", "{r}");
         assert_eq!(r["id"], 7);
         r["resident"].clone()
-    }
-
-    fn list(&self) -> Vec<Value> {
-        self.req(json!({"t": "list", "id": 1}))["residents"].as_array().unwrap().clone()
-    }
-
-    fn stub(&self, id: &Value, ext: &str) -> String {
-        // Everything else is written before `ready`, so it is whole by then.
-        let file = |e: &str| self.dir.join("stub").join(format!("{}.{e}", id.as_str().unwrap()));
-        wait(|| file("ready").exists(), "the stub to be ready");
-        let p = file(ext);
-        std::fs::read_to_string(p).unwrap()
-    }
-
-    fn log(&self) -> Vec<Value> {
-        std::fs::read_to_string(self.dir.join("daemon.log"))
-            .unwrap_or_default()
-            .lines()
-            // The last line may be half written.
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect()
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.command(&["quit"]).output();
-    }
-}
-
-fn wait(mut f: impl FnMut() -> bool, what: &str) {
-    let t = Instant::now();
-    while !f() {
-        assert!(t.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -349,13 +266,7 @@ fn a_restart_retires_records_left_by_the_last_daemon() {
 #[test]
 fn protocol_errors() {
     let d = Daemon::start("proto", &[]);
-    let talk = |lines: &str| -> Vec<Value> {
-        let s = UnixStream::connect(d.socket()).unwrap();
-        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        (&s).write_all(lines.as_bytes()).unwrap();
-        s.shutdown(std::net::Shutdown::Write).unwrap();
-        BufReader::new(s).lines().map(|l| serde_json::from_str(&l.unwrap()).unwrap()).collect()
-    };
+    let talk = |lines: &str| raw(&d, lines);
     // Each is answered, then the connection closes.
     let r = talk("{\"t\":\"list\",\"id\":5}\n");
     assert_eq!((r.len(), &r[0]["error"]), (1, &json!("say hello first")));
@@ -364,28 +275,30 @@ fn protocol_errors() {
     let r = talk("not json\n");
     assert_eq!(r[0]["t"], "error");
     // After a hello, a bad line is answered and the connection stays.
-    let r = talk(
-        "{\"t\":\"hello\",\"proto\":4,\"who\":\"x\"}\n{\"t\":\"nope\",\"id\":1}\n{\"t\":\"list\",\"id\":2}\n",
-    );
+    let r = talk(&format!(
+        "{}\n{{\"t\":\"nope\",\"id\":1}}\n{{\"t\":\"list\",\"id\":2}}\n",
+        hello("x")
+    ));
     let r: Vec<_> = r.iter().map(|v| v["t"].as_str().unwrap()).collect();
     assert_eq!(r, ["welcome", "error", "list"]);
     let e = d.req(json!({"t": "banish", "id": 1, "who": "nobody"}));
     assert_eq!(e["error"], "no resident nobody");
 }
 
-/// hello in `proto` as `who`, then `rest`, and every line that comes back before it closes.
-fn talk(d: &Daemon, proto: u32, who: &str, rest: &[Value]) -> Vec<Value> {
+/// `lines` as they are, and every line that comes back before the connection closes.
+fn raw(d: &Daemon, lines: &str) -> Vec<Value> {
     let s = UnixStream::connect(d.socket()).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    let mut b = format!("{}\n", json!({"t": "hello", "proto": proto, "who": who}));
-    rest.iter().for_each(|r| b += &format!("{r}\n"));
-    (&s).write_all(b.as_bytes()).unwrap();
+    (&s).write_all(lines.as_bytes()).unwrap();
     s.shutdown(std::net::Shutdown::Write).unwrap();
-    BufReader::new(s)
-        .lines()
-        .map_while(Result::ok)
-        .map(|l| serde_json::from_str(&l).unwrap())
-        .collect()
+    let lines = BufReader::new(s).lines().map_while(Result::ok);
+    lines.map(|l| serde_json::from_str(&l).unwrap()).collect()
+}
+
+/// hello in `proto` as `who`, then `rest`, and every line that comes back.
+fn talk(d: &Daemon, proto: u32, who: &str, rest: &[Value]) -> Vec<Value> {
+    let hello = json!({"t": "hello", "proto": proto, "who": who});
+    raw(d, &rest.iter().fold(format!("{hello}\n"), |b, r| b + &format!("{r}\n")))
 }
 
 #[test]
@@ -402,7 +315,7 @@ fn a_hook_in_another_protocol_is_heard_and_nothing_else_from_it() {
     wait(|| d.list()[0]["state"] == "awaits", "the hook");
     let r = talk(&d, 99, "hook", &[json!({"t": "list", "id": 1})]);
     assert_eq!((&r[0]["t"], &r[1]["error"]), (&json!("welcome"), &json!("say hello first")));
-    assert_eq!(talk(&d, 99, "cli", &[])[0]["error"], "protocol 99, want 4");
+    assert_eq!(talk(&d, 99, "cli", &[])[0]["error"], format!("protocol 99, want {PROTO}"));
     let refused: Vec<_> = d.log().into_iter().filter(|e| e["ev"] == "refused").collect();
     assert_eq!(refused.len(), 2, "once per asker and protocol: {refused:?}");
     assert_eq!(refused[0]["took"], "its hooks and status lines");
@@ -413,19 +326,22 @@ fn a_hook_a_daemon_refuses_is_spooled_and_one_it_is_slow_with_is_not() {
     let d = Daemon::new("refusing", &[]);
     let (sock, spool) = (d.dir.join("fake.sock"), d.dir.join("spool.jsonl"));
     let error = r#"{"t":"error","id":0,"error":"protocol 4, want 5"}"#;
-    let welcome = r#"{"t":"welcome","proto":4,"pid":1}"#;
-    for (answer, spooled) in [(Some(error), true), (Some(welcome), false), (None, false)] {
+    let welcome = json!({"t": "welcome", "proto": PROTO, "pid": 1}).to_string();
+    for (answer, spooled) in
+        [(Some(error.to_string()), true), (Some(welcome), false), (None, false)]
+    {
         let _ = std::fs::remove_file(&sock);
         let _ = std::fs::remove_file(&spool);
         let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         // The fake keeps the connection open until the hook has exited: one that waited for
         // an answer that never comes could only have given up by itself.
         let (done, hung_up) = std::sync::mpsc::channel::<()>();
+        let said = answer.clone();
         let fake = std::thread::spawn(move || {
             let (s, _) = l.accept().unwrap();
             let mut hello = String::new();
             BufReader::new(&s).read_line(&mut hello).unwrap();
-            if let Some(a) = answer {
+            if let Some(a) = said {
                 writeln!(&s, "{a}").unwrap();
             }
             let _ = hung_up.recv_timeout(Duration::from_secs(20));
@@ -461,7 +377,7 @@ fn quits_and_a_sigterm_at_once_ask_everyone_to_leave_once() {
         .map(|n| {
             let s = UnixStream::connect(d.socket()).unwrap();
             s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-            let hello = json!({"t": "hello", "proto": 4, "who": "test"});
+            let hello = hello("test");
             writeln!(&s, "{hello}\n{}", json!({"t": "quit", "id": n})).unwrap();
             s
         })
@@ -469,9 +385,7 @@ fn quits_and_a_sigterm_at_once_ask_everyone_to_leave_once() {
     unsafe { libc::kill(daemon as i32, libc::SIGTERM) };
     for s in asks {
         let mut lines = BufReader::new(s).lines();
-        let replies: Vec<Value> = (0..2)
-            .map(|_| serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap())
-            .collect();
+        let replies: Vec<Value> = (0..2).map(|_| next(&mut lines)).collect();
         assert_eq!((&replies[0]["t"], &replies[1]["t"]), (&json!("welcome"), &json!("done")));
     }
     wait(|| !alive(daemon), "the daemon to exit");
@@ -494,7 +408,7 @@ fn a_resident_that_stops_reading_does_not_hold_up_the_connection() {
     let bytes = b"frozen\n".repeat(2048);
     std::thread::spawn(move || {
         let mut w = std::io::BufWriter::new(w);
-        writeln!(w, "{}", json!({"t": "hello", "proto": 4, "who": "test"})).unwrap();
+        writeln!(w, "{}", hello("test")).unwrap();
         for id in 0..70 {
             writeln!(w, "{}", json!({"t": "input", "id": id, "who": "Cirno", "bytes": bytes}))
                 .unwrap();
@@ -599,7 +513,7 @@ impl Client {
             }
         });
         let mut c = Client { w: s, rx };
-        c.send(json!({"t": "hello", "proto": 4, "who": "test"}));
+        c.send(hello("test"));
         assert_eq!(c.next(Duration::from_secs(5)).unwrap()["t"], "welcome");
         c
     }
@@ -894,14 +808,10 @@ fn record(d: &Daemon, id: &str) -> Value {
 fn input(d: &Daemon, who: &str, text: &str) {
     let bytes: Vec<u8> = format!("{text}\r").into_bytes();
     // Input is answered only when it fails, so a list after it says it was taken.
-    let s = UnixStream::connect(d.socket()).unwrap();
-    let mut w = s.try_clone().unwrap();
-    let hello = json!({"t": "hello", "proto": 4, "who": "test"});
+    let (mut w, mut lines) = d.connect();
     let req = json!({"t": "input", "id": 1, "who": who, "bytes": bytes});
-    writeln!(w, "{hello}\n{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
-    let mut lines = BufReader::new(s).lines();
-    let _welcome = lines.next();
-    let r: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    writeln!(w, "{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    let r = next(&mut lines);
     assert_eq!(r["t"], "list", "{r}");
 }
 

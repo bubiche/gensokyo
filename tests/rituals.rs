@@ -1,5 +1,7 @@
 //! Rituals on a fake clock: schedules, when a tick fires, the files and what they say.
 
+mod common;
+
 use gensokyo::cron::{self, Schedule, Why};
 use gensokyo::ritual::{self, Add, Dir, Target, Trust};
 use jiff::civil::date;
@@ -17,11 +19,7 @@ fn at(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> i64 {
 }
 
 fn tmp(name: &str) -> PathBuf {
-    let d =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("rit-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    common::fresh(&format!("rit-{name}"))
 }
 
 #[test]

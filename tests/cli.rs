@@ -1,14 +1,15 @@
 //! The command line itself: help, refusals before any daemon starts, a daemon from another
 //! build, and `restart` bringing the residents back into a new daemon.
 
+mod common;
+
+use common::{BIN, err, fresh, out, stub_env, wait};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
-
-const BIN: &str = env!("CARGO_BIN_EXE_gensokyo");
 
 struct Env {
     dir: PathBuf,
@@ -16,9 +17,7 @@ struct Env {
 
 impl Env {
     fn new(name: &str) -> Env {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("cli-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = fresh(&format!("cli-{name}"));
         std::fs::create_dir_all(dir.join("work")).unwrap();
         assert!(dir.join("run/gensokyo.sock").as_os_str().len() < 104);
         Env { dir }
@@ -28,12 +27,8 @@ impl Env {
         Command::new(BIN)
             .args(args)
             .current_dir(&self.dir)
-            .env("GENSOKYO_STATE_DIR", &self.dir)
-            .env("GENSOKYO_CONFIG_DIR", self.dir.join("conf"))
-            .env("GENSOKYO_CLAUDE", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude"))
-            .env("STUB_STATE", self.dir.join("stub"))
+            .envs(stub_env(&self.dir))
             .env("CLAUDE_CODE_CHILD_SESSION", "1")
-            .env("CLAUDE_CONFIG_DIR", self.dir.join("claude"))
             .env("TERM_PROGRAM", "iTerm.app")
             .env("ITERM_SESSION_ID", "w0t0p0")
             .env_remove("GENSOKYO_SOCKET")
@@ -62,22 +57,6 @@ impl Env {
 impl Drop for Env {
     fn drop(&mut self) {
         let _ = self.run(&["quit"]);
-    }
-}
-
-fn out(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
-fn err(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
-}
-
-fn wait(mut f: impl FnMut() -> bool, what: &str) {
-    let t = Instant::now();
-    while !f() {
-        assert!(t.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

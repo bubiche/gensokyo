@@ -2,6 +2,9 @@
 //! is one read from the host, `out` a query the client wrote to it, bytes base64 in `b`) plus
 //! `<case>.expected`, one rendered chunk per line.
 
+mod common;
+
+use common::base64;
 use std::path::{Path, PathBuf};
 
 use gensokyo::client::framer::Framer;
@@ -27,20 +30,6 @@ fn read(path: &Path) -> Vec<Event> {
             }
         })
         .collect()
-}
-
-fn base64(s: &str) -> Vec<u8> {
-    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
-    for &ch in s.trim_end_matches('=').as_bytes() {
-        acc = acc << 6 | ABC.iter().position(|&a| a == ch).expect("base64") as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    out
 }
 
 /// Every read is preceded by a tick at its time, as the event loop does; a last tick far past

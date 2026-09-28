@@ -2,35 +2,28 @@
 //! it draws is read back through the emulator, which also answers its queries as a terminal
 //! would (kitty flags included), so the host side behaves like iTerm2's.
 
+mod common;
+
+use common::{BIN, fresh, stub_env};
 use gensokyo::vt::{Style, Vt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const BIN: &str = env!("CARGO_BIN_EXE_gensokyo");
-
 fn env(dir: &Path) -> Vec<(String, String)> {
-    vec![
-        ("GENSOKYO_STATE_DIR".into(), dir.display().to_string()),
-        (
-            "GENSOKYO_CLAUDE".into(),
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude").into(),
-        ),
-        ("STUB_STATE".into(), dir.join("stub").display().to_string()),
-        ("CLAUDE_CONFIG_DIR".into(), dir.join("claude").display().to_string()),
-        ("GENSOKYO_CONFIG_DIR".into(), dir.join("conf").display().to_string()),
+    let mut env = stub_env(dir);
+    env.extend([
         ("GENSOKYO_CLIENT_LOG".into(), dir.join("client.log").display().to_string()),
         ("HOME".into(), dir.display().to_string()),
         ("STUB_WINCH".into(), "1".into()),
         ("GENSOKYO_COPY".into(), format!("cat > '{}'", dir.join("copied").display())),
-    ]
+    ]);
+    env
 }
 
 fn state(name: &str) -> PathBuf {
-    let dir =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("c-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = fresh(&format!("c-{name}"));
     std::fs::create_dir_all(dir.join("work")).unwrap();
     dir
 }

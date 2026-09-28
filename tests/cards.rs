@@ -1,13 +1,12 @@
 //! Spell cards on disk and as typed: loading, naming, placeholders and the bytes a resident gets.
 
+mod common;
+
 use gensokyo::card::{fill, find_card, load, needle, parse, shown, typed};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let d =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cards-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = common::fresh(&format!("cards-{name}"));
     for (f, text) in files {
         std::fs::write(d.join(f), text).unwrap();
     }

@@ -1,5 +1,7 @@
 //! The frontmatter both rituals and spell cards are written in, and the files that ship.
 
+mod common;
+
 use gensokyo::card;
 use gensokyo::cron::Schedule;
 use gensokyo::frontmatter::{items, name_ok, quote, read, value};
@@ -88,9 +90,7 @@ fn a_card_with_a_line_that_means_nothing_is_listed_as_such_and_not_cast() {
     assert_eq!((c.pair, c.problem.clone(), c.body.as_str()), (true, None, "hi {peer}"));
     let c = card::parse("pair", "---\npeer: yes\n---\nx");
     assert!(c.problem.unwrap().starts_with("peer: yes"));
-    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fm-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = common::fresh("fm");
     std::fs::write(d.join("_x.md"), "x").unwrap();
     let (cs, bad) = card::load(std::slice::from_ref(&d));
     assert_eq!((cs.len(), bad), (0, vec![d.join("_x.md")]));

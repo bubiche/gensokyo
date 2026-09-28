@@ -1,22 +1,15 @@
 //! Rituals fired by the daemon, with tests/stub-claude as every resident and the ritual clock
 //! moved by hand (`GENSOKYO_NOW_FILE`, ticking every 100 ms), so nothing waits for a minute.
 
-use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+mod common;
 
-const BIN: &str = env!("CARGO_BIN_EXE_gensokyo");
+use common::{Daemon, Lines, fresh, next, wait, wait_for};
+use serde_json::{Value, json};
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 /// On the hour, UTC: `0 * * * *` fires at T0, T0 + 3600, …
 const T0: i64 = 1_790_002_800;
-
-struct Daemon {
-    dir: PathBuf,
-    env: Vec<(String, String)>,
-}
 
 impl Daemon {
     /// With the clock at `at` and these rituals written, started as a user's first `gensokyo`
@@ -29,27 +22,17 @@ impl Daemon {
 
     /// The same, not started yet.
     fn new(name: &str, at: i64, rituals: &[(&str, &str)], env: &[(&str, &str)]) -> Daemon {
-        let dir =
-            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("f-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = fresh(&format!("f-{name}"));
         std::fs::create_dir_all(dir.join("conf/rituals")).unwrap();
-        let mut all = vec![
-            ("GENSOKYO_STATE_DIR".to_string(), dir.display().to_string()),
-            (
-                "GENSOKYO_CLAUDE".into(),
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude").into(),
-            ),
-            ("STUB_STATE".into(), dir.join("stub").display().to_string()),
-            ("STUB_HOOKS".into(), "1".into()),
+        let mut extra = vec![
+            ("STUB_HOOKS".to_string(), "1".to_string()),
             ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
-            ("CLAUDE_CONFIG_DIR".into(), dir.join("claude").display().to_string()),
-            ("GENSOKYO_CONFIG_DIR".into(), dir.join("conf").display().to_string()),
             ("GENSOKYO_NOW_FILE".into(), dir.join("now").display().to_string()),
             ("GENSOKYO_TICK_MS".into(), "100".into()),
             ("TZ".into(), "UTC".into()),
         ];
-        all.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-        let d = Daemon { dir, env: all };
+        extra.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let d = Daemon::at(dir, extra);
         d.clock(at);
         for (slug, text) in rituals {
             d.ritual(slug, text);
@@ -68,45 +51,8 @@ impl Daemon {
         std::fs::write(self.dir.join(format!("conf/rituals/{slug}.md")), text).unwrap();
     }
 
-    fn cli(&self, args: &[&str]) -> Output {
-        let mut c = Command::new(BIN);
-        c.args(args).envs(self.env.iter().map(|(k, v)| (k, v))).env_remove("GENSOKYO_SOCKET");
-        let out = c.stdin(Stdio::null()).output().unwrap();
-        assert!(
-            out.status.success(),
-            "gensokyo {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        out
-    }
-
-    fn socket(&self) -> PathBuf {
-        self.dir.join("run/gensokyo.sock")
-    }
-
-    fn connect(&self) -> (UnixStream, std::io::Lines<BufReader<UnixStream>>) {
-        let s = UnixStream::connect(self.socket()).expect("connect");
-        s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
-        let mut w = s.try_clone().unwrap();
-        writeln!(w, "{}", json!({"t": "hello", "proto": 4, "who": "test"})).unwrap();
-        let mut lines = BufReader::new(s).lines();
-        let welcome: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-        assert_eq!(welcome["t"], "welcome");
-        (w, lines)
-    }
-
-    fn req(&self, req: Value) -> Value {
-        let (mut w, mut lines) = self.connect();
-        writeln!(w, "{req}").unwrap();
-        serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
-    }
-
     fn verb(&self, verb: &str, name: &str) -> Value {
         self.req(json!({"t": "ritual", "id": 3, "verb": verb, "name": name}))
-    }
-
-    fn list(&self) -> Vec<Value> {
-        self.req(json!({"t": "list", "id": 1}))["residents"].as_array().unwrap().clone()
     }
 
     fn live(&self) -> Vec<Value> {
@@ -118,7 +64,7 @@ impl Daemon {
         let (mut w, mut lines) = self.connect();
         let input = json!({"t": "input", "id": 2, "who": who, "bytes": text.as_bytes()});
         writeln!(w, "{input}\n{}", json!({"t": "list", "id": 1})).unwrap();
-        let r: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        let r = next(&mut lines);
         assert_eq!(r["t"], "list", "{r}");
     }
 
@@ -138,35 +84,9 @@ impl Daemon {
         std::fs::read_to_string(p).ok()?.trim().parse().ok()
     }
 
-    fn stub(&self, id: &Value, ext: &str) -> String {
-        let file = |e: &str| self.dir.join("stub").join(format!("{}.{e}", id.as_str().unwrap()));
-        wait(|| file("ready").exists(), "the stub to be ready");
-        std::fs::read_to_string(file(ext)).unwrap_or_default()
-    }
-
     /// A few ticks' worth, for asserting that nothing more happens.
     fn settle(&self) {
         std::thread::sleep(Duration::from_millis(600));
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let mut c = Command::new(BIN);
-        c.arg("quit").envs(self.env.iter().map(|(k, v)| (k, v))).env_remove("GENSOKYO_SOCKET");
-        let _ = c.output();
-    }
-}
-
-fn wait(f: impl FnMut() -> bool, what: &str) {
-    wait_for(Duration::from_secs(15), f, what)
-}
-
-fn wait_for(most: Duration, mut f: impl FnMut() -> bool, what: &str) {
-    let t = Instant::now();
-    while !f() {
-        assert!(t.elapsed() < most, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -177,14 +97,11 @@ fn hourly(extra: &str) -> String {
 }
 
 /// Events from a `watch` connection until `f` picks one, within 15 s.
-fn watch_for(
-    lines: &mut std::io::Lines<BufReader<UnixStream>>,
-    mut f: impl FnMut(&Value) -> bool,
-) -> Value {
+fn watch_for(lines: &mut Lines, mut f: impl FnMut(&Value) -> bool) -> Value {
     let t = Instant::now();
     loop {
         assert!(t.elapsed() < Duration::from_secs(15), "no such event");
-        let v: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        let v = next(lines);
         if f(&v) {
             return v;
         }

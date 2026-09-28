@@ -1,6 +1,9 @@
 //! The emulator adapter: query answers, keyboard-mode absorption, the key encoder, style runs,
 //! and a replay of recorded Claude Code sessions compared with what the real terminal showed.
 
+mod common;
+
+use common::base64;
 use std::path::{Path, PathBuf};
 
 use gensokyo::vt::{Color, Frame, Key, KeyEvent, Mods, Style, Vt};
@@ -177,20 +180,6 @@ fn read(path: &Path) -> Vec<Event> {
             }
         })
         .collect()
-}
-
-fn base64(s: &str) -> Vec<u8> {
-    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
-    for &ch in s.trim_end_matches('=').as_bytes() {
-        acc = acc << 6 | ABC.iter().position(|&a| a == ch).expect("base64") as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    out
 }
 
 /// What the terminal showed at a mark: the last `rows` lines of the saved screen. iTerm2 ends

@@ -1,5 +1,8 @@
 //! `gensokyo ritual …` without a daemon: the verbs that read and write the files.
 
+mod common;
+
+use common::{err, fresh, out};
 use gensokyo::ritual::Dir;
 use serde_json::Value;
 use std::io::Write;
@@ -14,9 +17,7 @@ impl Env {
     /// A config, state, share and home of its own; `trusted` is the one directory Claude Code
     /// has been trusted in.
     fn new(name: &str) -> Env {
-        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("rc-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = fresh(&format!("rc-{name}"));
         for d in ["config", "state", "home", "claude", "share/rituals", "trusted", "untrusted"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -90,14 +91,6 @@ impl Drop for Env {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
-}
-
-fn out(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stdout).into_owned()
-}
-
-fn err(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
 #[test]

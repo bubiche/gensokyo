@@ -167,6 +167,9 @@ impl App {
             }
             Some(Modal::Cast(c)) if c.target.is_some() => (c.target, c.selected) = (None, 0),
             Some(Modal::Cast(c)) if c.card.is_some() => (c.card, c.selected) = (None, 0),
+            Some(Modal::Summon(s)) if s.waiting => {
+                (self.m.modal, self.summoning) = (None, None);
+            }
             _ => self.m.modal = None,
         }
     }

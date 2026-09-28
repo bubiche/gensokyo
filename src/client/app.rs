@@ -526,8 +526,9 @@ impl App {
                 }
             }
             Reply::Summoned { id, resident } => {
+                // Only the modal waiting on it: one opened since is another summon.
                 if self.summoning.take_if(|s| *s == id).is_some()
-                    && matches!(self.m.modal, Some(Modal::Summon(_)))
+                    && matches!(&self.m.modal, Some(Modal::Summon(s)) if s.waiting)
                 {
                     self.m.modal = None;
                 }
@@ -553,6 +554,7 @@ impl App {
                 // A summon's error belongs in the modal still waiting on it.
                 if self.summoning.take_if(|s| *s == id).is_some()
                     && let Some(Modal::Summon(s)) = &mut self.m.modal
+                    && s.waiting
                 {
                     (s.waiting, s.error) = (false, Some(error));
                     return;

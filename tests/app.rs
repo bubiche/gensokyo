@@ -363,6 +363,17 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     daemon(&mut a, Reply::Summoned { id, resident: resident(3, "Sakuya") });
     assert!(a.m.modal.is_none());
     assert_eq!(a.m.focused.as_deref(), Some("id-Sakuya"));
+    // Esc while it waits, and a new summon opened: the old reply leaves the new one alone.
+    host(&mut a, b"\x1dn");
+    host(&mut a, b"/\r");
+    host(&mut a, b"\r");
+    let id = sent(&mut a).last().unwrap()["id"].as_u64().unwrap();
+    host(&mut a, b"\x1b");
+    assert!(a.m.modal.is_none());
+    host(&mut a, b"\x1dn");
+    daemon(&mut a, Reply::Error { id, error: "late".into() });
+    daemon(&mut a, Reply::Summoned { id, resident: resident(4, "Youmu") });
+    assert_eq!(summoning(&a), Some((Stage::Dir, false, None)));
 }
 
 #[test]

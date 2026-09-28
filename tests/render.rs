@@ -548,6 +548,25 @@ fn a_text_field_has_the_cursor_after_what_is_typed() {
 }
 
 #[test]
+fn a_path_longer_than_its_field_shows_its_end_and_the_cursor_after_it() {
+    let mut m = shrine();
+    let long = format!("{HOME}/{}/deep/end", "a-very-long-directory-name".repeat(4));
+    let mut s = summon(Stage::Dir);
+    let Modal::Summon(sm) = &mut s else { unreachable!() };
+    (sm.path, sm.selected) = (long, None);
+    m.modal = Some(s);
+    for (w, h) in [(120, 40), (80, 24)] {
+        let (t, _) = draw(&m, w, h);
+        let area = Rect::new(0, 0, w, h);
+        let (x, y) = render::cursor(&m, area).expect("a cursor");
+        let buf = t.backend().buffer();
+        let row: String = (0..x).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(row.ends_with("/deep/end") && row.contains('…'), "{row:?}");
+        assert_eq!(buf[(x, y)].symbol(), " ");
+    }
+}
+
+#[test]
 fn tiny_screens_do_not_panic() {
     for (_, m) in screens() {
         for (w, h) in [(40, 10), (26, 3), (25, 5), (10, 3), (1, 1), (0, 0), (200, 2), (80, 1)] {

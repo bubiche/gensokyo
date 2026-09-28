@@ -174,7 +174,7 @@ pub fn cursor(m: &Model, area: Rect) -> Option<(u16, u16)> {
         let (_, inner, _, rows) = modal_layout(m, md, g);
         let i = rows.iter().position(|r| matches!(r, Row::Field(..)))?;
         let Row::Field(s, _) = &rows[i] else { return None };
-        let (x, y) = (inner.x + width(s), inner.y + i as u16);
+        let (x, y) = (inner.x + width(&fit_field(s, inner.width)), inner.y + i as u16);
         return (x < inner.right() && y < inner.bottom()).then_some((x, y));
     }
     let fr = m.screen.as_ref().filter(|fr| fr.back == 0)?;
@@ -540,8 +540,11 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         let line = Rect { y, height: 1, ..inner };
         match row {
-            Text(s, st) | Field(s, st) => {
+            Text(s, st) => {
                 buf.set_stringn(line.x, y, s, line.width as usize, *st);
+            }
+            Field(s, st) => {
+                buf.set_stringn(line.x, y, fit_field(s, line.width), line.width as usize, *st);
             }
             Item(n, s, sel) => {
                 let st = if *sel { PICK } else { Style::new() };
@@ -650,6 +653,21 @@ fn centered(buf: &mut Buffer, g: Rect, y: u16, s: &str, style: Style) {
         let x = g.x + g.width.saturating_sub(width(s)) / 2;
         buf.set_stringn(x, y, s, (g.right() - x) as usize, style);
     }
+}
+
+/// A text field as it fits `w` columns with the cursor after it: its end, which is where the
+/// typing is, with `…` for what is cut from its start.
+fn fit_field(s: &str, w: u16) -> String {
+    if width(s) < w {
+        return s.to_string();
+    }
+    let mut rest = s;
+    while !rest.is_empty() && width(rest) + 2 > w {
+        let mut cs = rest.chars();
+        cs.next();
+        rest = cs.as_str();
+    }
+    format!("…{rest}")
 }
 
 pub(super) fn width(s: &str) -> u16 {

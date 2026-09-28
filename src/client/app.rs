@@ -278,6 +278,9 @@ pub struct App {
     /// When the last key came, and the one before it.
     typed: Option<Instant>,
     pub(super) before: Option<Instant>,
+    /// Sent back to the live screen, and not yet told it is there: a screen the daemon sent
+    /// before it saw that is still scrolled back, and must not take the next key for itself.
+    homing: bool,
     /// Added to the clock: tests move time on with `later`.
     skew: Duration,
     log: Option<File>,
@@ -328,6 +331,7 @@ impl App {
             said: None,
             typed: None,
             before: None,
+            homing: false,
             skew: Duration::ZERO,
             log: c.log,
             t0: Instant::now(),
@@ -412,7 +416,7 @@ impl App {
         if id == self.m.focused {
             return;
         }
-        self.m.focused = id;
+        (self.m.focused, self.homing) = (id, false);
         (self.m.screen, self.m.selection) = (None, None);
         match self.live() {
             Some(who) => self.send(Request::View { who }),
@@ -557,6 +561,8 @@ impl App {
             }
             Reply::Frame { who, rev, frame, modes } => {
                 if Some(&who) == self.m.focused.as_ref() {
+                    let mut frame = frame;
+                    frame.back = self.landed(frame.back);
                     (self.m.screen, self.rev, self.m.modes) = (Some(frame), rev, modes);
                     self.modes();
                 }
@@ -566,6 +572,7 @@ impl App {
                 if Some(&who) != self.m.focused.as_ref() || self.m.screen.is_none() {
                     return;
                 }
+                let back = self.landed(back);
                 match self.m.screen.as_mut().filter(|_| base == self.rev) {
                     Some(s) => {
                         for (y, runs) in rows {
@@ -680,6 +687,15 @@ impl App {
         self.input(who, f);
     }
 
+    /// How far back a screen from the daemon is, as far as keys go: a screen sent before it
+    /// saw the way home counts as home.
+    fn landed(&mut self, back: u32) -> u32 {
+        if back == 0 {
+            self.homing = false;
+        }
+        if self.homing { 0 } else { back }
+    }
+
     /// The resident on screen is showing its scrollback, not its live screen.
     fn scrolled(&self) -> bool {
         self.m.screen.as_ref().is_some_and(|s| s.back > 0)
@@ -697,7 +713,8 @@ impl App {
             Scrollback::Live => None,
             Scrollback::Stay => return,
         };
-        if rows.is_none()
+        self.homing = rows.is_none();
+        if self.homing
             && let Some(fr) = &mut self.m.screen
         {
             fr.back = 0;

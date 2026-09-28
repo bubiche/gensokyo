@@ -178,7 +178,13 @@ fn the_wheel_and_the_chord_scroll_back_and_keys_move_or_leave() {
     assert!(out[0].get("rows").is_none(), "{out:?}");
     host(&mut a, b"k");
     assert_eq!(kinds(&sent(&mut a)), ["input"]);
-    // Typing while scrolled back goes home and then to the resident.
+    // A screen the daemon sent before it saw the way home is still scrolled back: the next
+    // key is the resident's all the same.
+    scrolled(&mut a, 25);
+    host(&mut a, b" ");
+    assert_eq!(kinds(&sent(&mut a)), ["input"]);
+    // Home, then scrolled back again (by another client, say): typing goes home, then on.
+    scrolled(&mut a, 0);
     scrolled(&mut a, 5);
     host(&mut a, b"x");
     let out = sent(&mut a);

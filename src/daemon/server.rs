@@ -128,6 +128,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
     // the first request, so a resume that started this daemon resumes the session it moved to.
     replay(&shrine, 0);
     comeback(&shrine);
+    super::headless::adopt(&shrine);
     tokio::task::spawn_local(supervise("registry poll", shrine.clone(), poll));
     tokio::task::spawn_local(supervise("ritual clock", shrine.clone(), rituals::clock));
     let quit = Rc::new(Stop { quit: Notify::new(), left: watch::channel(false).0 });
@@ -424,7 +425,14 @@ fn stop(shrine: &Shared, s: &Rc<Stop>) -> watch::Receiver<bool> {
         log(json!({"ev": "stopping"}));
         let (shrine, s) = (shrine.clone(), s.clone());
         tokio::task::spawn_local(async move {
-            leave_all(&shrine).await;
+            // On a task of its own: one that panics still ends in the daemon stopping, rather
+            // than in a daemon that refuses everything as it stops and never does.
+            let everyone = shrine.clone();
+            if let Err(e) =
+                tokio::task::spawn_local(async move { leave_all(&everyone).await }).await
+            {
+                log(json!({"ev": "stopping", "error": e.to_string()}));
+            }
             s.left.send_replace(true);
             // Each `quit` gets its answer written first, whether or not its asker is still there.
             let _ = tokio::time::timeout(Duration::from_secs(2), s.left.closed()).await;

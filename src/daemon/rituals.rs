@@ -50,6 +50,10 @@ pub(super) struct Rites {
     trust: Option<(SystemTime, Rc<Trust>)>,
     /// The listing last sent to watchers.
     listing: Vec<RitualInfo>,
+    /// When the clock last ticked. Here rather than in the clock: one started again after a
+    /// panic carries on from it, instead of taking its first tick for a start and making up a
+    /// fire.
+    ticked: Option<i64>,
 }
 
 /// The ritual clock: `$GENSOKYO_NOW_FILE`'s epoch seconds when set, so tests move time by
@@ -81,22 +85,21 @@ fn trust(shrine: &Shared) -> Rc<Trust> {
     }
 }
 
-/// Every `TICK`: whatever has come round. The first tick, and one after a gap in the ticking (a
-/// lid closed), may also make up the most recent fire missed.
+/// Every `TICK`: whatever has come round. The daemon's first tick, and one after a gap in the
+/// ticking (a lid closed), may also make up the most recent fire missed.
 pub(super) async fn clock(shrine: Shared) {
     let every = std::env::var("GENSOKYO_TICK_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .map_or(TICK, |ms: u64| Duration::from_millis(ms.max(10)));
     let gap = (3 * every.as_secs() as i64).max(60);
-    let mut last: Option<i64> = None;
     loop {
         let t = now();
+        let last = shrine.borrow_mut().rites.ticked.replace(t);
         let catch = last.is_none_or(|l| t - l > gap);
-        if last.is_some() && catch {
-            log(json!({"ev": "ritual", "gap_s": t - last.unwrap_or(t)}));
+        if let Some(l) = last.filter(|_| catch) {
+            log(json!({"ev": "ritual", "gap_s": t - l}));
         }
-        last = Some(t);
         tick(&shrine, t, catch);
         tokio::time::sleep(every).await;
     }

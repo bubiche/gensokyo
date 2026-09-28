@@ -1,12 +1,14 @@
 //! Headless ritual runs: `claude -p` with no pane, its files in the ritual's `runs/`, a time
-//! limit, and the journal line and notice when it ends.
+//! limit, and the journal line and notice when it ends. A run outlives the daemon that started
+//! it, and the next daemon sees it out.
 
+use super::log::log;
 use super::rituals::{notice, now, repush};
 use super::shrine::Shared;
 use crate::ritual::{self, Dir, Ritual, when};
 use crate::tele;
 use jiff::tz::TimeZone;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -31,7 +33,8 @@ fn headless_limit() -> Duration {
 
 /// `claude -p` with no pane. Its answer goes to a file rather than a pipe, so a run the daemon
 /// stops under still leaves it (the child is not killed: cutting a turn off halfway would leave
-/// the ritual's notes half written for nothing). One still going after `HEADLESS_LIMIT` is.
+/// the ritual's notes half written for nothing), and its `.pid` file lets the next daemon see it
+/// out. One still going after `HEADLESS_LIMIT` is stopped, by whichever daemon is there.
 pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), String> {
     let (claude, env) = shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH")?;
     let cwd = r.cwd.clone().unwrap_or_default();
@@ -70,20 +73,121 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
         .stderr(err)
         // Its own group: whatever stops the daemon's group does not cut the run off.
         .process_group(0);
-    let mut child =
+    let child =
         super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
-    *shrine.borrow_mut().rites.headless.entry(r.slug.clone()).or_default() += 1;
-    let (shrine, slug) = (shrine.clone(), r.slug.clone());
+    let pid = child.id().map_or(0, |p| p as i32);
+    let run = Run {
+        stem,
+        slug: r.slug.clone(),
+        pid,
+        ident: super::pty::start_id(pid).unwrap_or(0),
+        started: super::store::now(),
+    };
+    let line = format!("{} {} {}\n", run.pid, run.ident, run.started);
+    if let Err(e) = std::fs::write(part(&run.stem, "pid"), line) {
+        log(json!({"ev": "ritual", "slug": r.slug, "pid_file": e.to_string()}));
+    }
+    see_out(shrine, run, Some(child));
+    Ok(())
+}
+
+/// A headless run in flight, as its `.pid` file keeps it: the pid, what the pid was when it
+/// started (so a pid used again by something else is never taken for it), and when, in wall
+/// seconds.
+struct Run {
+    stem: PathBuf,
+    slug: String,
+    pid: i32,
+    ident: u64,
+    started: i64,
+}
+
+impl Run {
+    /// Still the process that was started.
+    fn here(&self) -> bool {
+        !super::pty::gone(self.pid) && super::pty::start_id(self.pid) == Some(self.ident)
+    }
+}
+
+/// How a run ended, as far as this daemon saw.
+#[derive(Clone, Copy)]
+enum Ended {
+    Exit(i32),
+    Signal,
+    /// It was a daemon before this one's child: its exit status went with that daemon.
+    Unseen,
+}
+
+/// The headless runs an earlier daemon started, each seen out as if this one had: timed from
+/// its start, and journaled when it ends. One that ended while no daemon was there is journaled
+/// now. Before the clock's first tick, so its ritual counts as running.
+pub(super) fn adopt(shrine: &Shared) {
+    let rituals = crate::paths::state_dir().join("rituals");
+    let pid_files = std::fs::read_dir(&rituals)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|d| std::fs::read_dir(d.path().join("runs")).into_iter().flatten().flatten())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "pid"));
+    for p in pid_files.collect::<Vec<_>>() {
+        let text = std::fs::read_to_string(&p).unwrap_or_default();
+        let mut f = text.split_whitespace().map(|w| w.parse::<i64>().ok());
+        let (Some(Some(pid)), Some(Some(ident)), Some(Some(started))) =
+            (f.next(), f.next(), f.next())
+        else {
+            let _ = std::fs::remove_file(&p);
+            continue;
+        };
+        // `<rituals>/<slug>/runs/<stem>.pid`
+        let slug = p.parent().and_then(Path::parent).and_then(Path::file_name);
+        let slug = slug.map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let run =
+            Run { stem: p.with_extension(""), slug, pid: pid as i32, ident: ident as u64, started };
+        log(json!({"ev": "ritual", "slug": run.slug, "adopted": run.pid, "here": run.here()}));
+        see_out(shrine, run, None);
+    }
+}
+
+/// Counted as running until it ends or is stopped at its limit; then its journal line, its
+/// notice, and the log's last lines.
+fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
+    *shrine.borrow_mut().rites.headless.entry(run.slug.clone()).or_default() += 1;
+    let shrine = shrine.clone();
     tokio::task::spawn_local(async move {
-        let t = Instant::now();
         let limit = headless_limit();
-        let (journal, told, tail) = match tokio::time::timeout(limit, child.wait()).await {
-            Ok(status) => {
-                let took = tele::age(t.elapsed().as_secs());
-                report(&stem, status.ok().and_then(|s| s.code()), &took)
+        let age =
+            |run: &Run| Duration::from_secs((super::store::now() - run.started).max(0) as u64);
+        let left = limit.saturating_sub(age(&run));
+        let ended = match child {
+            Some(mut c) => match tokio::time::timeout(left, c.wait()).await {
+                Ok(st) => Some(match st.ok().and_then(|s| s.code()) {
+                    Some(code) => Ended::Exit(code),
+                    None => Ended::Signal,
+                }),
+                Err(_) => {
+                    stop_group(run.pid, Some(&mut c)).await;
+                    None
+                }
+            },
+            None => {
+                let gone = async {
+                    while run.here() {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                };
+                match tokio::time::timeout(left, gone).await {
+                    Ok(()) => Some(Ended::Unseen),
+                    Err(_) => {
+                        stop_group(run.pid, None).await;
+                        None
+                    }
+                }
             }
-            Err(_) => {
-                stop_group(&mut child).await;
+        };
+        let (journal, told, tail) = match ended {
+            Some(e) => report(&run.stem, e, &tele::age(age(&run).as_secs())),
+            None => {
                 let limit = tele::age(limit.as_secs());
                 let journal =
                     format!("failed (headless, {limit}): still running, so it was stopped");
@@ -92,31 +196,49 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
                 (journal, told, format!("--- stopped: still running after {limit}\n"))
             }
         };
-        let _ = logf.write_all(tail.as_bytes());
-        let d = Dir::of(&slug);
+        let logf = std::fs::OpenOptions::new().append(true).open(part(&run.stem, "log"));
+        if let Ok(mut f) = logf {
+            let _ = f.write_all(tail.as_bytes());
+        }
+        let _ = std::fs::remove_file(part(&run.stem, "pid"));
+        let d = Dir::of(&run.slug);
         let ok = journal.starts_with("done");
         d.note(now(), if ok { "done" } else { "failed" }, &journal);
         d.trim_runs(RUNS_KEPT);
         let mut sh = shrine.borrow_mut();
-        if let Some(n) = sh.rites.headless.get_mut(&slug) {
+        if let Some(n) = sh.rites.headless.get_mut(&run.slug) {
             *n = n.saturating_sub(1);
         }
-        notice(&sh, &slug, &told);
+        notice(&sh, &run.slug, &told);
         drop(sh);
         repush(&shrine);
     });
-    Ok(())
 }
 
 /// TERM to the run's process group, and KILL to what is left of it a few seconds later.
-async fn stop_group(child: &mut tokio::process::Child) {
-    let Some(pid) = child.id() else { return };
-    // SAFETY: plain libc calls; the group is the child's own (`process_group(0)`).
-    unsafe { libc::killpg(pid as i32, libc::SIGTERM) };
-    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-    // Whether or not the leader went: a tool or MCP server under it may ignore TERM.
-    unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
-    let _ = child.wait().await;
+async fn stop_group(pid: i32, child: Option<&mut tokio::process::Child>) {
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: plain libc calls; the group is the run's own (`process_group(0)`), and one that
+    // is not our child was checked to be the run by its start time just now.
+    unsafe { libc::killpg(pid, libc::SIGTERM) };
+    let settled = Duration::from_secs(5);
+    match child {
+        Some(c) => {
+            let _ = tokio::time::timeout(settled, c.wait()).await;
+            // Whether or not the leader went: a tool or MCP server under it may ignore TERM.
+            unsafe { libc::killpg(pid, libc::SIGKILL) };
+            let _ = c.wait().await;
+        }
+        None => {
+            let t = Instant::now();
+            while !super::pty::gone(pid) && t.elapsed() < settled {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            unsafe { libc::killpg(pid, libc::SIGKILL) };
+        }
+    }
 }
 
 /// `<stem>.<ext>`: the stem ends in a random part, which `with_extension` would replace.
@@ -126,23 +248,32 @@ fn part(stem: &Path, ext: &str) -> PathBuf {
 
 /// From a finished headless run's files: the journal line, the notice, and what the log ends
 /// with. A run that fails can still print its object (`is_error`, the message as `result`).
-fn report(stem: &Path, code: Option<i32>, took: &str) -> (String, String, String) {
+fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
     let raw = std::fs::read(part(stem, "json")).unwrap_or_default();
     let v: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
     let err = std::fs::read_to_string(part(stem, "err")).unwrap_or_default();
     let result = v["result"].as_str().unwrap_or("").to_string();
     let first = tele::clean(&result, 120);
-    let failed = code != Some(0) || v["is_error"] == true;
+    let failed = match ended {
+        Ended::Exit(0) => v["is_error"] == true,
+        // Its result is all there is to go by.
+        Ended::Unseen => v.is_null() || v["is_error"] == true,
+        _ => true,
+    };
     if failed {
-        let code = code.map_or("with a signal".into(), |c| format!("{c}"));
+        let code = match ended {
+            Ended::Exit(c) => format!("exited {c}"),
+            Ended::Signal => "exited with a signal".into(),
+            Ended::Unseen => "ended while no daemon was watching".into(),
+        };
         let said: Vec<&str> = err.lines().take(20).collect();
-        let mut tail = format!("--- claude exited {code}, and said:\n");
+        let mut tail = format!("--- claude {code}, and said:\n");
         if !result.is_empty() {
             tail += &format!("{result}\n");
         }
         tail += &format!("{}\n---\nfailed after {took}\n", said.join("\n"));
         let why = if first.is_empty() { tele::clean(&err, 120) } else { first };
-        let journal = format!("failed (headless, {took}): claude exited {code}: {why}");
+        let journal = format!("failed (headless, {took}): claude {code}: {why}");
         let told = "the headless run failed; gensokyo ritual log says what it said".to_string();
         return (journal, told, tail);
     }

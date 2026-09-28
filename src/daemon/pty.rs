@@ -108,6 +108,11 @@ fn bsdinfo(pid: i32) -> Option<libc::proc_bsdinfo> {
     (got == size).then_some(info)
 }
 
+/// When `pid` started, in microseconds: with the pid, what names one process for good.
+pub fn start_id(pid: i32) -> Option<u64> {
+    bsdinfo(pid).map(|i| i.pbi_start_tvsec * 1_000_000 + i.pbi_start_tvusec)
+}
+
 /// Every live pid in the leader's session, plus every descendant of the leader by ppid (which
 /// catches children that called setsid while their parent is still alive).
 pub fn snapshot(leader: i32) -> BTreeSet<i32> {

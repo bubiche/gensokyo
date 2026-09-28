@@ -342,6 +342,64 @@ fn a_headless_run_past_its_limit_is_stopped_and_frees_its_ritual() {
     assert_eq!(r["t"], "done", "{r}");
 }
 
+/// The `.pid` file of the one headless run in `runs`, and the pid in it.
+fn pid_file(runs: &std::path::Path) -> Option<(std::path::PathBuf, i32)> {
+    let files = std::fs::read_dir(runs).into_iter().flatten().flatten();
+    let p = files.map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "pid"))?;
+    let text = std::fs::read_to_string(&p).ok()?;
+    Some((p, text.split_whitespace().next()?.parse().ok()?))
+}
+
+fn alive(pid: i32) -> bool {
+    // SAFETY: signal 0 only asks whether it is there.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[test]
+fn a_headless_run_outlives_its_daemon_and_the_next_one_sees_it_out() {
+    let env = [("STUB_P_SLEEP", "30"), ("GENSOKYO_HEADLESS_MS", "4000")];
+    let d = Daemon::start("hl-adopt", T0 + 120, &[("quiet", &hourly("headless: true\n"))], &env);
+    wait(|| d.stamp("quiet").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    let runs = d.dir.join("rituals/quiet/runs");
+    wait(|| pid_file(&runs).is_some(), "the run's pid file");
+    let (_, pid) = pid_file(&runs).unwrap();
+    d.cli(&["quit"]);
+    assert!(alive(pid), "the run went with its daemon");
+
+    // The next daemon counts it as running, and stops it at the limit its start set.
+    d.cli(&["list"]);
+    let r = d.verb("run", "quiet");
+    assert_eq!(r["t"], "error", "{r}");
+    assert!(r["error"].as_str().unwrap().contains("running headless right now"), "{r}");
+    wait(|| !d.evs("quiet", "failed").is_empty(), "the adopted run to be stopped");
+    let failed = d.evs("quiet", "failed");
+    assert!(failed[0].ends_with(": still running, so it was stopped"), "{failed:?}");
+    wait(|| !alive(pid), "the run to be gone");
+    assert!(pid_file(&runs).is_none(), "its pid file stayed");
+    assert!(d.log().iter().any(|l| l["adopted"] == pid), "no adopted line in the daemon's log");
+}
+
+#[test]
+fn a_headless_run_that_ended_between_daemons_is_journaled_by_the_next() {
+    let env = [("STUB_P_SLEEP", "2")];
+    let d = Daemon::start("hl-between", T0 + 120, &[("quiet", &hourly("headless: true\n"))], &env);
+    wait(|| d.stamp("quiet").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    let runs = d.dir.join("rituals/quiet/runs");
+    wait(|| pid_file(&runs).is_some(), "the run's pid file");
+    let (_, pid) = pid_file(&runs).unwrap();
+    d.cli(&["quit"]);
+    // It finishes, and writes its result, while no daemon is there.
+    wait(|| !alive(pid), "the run to finish on its own");
+    assert!(d.evs("quiet", "done").is_empty());
+    d.cli(&["list"]);
+    wait(|| !d.evs("quiet", "done").is_empty(), "the next daemon's journal line");
+    let done = d.evs("quiet", "done");
+    assert!(done[0].contains(": stub -p ran in "), "{done:?}");
+    assert!(pid_file(&runs).is_none(), "its pid file stayed");
+}
+
 #[test]
 fn a_ritual_that_cannot_fire_says_so_once() {
     let text = "---\nschedule: \"0 * * * *\"\ncwd: /no/such/dir\n---\nDo the rounds.\n";

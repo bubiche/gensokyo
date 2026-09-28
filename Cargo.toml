@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 croner = { version = "4.0.0", default-features = false, features = ["jiff"] }
 jiff = "0.2.37"
 libc = "0.2.189"

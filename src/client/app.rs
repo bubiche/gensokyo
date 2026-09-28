@@ -103,6 +103,7 @@ fn reader() -> mpsc::UnboundedReceiver<Vec<u8>> {
 
 async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
     let err = |e: std::io::Error| e.to_string();
+    let pid = cli::peer_pid(&sock);
     sock.set_nonblocking(true).map_err(err)?;
     let (r, mut w) = tokio::net::UnixStream::from_std(sock).map_err(err)?.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -131,7 +132,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
     let ms = || start.elapsed().as_secs_f64() * 1000.0;
     let mut drawn = Instant::now() - FRAME;
     let mut dirty = true;
-    let end = loop {
+    loop {
         let mut wrote = Ok(());
         for l in app.out.drain(..) {
             wrote = w.write_all(&l).await;
@@ -140,10 +141,10 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
             }
         }
         if wrote.is_err() {
-            break app.gone.take().unwrap_or_else(|| "the daemon went away".into());
+            break app.ended(pid);
         }
         if let Some(why) = app.done.take() {
-            break why;
+            break Ok(why);
         }
         if dirty && drawn.elapsed() >= FRAME {
             app.draw(&mut term).map_err(err)?;
@@ -158,7 +159,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
                         app.chunk(c);
                     }
                 }
-                None => break "the terminal closed".into(),
+                None => break Ok("the terminal closed".into()),
             },
             _ = tokio::time::sleep_until(held.unwrap_or(start).into()), if held.is_some() => {
                 for c in framer.tick(ms()) {
@@ -167,16 +168,15 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
             }
             l = lines.next_line() => match l {
                 Ok(Some(l)) => app.reply(&l),
-                _ => break app.gone.take().unwrap_or_else(|| "the daemon went away".into()),
+                _ => break app.ended(pid),
             },
             _ = tokio::time::sleep_until(next_draw.unwrap_or(drawn).into()), if next_draw.is_some() => {}
             _ = winch.recv() => term.resize(host_area()).map_err(err)?,
-            _ = hup.recv() => break "the terminal hung up".into(),
-            _ = sigterm.recv() => break "terminated".into(),
+            _ = hup.recv() => break Ok("the terminal hung up".into()),
+            _ = sigterm.recv() => break Ok("terminated".into()),
         }
         dirty = true;
-    };
-    Ok(end)
+    }
 }
 
 /// What the list replies were for.
@@ -211,6 +211,8 @@ struct App {
     done: Option<String>,
     /// Printed if the daemon hangs up next (after a quit).
     gone: Option<String>,
+    /// The daemon's refusal of our hello: another build's.
+    refused: Option<String>,
     /// The quit request, whose error means the daemon stays.
     quit: Option<u64>,
     log: Option<File>,
@@ -222,6 +224,14 @@ struct App {
 }
 
 impl App {
+    /// The daemon hung up: after a quit that is the end, otherwise it is a failure to say.
+    fn ended(&mut self, pid: Option<i32>) -> Result<String, String> {
+        if let Some(e) = self.refused.take() {
+            return Err(cli::refusal(&e, pid).map_or(e, |r| r.to_string()));
+        }
+        self.gone.take().ok_or_else(|| "the daemon went away".into())
+    }
+
     fn new() -> App {
         let home = std::env::var("HOME").unwrap_or_default();
         let exe = std::env::current_exe().unwrap_or_default();
@@ -247,6 +257,7 @@ impl App {
             host: Vec::new(),
             done: None,
             gone: None,
+            refused: None,
             quit: None,
             log,
             t0: Instant::now(),
@@ -437,7 +448,7 @@ impl App {
                 }
                 // The hello (the first request) turned away: why the daemon hangs up.
                 if id == 1 {
-                    self.gone = Some(error.clone());
+                    self.refused = Some(error.clone());
                 }
                 self.m.message = Some(error);
             }

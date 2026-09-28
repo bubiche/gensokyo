@@ -139,6 +139,21 @@ fn add_writes_a_ritual_and_refuses_what_would_not_fire() {
     assert!(!o.status.success() && err(&o).contains("--keep is only"), "{}", err(&o));
     // An empty variable before a flag: the flag is not the value.
     let o = add(&["--schedule", "@daily", "--description", "--disabled"]);
+    assert!(
+        !o.status.success() && err(&o).contains("value is required for '--description"),
+        "{}",
+        err(&o)
+    );
+    let o = e.run(&[
+        "ritual",
+        "add",
+        "--name",
+        "tea",
+        "--schedule",
+        "@daily",
+        "--prompt",
+        "--disabled",
+    ]);
     assert!(!o.status.success() && err(&o).contains("is the next option"), "{}", err(&o));
     assert!(!e.mine("tea").exists(), "a refused ritual leaves no file");
 }

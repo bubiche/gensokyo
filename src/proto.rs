@@ -7,7 +7,7 @@
 use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 4;
+pub const PROTO: u32 = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -57,6 +57,13 @@ pub enum Request {
         bytes: Vec<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<Key>,
+    },
+    /// The resident's scrollback: `rows` back (negative) or forward, or with none, back to the
+    /// live screen. It is the resident's, so every client viewing it scrolls with it.
+    Scroll {
+        who: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rows: Option<i32>,
     },
     /// The size of the client's grid: every live resident and every later summon takes it.
     /// The last client to say wins.
@@ -321,6 +328,11 @@ pub enum Reply {
         rows: Vec<(u16, Vec<Run>)>,
         cursor: Option<(u16, u16)>,
         modes: Modes,
+        /// As in `Frame`: how far it is scrolled back, of how much scrollback.
+        #[serde(default)]
+        back: u32,
+        #[serde(default)]
+        history: u32,
     },
     /// Event: a resident has just come to need the user. `watched` says some client has it on
     /// screen in a focused terminal, and nothing should ring.

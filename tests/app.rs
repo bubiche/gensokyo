@@ -70,7 +70,7 @@ fn shrine() -> App {
         Reply::Residents { residents: vec![resident(1, "Reimu"), resident(2, "Marisa")] },
     );
     let rows = vec![vec![Run { col: 0, style: Style::default(), text: "hello".into() }]];
-    let frame = Frame { cols: 80, rows, cursor: None };
+    let frame = Frame { cols: 80, rows, cursor: None, ..Frame::default() };
     daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 1, frame, modes: Modes::default() });
     sent(&mut a);
     a
@@ -150,6 +150,8 @@ fn damage_updates_the_screen_and_a_missed_frame_asks_for_the_whole_again() {
         rows: vec![(0, row(t))],
         cursor: Some((5, 0)),
         modes: Modes::default(),
+        back: 0,
+        history: 0,
     };
     daemon(&mut a, damage(1, 2, "hello there"));
     let screen = a.m.screen.as_ref().unwrap();

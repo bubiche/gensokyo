@@ -477,7 +477,7 @@ impl App {
                     self.modes();
                 }
             }
-            Reply::Damage { who, base, rev, rows, cursor, modes } => {
+            Reply::Damage { who, base, rev, rows, cursor, modes, back, history } => {
                 // Until the first frame, damage belongs to a stream this client left.
                 if Some(&who) != self.m.focused.as_ref() || self.m.screen.is_none() {
                     return;
@@ -489,7 +489,8 @@ impl App {
                                 *row = runs;
                             }
                         }
-                        (s.cursor, self.rev, self.m.modes) = (cursor, rev, modes);
+                        (s.cursor, s.back, s.history) = (cursor, back, history);
+                        (self.rev, self.m.modes) = (rev, modes);
                         self.modes();
                     }
                     // A frame went missing: start over from a whole one.

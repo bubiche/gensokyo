@@ -187,7 +187,7 @@ impl Vt {
             runs.retain(|r| !r.text.is_empty());
             rows.push(runs);
         }
-        Frame { cols: self.term.cols().unwrap(), rows, cursor }
+        Frame { cols: self.term.cols().unwrap(), rows, cursor, back: 0, history: 0 }
     }
 
     /// Encodes a key the way the child asked for: its kitty flags, modifyOtherKeys and
@@ -256,6 +256,11 @@ pub struct Frame {
     pub rows: Vec<Vec<Run>>,
     /// Column and row of the cursor, when it is visible.
     pub cursor: Option<(u16, u16)>,
+    /// Rows scrolled back from the live screen (0 is live), and rows of scrollback there are.
+    #[serde(default)]
+    pub back: u32,
+    #[serde(default)]
+    pub history: u32,
 }
 
 impl Frame {

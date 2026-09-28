@@ -71,7 +71,7 @@ fn frame(cols: u16, rows: u16) -> Frame {
             ]
         })
         .collect();
-    Frame { cols, rows, cursor: Some((2, 3)) }
+    Frame { cols, rows, cursor: Some((2, 3)), ..Frame::default() }
 }
 
 fn shrine() -> Model {
@@ -495,6 +495,7 @@ fn runs_land_at_their_columns() {
             Run { col: 9, style: rgb, text: "z".into() },
         ]],
         cursor: None,
+        ..Frame::default()
     });
     let mut buf = Buffer::empty(AREA);
     render::render(&m, AREA, &mut buf);
@@ -546,6 +547,7 @@ fn a_selection_reads_in_order_and_trims_each_row() {
             row(&[(0, "three       ")]),
         ],
         cursor: None,
+        ..Frame::default()
     };
     let text = |a, b| render::selected_text(&fr, a, b);
     assert_eq!(text((4, 0), (2, 2)), "two\n日本 e\u{301}  x\nthr");

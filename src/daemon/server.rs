@@ -396,6 +396,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::Input { who, bytes, key } => {
                 input(&shrine, &who, bytes, key).await.err().map(fail)
             }
+            Request::Scroll { .. } => Some(fail("no scrollback in this daemon".into())),
             Request::Resize { cols, rows } => {
                 resize(&shrine, cols, rows);
                 None
@@ -473,7 +474,8 @@ async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, mut nudge: b
         let reply = match &sent {
             Some((prev, m)) if prev.cols == frame.cols && prev.rows.len() == frame.rows.len() => {
                 let rows = frame.damage(prev);
-                (!rows.is_empty() || prev.cursor != frame.cursor || *m != modes).then(|| {
+                let moved = prev.cursor != frame.cursor || prev.back != frame.back;
+                (!rows.is_empty() || moved || *m != modes).then(|| {
                     let rows = rows.into_iter().map(|y| (y as u16, frame.rows[y].clone()));
                     Reply::Damage {
                         who: who.clone(),
@@ -482,6 +484,8 @@ async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, mut nudge: b
                         rows: rows.collect(),
                         cursor: frame.cursor,
                         modes,
+                        back: frame.back,
+                        history: frame.history,
                     }
                 })
             }

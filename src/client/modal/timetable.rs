@@ -169,7 +169,11 @@ impl App {
         let last = self.m.rituals.as_ref().map_or(0, Vec::len).saturating_sub(1);
         let Some(Modal::Timetable(tt)) = &mut self.m.modal else { return };
         match k {
-            Key::Enter | Key::Text('y') if tt.confirm => self.confirm(),
+            Key::Enter | Key::Text('y') if tt.confirm => {
+                if self.answer() {
+                    self.confirm();
+                }
+            }
             Key::Text('n') if tt.confirm => tt.confirm = false,
             _ if tt.confirm => {}
             Key::Text('r') if tt.open.is_some() => self.ritual(Act::Run),

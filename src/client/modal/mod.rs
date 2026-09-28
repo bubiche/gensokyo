@@ -134,7 +134,7 @@ impl App {
         match &mut self.m.modal {
             Some(Modal::Help) => self.m.modal = None,
             Some(Modal::Quit | Modal::Banish { .. }) => match k {
-                Key::Enter | Key::Text('y') => self.confirm(),
+                Key::Enter | Key::Text('y') if self.answer() => self.confirm(),
                 Key::Text('n') => self.m.modal = None,
                 _ => {}
             },

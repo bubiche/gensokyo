@@ -35,6 +35,14 @@ const TOP: i32 = -(1 << 30);
 const INFO_LIFE: Duration = Duration::from_secs(5);
 const ERROR_LIFE: Duration = Duration::from_secs(10);
 
+/// A key this soon after the one before is typing, not a command: the rest of a sentence meant
+/// for a resident that has just left must not act on the shrine (`a` moving on to another
+/// resident, then the rest typed into its dialog).
+const TYPING: Duration = Duration::from_secs(1);
+
+/// A yes this soon after the key before is part of a burst, not an answer (`q` then Enter).
+const ANSWER: Duration = Duration::from_millis(250);
+
 /// Alternate screen, cursor hidden, focus reports, bracketed paste, a kitty entry of our own.
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
 const LEAVE: &[u8] =
@@ -267,6 +275,11 @@ pub struct App {
     pub(super) summoning: Option<u64>,
     /// When the message goes.
     said: Option<Instant>,
+    /// When the last key came, and the one before it.
+    typed: Option<Instant>,
+    pub(super) before: Option<Instant>,
+    /// Added to the clock: tests move time on with `later`.
+    skew: Duration,
     log: Option<File>,
     t0: Instant,
     /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`: a bell and an OSC 9 notification to the
@@ -313,12 +326,35 @@ impl App {
             quit: None,
             summoning: None,
             said: None,
+            typed: None,
+            before: None,
+            skew: Duration::ZERO,
             log: c.log,
             t0: Instant::now(),
             bell: c.bell,
             desktop: c.desktop,
             copy: c.copy,
         }
+    }
+
+    /// The clock, as `later` has moved it.
+    pub(super) fn clock(&self) -> Instant {
+        Instant::now() + self.skew
+    }
+
+    /// Time moves on by `d`, for tests of what depends on the pace of typing.
+    pub fn later(&mut self, d: Duration) {
+        self.skew += d;
+    }
+
+    /// Whether the key being handled came within `d` of the one before it.
+    pub(super) fn burst(&self, d: Duration) -> bool {
+        self.before.zip(self.typed).is_some_and(|(b, t)| t.duration_since(b) < d)
+    }
+
+    /// A yes to a confirm, unless it came in a burst of typing.
+    pub(super) fn answer(&self) -> bool {
+        !self.burst(ANSWER)
     }
 
     /// A message for the user, in place of the last one.
@@ -597,7 +633,11 @@ impl App {
                 }
                 return;
             }
-            _ => self.m.selection = None,
+            _ => {
+                self.m.selection = None;
+                let now = self.clock();
+                self.before = self.typed.replace(now);
+            }
         }
         if self.m.leader {
             if let Some(ch) = keys::chord(&c) {
@@ -617,8 +657,16 @@ impl App {
             }
             self.forward(&c);
         } else if let Some(ch) = keys::chord(&c) {
-            // Nothing on screen takes keys, so the letters work without the leader. On a
-            // departed screen `r` is its own `[recall r]`, and `Ctrl-] r` the whole list.
+            // Nothing on screen takes keys, so the letters work without the leader, but only
+            // after a pause: typing that outlived its resident goes nowhere.
+            if self.burst(TYPING) {
+                if let Some(r) = self.focused() {
+                    let say = format!("{} has left; what was typed went nowhere", r.name);
+                    self.say(Say::Info, say);
+                }
+                return;
+            }
+            // On a departed screen `r` is its own `[recall r]`, and `Ctrl-] r` the whole list.
             match ch {
                 Chord::Recall if self.focused().is_some() => self.recall_focused(),
                 ch => self.chord(ch),

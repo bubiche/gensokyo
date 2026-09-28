@@ -265,6 +265,52 @@ fn on_a_departed_screen_r_recalls_it_and_the_chord_lists_them_all() {
     assert!(matches!(a.m.modal, Some(Modal::Recall(_))));
 }
 
+/// Each byte as a read of its own, as a person types.
+fn typing(a: &mut App, text: &[u8]) {
+    for b in text {
+        host(a, &[*b]);
+        a.later(Duration::from_millis(120));
+    }
+}
+
+#[test]
+fn typing_that_outlives_its_resident_goes_nowhere_and_a_pause_gives_the_keys_back() {
+    let mut a = shrine();
+    let mut residents = a.m.residents.clone();
+    residents[1].state = State::Awaits;
+    typing(&mut a, b"looks ");
+    assert_eq!(sent(&mut a).len(), 6);
+    // Reimu leaves mid-sentence: `a` must not move on to Marisa and answer her dialog, nor
+    // `x` close the departed screen and type the rest into whoever comes next.
+    residents[0].departed = Some(1);
+    daemon(&mut a, Reply::Residents { residents });
+    sent(&mut a);
+    typing(&mut a, b"all good, fix it\r");
+    assert!(sent(&mut a).is_empty());
+    assert_eq!(a.m.focused.as_deref(), Some("id-Reimu"));
+    assert!(a.m.modal.is_none());
+    assert_eq!(said(&a), Some("Reimu has left; what was typed went nowhere"));
+    // After a pause the letters are the departed screen's own.
+    a.later(Duration::from_secs(2));
+    host(&mut a, b"r");
+    assert_eq!(kinds(&sent(&mut a)), ["recall"]);
+}
+
+#[test]
+fn a_yes_in_a_burst_of_typing_answers_nothing() {
+    let mut a = app();
+    // `q` then Enter at once, as the end of a word and a line would come.
+    host(&mut a, b"q");
+    host(&mut a, b"\r");
+    assert!(matches!(a.m.modal, Some(Modal::Quit)));
+    typing(&mut a, b"uickly");
+    assert!(matches!(a.m.modal, Some(Modal::Quit)), "{:?}", a.m.modal);
+    assert!(sent(&mut a).is_empty());
+    a.later(Duration::from_millis(400));
+    host(&mut a, b"y");
+    assert_eq!(kinds(&sent(&mut a)), ["quit"]);
+}
+
 fn said(a: &App) -> Option<&str> {
     a.m.message.as_ref().map(|m| m.text.as_str())
 }

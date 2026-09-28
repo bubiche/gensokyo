@@ -14,6 +14,10 @@
 # Idempotent: exits 0 at once when the directory is already at the pin and clean.
 set -eu
 
+# The Zig the pinned Ghostty's build.zig is written for; Zig's build API changes between minor
+# versions, and another one fails deep inside the cargo build.
+ZIG=0.16.0
+
 COMMIT=739603b8a2b643b167031a99718127cc0ca311a5
 TREE=7cff9e6286f9ee88067479adf559e7f6dfa0f0ed
 REPO=https://github.com/ghostty-org/ghostty.git
@@ -24,6 +28,9 @@ dir=$root/vendor/$name
 
 grep -q "\"vendor/$name\"" "$root/.cargo/config.toml" ||
   { echo "ghostty.sh: .cargo/config.toml does not point GHOSTTY_SOURCE_DIR at vendor/$name" >&2; exit 1; }
+
+have=$(zig version 2>/dev/null) || { echo "ghostty.sh: zig $ZIG is needed to build libghostty-vt, and there is no zig on PATH" >&2; exit 1; }
+[ "$have" = "$ZIG" ] || { echo "ghostty.sh: zig $ZIG is needed to build libghostty-vt; this is zig $have" >&2; exit 1; }
 
 check() {
   [ "$(git -C "$dir" rev-parse HEAD)" = "$COMMIT" ] || { echo "ghostty.sh: $dir is not at $COMMIT" >&2; return 1; }

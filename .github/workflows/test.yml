@@ -1,5 +1,6 @@
-# cargo test on macOS, including the libghostty-vt runtime smoke test (tests/ghostty_smoke.rs):
-# the binding's C API can drift from the vendored Ghostty without any build error.
+# fmt, clippy and the tests on macOS, including the libghostty-vt runtime smoke test
+# (tests/ghostty_smoke.rs): the binding's C API can drift from the vendored Ghostty without any
+# build error.
 name: test
 
 on:
@@ -11,6 +12,8 @@ on:
 jobs:
   test:
     runs-on: macos-latest
+    # A hung test would otherwise hold the runner for six hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -18,17 +21,39 @@ jobs:
       - name: rust
         run: |
           v=$(awk '$1 == "rust" { print $2 }' .tool-versions)
-          rustup toolchain install "$v" --profile minimal
+          rustup toolchain install "$v" --profile minimal --component rustfmt,clippy
           rustup default "$v"
 
-      # Exactly 0.16.0, the Zig the pinned Ghostty's build.zig is written for; Zig's build API
-      # changes between minor versions.
+      # Exactly 0.16.0, the Zig the pinned Ghostty's build.zig is written for (scripts/ghostty.sh
+      # checks it too).
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
+      # The Ghostty source and the Zig and cargo builds, keyed on everything that changes them.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            vendor
+            target
+          key: ${{ runner.os }}-${{ hashFiles('.tool-versions', 'Cargo.lock', 'scripts/ghostty.sh') }}
+          restore-keys: ${{ runner.os }}-
+
       - name: ghostty source
         run: scripts/ghostty.sh
 
-      - name: cargo test
-        run: cargo test --locked
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: tests
+        run: cargo nextest run --locked

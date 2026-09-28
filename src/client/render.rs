@@ -16,6 +16,26 @@ use ratatui::widgets::{Block, Clear, Widget};
 /// The sidebar's width, its box included.
 pub const SIDEBAR_W: u16 = 25;
 
+/// What each key after the leader does, in the order the sidebar and help list them.
+pub(super) const CHORDS: [(&str, &str); 16] = [
+    ("n", "summon"),
+    ("c", "cast"),
+    ("b", "banish"),
+    ("r", "recall"),
+    ("t", "timetable"),
+    ("x", "close"),
+    ("j", "next"),
+    ("k", "previous"),
+    ("a", "needs you"),
+    ("[", "scroll"),
+    ("1-9", "slot"),
+    ("m", "mouse"),
+    ("d", "detach"),
+    ("q", "quit"),
+    ("?", "help"),
+    ("^]", "send ^]"),
+];
+
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     /// In shrine order.
@@ -225,8 +245,14 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
 }
 
 fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
-    let border = if m.leader { Style::new().fg(Color::Yellow) } else { DIM };
-    let block = Block::bordered().title(" gensokyo ").border_style(border);
+    let (border, hint) = match m.leader {
+        true => (Style::new().fg(Color::Yellow), " esc cancels "),
+        false => (DIM, " ^] then a key "),
+    };
+    let block = Block::bordered()
+        .title(" gensokyo ")
+        .title_bottom(Line::from(hint).centered())
+        .border_style(border);
     let inner = block.inner(side);
     block.render(side, buf);
     // A host one row high has no inside at all.
@@ -259,9 +285,24 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         ("[quit q]", Button::Quit),
         ("[?]", Button::Help),
     ];
-    let rows = flow_rows(&buttons, inner.width);
-    let y = up(rows);
-    flow(buf, Rect { y, height: rows, ..inner }, &buttons, BUTTON, hits);
+    if m.leader {
+        // Every chord, two a line, where the buttons were: the next key is one of these.
+        let lines: Vec<String> = CHORDS
+            .chunks(2)
+            .map(|p| {
+                let right = p.get(1).map_or(String::new(), |(k, v)| format!("{k} {v}"));
+                format!("{:<11} {right}", format!("{} {}", p[0].0, p[0].1))
+            })
+            .collect();
+        for l in lines.iter().rev() {
+            buf.set_stringn(inner.x, up(1), l, w, Style::new());
+        }
+        buf.set_stringn(inner.x, up(1), "^] then:", w, PICK.add_modifier(Modifier::BOLD));
+    } else {
+        let rows = flow_rows(&buttons, inner.width);
+        let y = up(rows);
+        flow(buf, Rect { y, height: rows, ..inner }, &buttons, BUTTON, hits);
+    }
     // The account's usage, from the newest report that has it.
     let newest = m.residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
     if let Some(t) = newest {
@@ -298,9 +339,7 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         hits.push(Rect { y, height: 1, ..inner }, Hit::Button(Button::Timetable));
     }
-    if m.leader {
-        buf.set_stringn(inner.x, up(1), "^] …", w, PICK.add_modifier(Modifier::BOLD));
-    } else if let Some(msg) = &m.message {
+    if let Some(msg) = m.message.as_ref().filter(|_| !m.leader) {
         // Wrapped, not cut: a cast's reply names who was left out at its end.
         let lines = wrap(&msg.text, w, 5);
         let y = up(lines.len() as u16);

@@ -14,8 +14,8 @@ pub use timetable::{Timetable, opened, timetable_order, when_short};
 
 use super::app::App;
 use super::framer::Chunk;
-use super::render::{Model, Row};
-use crate::proto::{Request, Resident};
+use super::render::{CHORDS, Model, Row};
+use crate::proto::{Request, Resident, State};
 
 #[derive(Clone, Debug)]
 pub enum Modal {
@@ -63,25 +63,26 @@ impl Modal {
     }
 }
 
+/// The chords, what a scrolled-back resident takes, and what the sidebar's glyphs mean.
 fn help() -> (String, Vec<Row>) {
-    const KEYS: [(&str, &str); 10] = [
-        ("n", "summon"),
-        ("b", "banish"),
-        ("r", "recall"),
-        ("c", "cast"),
-        ("x", "close"),
-        ("t", "timetable"),
-        ("q", "quit"),
-        ("?", "help"),
-        ("m", "mouse capture"),
-        ("d", "detach"),
-    ];
     let mut rows = vec![Row::text("Ctrl-] then a key:")];
-    rows.extend(KEYS.chunks(2).map(|p| {
-        let right = p.get(1).map_or(String::new(), |(k, v)| format!(" {k}  {v}"));
-        Row::text(&format!("  {}  {:<15}{right}", p[0].0, p[0].1))
+    rows.extend(CHORDS.chunks(2).map(|p| {
+        let right = p.get(1).map_or(String::new(), |(k, v)| format!("{k:>3}  {v}"));
+        Row::text(&format!("{:>5}  {:<14}{right}", p[0].0, p[0].1))
     }));
-    rows.extend(["  1-9  focus that slot", "  Ctrl-]  a literal Ctrl-]"].map(Row::text));
+    rows.push(Row::text("Nobody on screen, or a departed one: the keys alone."));
+    rows.push(Row::text("Scrolled back: j k a row, b f a screen, g the top, q home."));
+    let legend: Vec<String> = [
+        (State::Busy, "busy"),
+        (State::Awaits, "needs you"),
+        (State::Asked, "asked you"),
+        (State::Resting, "resting"),
+        (State::Departed, "departed"),
+    ]
+    .iter()
+    .map(|(s, what)| format!("{} {what}", s.glyph()))
+    .collect();
+    rows.push(Row::dim(&legend.join("  ")));
     rows.push(Row::close());
     (" help ".into(), rows)
 }

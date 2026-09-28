@@ -763,6 +763,23 @@ impl App {
         }
     }
 
+    /// The first resident after the one on screen (before it, going back) that `pick` takes,
+    /// round from the other end and the one on screen last; false when there is none.
+    fn round(&mut self, by: isize, pick: impl Fn(&Resident) -> bool) -> bool {
+        let n = self.m.residents.len() as isize;
+        let at = self.m.residents.iter().position(|r| Some(&r.id) == self.m.focused.as_ref());
+        let at = at.map_or(if by > 0 { -1 } else { 0 }, |i| i as isize);
+        let found = (1..=n)
+            .map(|i| &self.m.residents[(at + by * i).rem_euclid(n.max(1)) as usize])
+            .find(|r| pick(r))
+            .map(|r| r.id.clone());
+        let found_any = found.is_some();
+        if found_any {
+            self.focus(found);
+        }
+        found_any
+    }
+
     fn recall_focused(&mut self) {
         if let Some(r) = self.focused().filter(|r| r.departed.is_some()) {
             let who = r.id.clone();
@@ -808,10 +825,19 @@ impl App {
                     self.send(Request::Close { who });
                 }
             }
-            Chord::Focus(n) => {
-                let id = self.m.residents.iter().find(|r| r.slot == Some(n)).map(|r| r.id.clone());
-                if id.is_some() {
-                    self.focus(id);
+            Chord::Focus(n) => match self.m.residents.iter().find(|r| r.slot == Some(n)) {
+                Some(r) => self.focus(Some(r.id.clone())),
+                None => self.say(Say::Info, format!("nobody is in slot {n}")),
+            },
+            Chord::Next => {
+                self.round(1, |_| true);
+            }
+            Chord::Prev => {
+                self.round(-1, |_| true);
+            }
+            Chord::Awaiting => {
+                if !self.round(1, |r| r.state.needs_you()) {
+                    self.say(Say::Info, "nobody needs you");
                 }
             }
             Chord::Leader => {

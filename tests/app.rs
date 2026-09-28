@@ -186,6 +186,35 @@ fn the_wheel_and_the_chord_scroll_back_and_keys_move_or_leave() {
     assert_eq!(out[1]["bytes"], json!([b'x']));
 }
 
+#[test]
+fn j_and_k_go_round_the_sidebar_and_a_finds_whoever_needs_you() {
+    let mut a = shrine();
+    let mut sakuya = resident(3, "Sakuya");
+    sakuya.state = State::Asked;
+    let mut residents = a.m.residents.clone();
+    residents.push(sakuya);
+    daemon(&mut a, Reply::Residents { residents });
+    let on = |a: &App| a.m.focused.clone().unwrap_or_default();
+    for (keys, who) in [
+        (&b"\x1dj"[..], "id-Marisa"),
+        (b"\x1dj", "id-Sakuya"),
+        (b"\x1dj", "id-Reimu"),
+        (b"\x1dk", "id-Sakuya"),
+        (b"\x1dk", "id-Marisa"),
+        (b"\x1da", "id-Sakuya"),
+    ] {
+        host(&mut a, keys);
+        assert_eq!(on(&a), who, "{keys:?}");
+    }
+    let mut residents = a.m.residents.clone();
+    residents[2].state = State::Resting;
+    daemon(&mut a, Reply::Residents { residents });
+    host(&mut a, b"\x1da");
+    assert_eq!((on(&a).as_str(), said(&a)), ("id-Sakuya", Some("nobody needs you")));
+    host(&mut a, b"\x1d7");
+    assert_eq!((on(&a).as_str(), said(&a)), ("id-Sakuya", Some("nobody is in slot 7")));
+}
+
 fn said(a: &App) -> Option<&str> {
     a.m.message.as_ref().map(|m| m.text.as_str())
 }

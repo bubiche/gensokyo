@@ -1,6 +1,5 @@
 ---
 source: tests/render.rs
-assertion_line: 328
 expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensoky ↑ 120 of 3400 · esc returns ┐"
@@ -26,4 +25,4 @@ expression: t.backend()
 "│[timetable t] [quit q] ││line 19     ~~~~~~~~~~~~~~~~~~~                      │"
 "│[?]                    ││line 20                                              │"
 "│[mouse: shrine m]      ││line 21     ~                                        │"
-"└───────────────────────┘└─────────────────────────────────────────────────────┘"
+"└──── ^] then a key ────┘└─────────────────────────────────────────────────────┘"

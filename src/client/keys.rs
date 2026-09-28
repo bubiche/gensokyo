@@ -110,6 +110,11 @@ pub enum Chord {
     Close,
     /// Back through the resident's scrollback, half a screen.
     ScrollBack,
+    /// The next or the previous resident in the sidebar, round at the ends.
+    Next,
+    Prev,
+    /// The next resident that needs the user.
+    Awaiting,
     /// Slot 1 to 9.
     Focus(u8),
     /// The leader twice: send the resident one Ctrl-], as `Forward::Key(LEADER)`.
@@ -156,6 +161,9 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'd' => Chord::Detach,
         'x' => Chord::Close,
         '[' => Chord::ScrollBack,
+        'j' => Chord::Next,
+        'k' => Chord::Prev,
+        'a' => Chord::Awaiting,
         '1'..='9' => Chord::Focus(ch as u8 - b'0'),
         _ => Chord::Unbound,
     })

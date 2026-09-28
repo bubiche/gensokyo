@@ -2,7 +2,9 @@
 
 pub mod aware;
 pub mod cards;
+mod headless;
 mod ingest;
+mod keep;
 mod launch;
 mod log;
 mod notify;
@@ -13,3 +15,4 @@ mod rituals;
 pub mod server;
 mod shrine;
 pub mod store;
+mod stream;

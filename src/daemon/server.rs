@@ -7,15 +7,15 @@ use super::ingest::{hook, replay, statusline};
 use super::log::log;
 use super::notify::looked;
 use super::registry::poll;
-use super::resident::Handle;
 use super::rituals;
 use super::shrine::{
     SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
 };
 use super::store::{self, Store};
+use super::stream::{self, send, send_written, view, writer};
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request};
-use crate::vt::{Frame, KeyEvent, Modes};
+use crate::vt::KeyEvent;
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -23,17 +23,10 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::OwnedWriteHalf;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::AbortHandle;
-
-/// A viewer gets at most one screen per this, about 60 a second.
-const FRAME_GAP: Duration = Duration::from_millis(16);
-
-/// How long a child's synchronized-output block may hold its screen back.
-const SYNC_HOLD: Duration = Duration::from_millis(150);
 
 /// How long an input may wait for room in a resident's queue: one that has stopped reading its
 /// tty would otherwise hold up every request after it on the connection.
@@ -218,38 +211,6 @@ struct Stop {
     left: watch::Sender<bool>,
 }
 
-/// One line for the writer, and a word back once it is written.
-type Line = (Vec<u8>, Option<oneshot::Sender<()>>);
-
-type Out = mpsc::Sender<Line>;
-
-fn encode(r: &Reply) -> Vec<u8> {
-    let mut b = serde_json::to_vec(r).expect("a reply serializes");
-    b.push(b'\n');
-    b
-}
-
-async fn send(out: &Out, r: &Reply) -> bool {
-    out.send((encode(r), None)).await.is_ok()
-}
-
-/// Returns once the line is written, so a caller that waits on it never has two in flight.
-async fn send_written(out: &Out, r: &Reply) -> bool {
-    let (tx, rx) = oneshot::channel();
-    out.send((encode(r), Some(tx))).await.is_ok() && rx.await.is_ok()
-}
-
-async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
-    while let Some((b, done)) = rx.recv().await {
-        if w.write_all(&b).await.is_err() {
-            return;
-        }
-        if let Some(d) = done {
-            let _ = d.send(());
-        }
-    }
-}
-
 /// Requests are read in order. Banish, close, cast and quit run on their own, so a long one holds up
 /// neither the rest nor the screen; their replies come when they finish.
 async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
@@ -271,8 +232,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
         }
     };
     let (r, w) = s.into_split();
-    let (out, rx) = mpsc::channel(64);
-    tokio::task::spawn_local(write_lines(w, rx));
+    let out = writer(w);
     let mut lines = BufReader::new(r).lines();
     let mut greeted = false;
     // Greeted in another protocol by a hook: a binary updated under a running resident still
@@ -354,7 +314,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             }
             Request::Watch => {
                 if watching.is_none() {
-                    let task = tokio::task::spawn_local(watch(shrine.clone(), out.clone()));
+                    let task = tokio::task::spawn_local(stream::watch(shrine.clone(), out.clone()));
                     watching = Some(task.abort_handle());
                 }
                 None
@@ -423,99 +383,6 @@ fn same_user(s: &UnixStream) -> bool {
     let (mut uid, mut gid) = (0, 0);
     // SAFETY: getpeereid writes two ids into the locals; getuid cannot fail.
     unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == libc::getuid() }
-}
-
-/// A `residents` event now and whenever the shrine changes after, the timetable now and
-/// whenever it changes, and every `notify` and `notice`.
-async fn watch(shrine: Shared, out: Out) {
-    let (mut rx, mut notices) = {
-        let sh = shrine.borrow();
-        (sh.changed.subscribe(), sh.notices.subscribe())
-    };
-    if !send(&out, &rituals::listing(&shrine, 0)).await {
-        return;
-    }
-    loop {
-        rx.borrow_and_update();
-        if !send(&out, &Reply::Residents { residents: list(&shrine, false) }).await {
-            return;
-        }
-        loop {
-            tokio::select! {
-                c = rx.changed() => match c {
-                    Ok(()) => break,
-                    Err(_) => return,
-                },
-                n = notices.recv() => match n {
-                    Ok(r) => if !send(&out, &r).await { return },
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(_) => return,
-                },
-            }
-        }
-    }
-}
-
-/// Streams one resident's screen: a whole frame, then the rows that changed. Each is computed
-/// when the last has been written, against what this client was last sent, so a slow client
-/// skips screens rather than queueing them.
-async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, mut nudge: bool) {
-    let mut changes = h.changes();
-    let mut sent: Option<(Frame, Modes)> = None;
-    let mut rev = 0;
-    loop {
-        // A child inside its own synchronized-output block is mid-draw.
-        let held = Instant::now();
-        while h.in_sync() && held.elapsed() < SYNC_HOLD {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        changes.borrow_and_update();
-        let (frame, modes) = (h.frame(), h.modes());
-        let reply = match &sent {
-            Some((prev, m)) if prev.cols == frame.cols && prev.rows.len() == frame.rows.len() => {
-                let rows = frame.damage(prev);
-                let moved = prev.cursor != frame.cursor || prev.back != frame.back;
-                (!rows.is_empty() || moved || *m != modes).then(|| {
-                    let rows = rows.into_iter().map(|y| (y as u16, frame.rows[y].clone()));
-                    Reply::Damage {
-                        who: who.clone(),
-                        base: rev,
-                        rev: rev + 1,
-                        rows: rows.collect(),
-                        cursor: frame.cursor,
-                        modes,
-                        back: frame.back,
-                        history: frame.history,
-                    }
-                })
-            }
-            _ => Some(Reply::Frame { who: who.clone(), rev: rev + 1, frame: frame.clone(), modes }),
-        };
-        if let Some(r) = reply {
-            if !send_written(&out, &r).await {
-                return;
-            }
-            rev += 1;
-            sent = Some((frame, modes));
-        }
-        // A client coming back gets the screen it missed, then a SIGWINCH, which makes Claude
-        // Code draw everything again. On its own task: a view dropped midway must not leave the
-        // resident a row short.
-        let (cols, rows) = h.size();
-        if std::mem::take(&mut nudge) && rows > 1 {
-            let (shrine, h) = (shrine.clone(), h.clone());
-            tokio::task::spawn_local(async move {
-                h.resize(cols, rows - 1);
-                tokio::time::sleep(Duration::from_millis(30)).await;
-                let (cols, rows) = shrine.borrow().size;
-                h.resize(cols, rows);
-            });
-        }
-        tokio::time::sleep(FRAME_GAP).await;
-        if changes.changed().await.is_err() {
-            return;
-        }
-    }
 }
 
 async fn input(

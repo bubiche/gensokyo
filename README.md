@@ -60,9 +60,10 @@ what comes next:
 | `Ctrl-]` | send the resident a `Ctrl-]` of its own |
 
 With nobody on screen, or a departed resident on screen, the keys work without the leader.
-The wheel scrolls back through a resident's scrollback too. Scrolled back, `j`/`k` move a row,
-`b`/`f` a screen, `g` goes to the top and `q` or Esc back to the live screen, and anything
-else you type goes back to the live screen and to the resident. A resident's scrollback is its
+The wheel scrolls back through a resident's scrollback too. Scrolled back, `j`/`k` or the
+arrows move a row, `b`/`f`, Space or PgUp/PgDn a screen, `g` or Home goes to the top, and `q`,
+`G`, End or Esc back to the live screen; anything else you type goes back to the live screen
+and on to the resident. A resident's scrollback is its
 own, so two clients showing it scroll together.
 
 In a dialog, Enter does the main thing, Esc goes back one stage, and `y`/`n` answer the

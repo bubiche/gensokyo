@@ -197,12 +197,14 @@ pub fn scrollback(c: &Chunk) -> Option<Scrollback> {
         },
         Chunk::Key { raw, key: None } => {
             return match raw.as_slice() {
-                b"[A" | b"OA" => Some(By(-1)),
-                b"[B" | b"OB" => Some(By(1)),
-                b"[5~" => Some(Pages(-1)),
-                b"[6~" => Some(Pages(1)),
-                b"[H" | b"OH" | b"[1~" | b"[7~" => Some(Top),
-                b"[F" | b"OF" | b"[4~" | b"[8~" => Some(Live),
+                b"\x1b[A" | b"\x1bOA" => Some(By(-1)),
+                b"\x1b[B" | b"\x1bOB" => Some(By(1)),
+                b"\x1b[5~" => Some(Pages(-1)),
+                b"\x1b[6~" => Some(Pages(1)),
+                b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" | b"\x1b[7~" => Some(Top),
+                b"\x1b[F" | b"\x1bOF" | b"\x1b[4~" | b"\x1b[8~" => Some(Live),
+                // A kitty release (`CSI 1;1:3A`), when the resident asked for them: nothing.
+                r if r.windows(2).any(|w| w == b":3") => Some(Stay),
                 _ => None,
             };
         }

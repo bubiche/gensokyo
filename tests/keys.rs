@@ -230,6 +230,8 @@ fn keys_that_move_through_the_scrollback() {
         // Kitty's all-as-escapes form of a letter, and its release.
         (b"\x1b[107u", By(-1)),
         (b"\x1b[107;1:3u", Stay),
+        // An arrow's release, which the framer leaves unparsed.
+        (b"\x1b[1;1:3A", Stay),
     ] {
         assert_eq!(s(b), Some(want), "{b:?}");
     }

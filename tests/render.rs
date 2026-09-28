@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
 use gensokyo::client::modal::{self, Cast, Modal, Recall, Stage, Summon, Timetable};
-use gensokyo::client::render::{self, Button, Hit, HitMap, Model};
+use gensokyo::client::render::{self, Button, Hit, HitMap, Message, Model, Say};
 use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
@@ -104,6 +104,7 @@ fn summon(stage: Stage) -> Modal {
         completions: vec!["scratch_repo/".into(), "scripts/".into()],
         name: "Yuyu".into(),
         error: (stage == Stage::Name).then(|| "Yuyu is already here".into()),
+        waiting: false,
     })
 }
 
@@ -275,18 +276,18 @@ fn screens() -> Vec<(&'static str, Model)> {
             "capture-off",
             with(&|m| {
                 m.capture = false;
-                m.message = Some("no resident 7".into());
+                m.message = Some(Message::new(Say::Error, "no resident 7"));
             }),
         ),
         ("leader", with(&|m| m.leader = true)),
         (
             "cast-reply",
             with(&|m| {
-                m.message = Some(
+                m.message = Some(Message::new(
+                    Say::Info,
                     "cast Spirit Sign \"Status Report\" on Reimu; Marisa has a dialog waiting \
-                     for you; left out"
-                        .into(),
-                )
+                     for you; left out",
+                ))
             }),
         ),
     ]

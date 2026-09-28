@@ -3,7 +3,7 @@
 
 use super::{Key, Modal};
 use crate::client::app::App;
-use crate::client::render::{DIM, ERROR, Model, Row, ago, mark, width, window, wrap};
+use crate::client::render::{DIM, ERROR, Model, Row, Say, ago, mark, width, window, wrap};
 use crate::paths::tilde;
 use crate::proto::{Request, RitualInfo, RitualVerb};
 use ratatui::style::{Color, Style};
@@ -184,7 +184,7 @@ impl App {
     pub(super) fn timetable_confirm(&mut self, mut tt: Timetable) {
         match (&tt.open, tt.confirm) {
             (Some(name), true) => {
-                self.m.message = Some(format!("removing {name}…"));
+                self.say(Say::Info, format!("removing {name}…"));
                 let name = name.clone();
                 self.send(Request::Ritual { verb: RitualVerb::Remove, name });
                 (tt.open, tt.confirm) = (None, false);
@@ -208,7 +208,7 @@ impl App {
         let (verb, doing) = match act {
             Act::Run => (RitualVerb::Run, "running"),
             Act::Remove if shipped => {
-                self.m.message = Some(format!("{name} ships with gensokyo: pause it instead"));
+                self.say(Say::Error, format!("{name} ships with gensokyo: pause it instead"));
                 return;
             }
             Act::Remove => {
@@ -220,7 +220,7 @@ impl App {
             Act::Toggle if enabled => (RitualVerb::Disable, "pausing"),
             Act::Toggle => (RitualVerb::Enable, "resuming"),
         };
-        self.m.message = Some(format!("{doing} {name}…"));
+        self.say(Say::Info, format!("{doing} {name}…"));
         self.send(Request::Ritual { verb, name });
     }
 

@@ -8,7 +8,7 @@
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward};
 use super::modal::{Act, Cast, Modal, Recall, Summon, Timetable};
-use super::render::{self, Button, Hit, HitMap, Model};
+use super::render::{self, Button, Hit, HitMap, Message, Model, Say};
 use crate::cli;
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request, Resident};
@@ -27,6 +27,10 @@ use tokio::sync::mpsc;
 
 /// At most one frame this often: about 60 fps while a resident streams output.
 const FRAME: Duration = Duration::from_millis(16);
+
+/// How long a message stays: long enough to read, and an error longer.
+const INFO_LIFE: Duration = Duration::from_secs(5);
+const ERROR_LIFE: Duration = Duration::from_secs(10);
 
 /// Alternate screen, cursor hidden, focus reports, bracketed paste, a kitty entry of our own.
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
@@ -154,6 +158,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         }
         let held = framer.deadline().map(|d| start + Duration::from_secs_f64(d / 1000.0));
         let next_draw = dirty.then_some(drawn + FRAME);
+        let expires = app.expires();
         tokio::select! {
             b = input.recv() => match b {
                 Some(b) => {
@@ -173,6 +178,9 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
                 _ => break app.ended(pid),
             },
             _ = tokio::time::sleep_until(next_draw.unwrap_or(drawn).into()), if next_draw.is_some() => {}
+            _ = tokio::time::sleep_until(expires.unwrap_or(start).into()), if expires.is_some() => {
+                app.expire(Instant::now());
+            }
             _ = winch.recv() => term.resize(host_area()).map_err(err)?,
             _ = hup.recv() => break Ok("the terminal hung up".into()),
             _ = sigterm.recv() => break Ok("terminated".into()),
@@ -252,6 +260,10 @@ pub struct App {
     refused: Option<String>,
     /// The quit request, whose error means the daemon stays.
     pub(super) quit: Option<u64>,
+    /// The summon the summon modal waits on: its reply closes the modal, its error shows there.
+    pub(super) summoning: Option<u64>,
+    /// When the message goes.
+    said: Option<Instant>,
     log: Option<File>,
     t0: Instant,
     /// The config's `NOTIFY_BELL` and `NOTIFY_DESKTOP`: a bell and an OSC 9 notification to the
@@ -296,11 +308,32 @@ impl App {
             gone: None,
             refused: None,
             quit: None,
+            summoning: None,
+            said: None,
             log: c.log,
             t0: Instant::now(),
             bell: c.bell,
             desktop: c.desktop,
             copy: c.copy,
+        }
+    }
+
+    /// A message for the user, in place of the last one.
+    pub(super) fn say(&mut self, kind: Say, text: impl Into<String>) {
+        let life = if kind == Say::Error { ERROR_LIFE } else { INFO_LIFE };
+        self.m.message = Some(Message::new(kind, text));
+        self.said = Some(Instant::now() + life);
+    }
+
+    /// When the message on show runs out.
+    pub fn expires(&self) -> Option<Instant> {
+        self.said.filter(|_| self.m.message.is_some())
+    }
+
+    /// The message gone once its time is up.
+    pub fn expire(&mut self, now: Instant) {
+        if self.said.is_some_and(|t| t <= now) {
+            (self.m.message, self.said) = (None, None);
         }
     }
 
@@ -410,7 +443,7 @@ impl App {
                 if self.desktop {
                     self.host.extend(format!("\x1b]9;{text}\x07").bytes());
                 }
-                self.m.message = Some(text);
+                self.say(Say::Notice, text);
             }
             Reply::Cards { cards, unusable, .. } => {
                 if let Some(Modal::Cast(c)) = &mut self.m.modal {
@@ -446,10 +479,15 @@ impl App {
                         // iTerm2 posts this as its own notification; terminals without it ignore it.
                         self.host.extend(format!("\x1b]9;{text}\x07").bytes());
                     }
-                    self.m.message = Some(format!("{} {text}", state.glyph()));
+                    self.say(Say::Notice, format!("{} {text}", state.glyph()));
                 }
             }
-            Reply::Summoned { resident, .. } => {
+            Reply::Summoned { id, resident } => {
+                if self.summoning.take_if(|s| *s == id).is_some()
+                    && matches!(self.m.modal, Some(Modal::Summon(_)))
+                {
+                    self.m.modal = None;
+                }
                 let was = self.live();
                 match self.m.residents.iter_mut().find(|r| r.id == resident.id) {
                     Some(r) => *r = resident.clone(),
@@ -460,7 +498,7 @@ impl App {
                     false => self.focus(Some(resident.id)),
                 }
             }
-            Reply::Done { message, .. } => self.m.message = Some(message),
+            Reply::Done { message, .. } => self.say(Say::Info, message),
             Reply::Error { id, error } => {
                 if Some(id) == self.quit {
                     self.gone = None;
@@ -469,7 +507,14 @@ impl App {
                 if id == 1 {
                     self.refused = Some(error.clone());
                 }
-                self.m.message = Some(error);
+                // A summon's error belongs in the modal still waiting on it.
+                if self.summoning.take_if(|s| *s == id).is_some()
+                    && let Some(Modal::Summon(s)) = &mut self.m.modal
+                {
+                    (s.waiting, s.error) = (false, Some(error));
+                    return;
+                }
+                self.say(Say::Error, error);
             }
             Reply::Frame { who, rev, frame, modes } => {
                 if Some(&who) == self.m.focused.as_ref() {
@@ -537,7 +582,7 @@ impl App {
             }
             Chunk::Reply { .. } | Chunk::Dropped(_) => return,
             Chunk::PasteRejected { len, why } => {
-                self.m.message = Some(format!("paste of {len} bytes not sent: {why}"));
+                self.say(Say::Error, format!("paste of {len} bytes not sent: {why}"));
                 return;
             }
             Chunk::Mouse { m, .. } => return self.mouse(*m),
@@ -639,7 +684,7 @@ impl App {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
-        self.m.message = Some(match child {
+        match child {
             Ok(mut child) => {
                 let n = text.chars().count();
                 std::thread::spawn(move || {
@@ -648,10 +693,10 @@ impl App {
                     }
                     let _ = child.wait();
                 });
-                format!("copied {n} characters")
+                self.say(Say::Info, format!("copied {n} characters"));
             }
-            Err(e) => format!("copy: {e}"),
-        });
+            Err(e) => self.say(Say::Error, format!("copy: {e}")),
+        }
     }
 
     fn click(&mut self, h: Hit) {
@@ -692,7 +737,7 @@ impl App {
     }
 
     fn chord(&mut self, ch: Chord) {
-        self.m.message = None;
+        (self.m.message, self.said) = (None, None);
         match ch {
             Chord::Summon => {
                 self.m.modal = Some(Modal::Summon(Summon::default()));

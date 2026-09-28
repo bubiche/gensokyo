@@ -3,12 +3,13 @@
 
 use gensokyo::client::app::{App, Config};
 use gensokyo::client::framer::Framer;
-use gensokyo::client::modal::Modal;
+use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::proto::{Reply, Resident, RitualInfo, State};
 use gensokyo::vt::{Frame, Modes, Run, Style};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::Value;
+use std::time::Duration;
 
 fn app() -> App {
     App::new(Config {
@@ -136,7 +137,55 @@ fn a_resident_nobody_watches_rings_and_says_why() {
     assert!(a.host.is_empty() && a.m.message.is_none());
     daemon(&mut a, notify(false));
     assert_eq!(a.host, b"\x07\x1b]9;Marisa awaits\x07");
-    assert_eq!(a.m.message.as_deref(), Some("✦ Marisa awaits"));
+    assert_eq!(said(&a), Some("✦ Marisa awaits"));
+}
+
+fn said(a: &App) -> Option<&str> {
+    a.m.message.as_ref().map(|m| m.text.as_str())
+}
+
+#[test]
+fn a_message_goes_when_its_time_is_up_without_a_key() {
+    let mut a = shrine();
+    daemon(&mut a, Reply::Done { id: 9, message: "cast it".into() });
+    let at = a.expires().expect("a deadline");
+    a.expire(at - Duration::from_millis(1));
+    assert_eq!(said(&a), Some("cast it"));
+    a.expire(at);
+    assert_eq!(said(&a), None);
+    assert_eq!(a.expires(), None);
+    // An error stays longer than news of something done.
+    daemon(&mut a, Reply::Error { id: 9, error: "no such resident".into() });
+    assert!(a.expires().unwrap() > at + Duration::from_secs(3));
+}
+
+#[test]
+fn summon_waits_for_its_reply_and_shows_its_error() {
+    let mut a = shrine();
+    host(&mut a, b"n");
+    sent(&mut a);
+    host(&mut a, b"/\r");
+    let summoning = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => Some((s.stage, s.waiting, s.error.clone())),
+        _ => None,
+    };
+    assert_eq!(summoning(&a), Some((Stage::Name, false, None)));
+    host(&mut a, b"\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["summon"]);
+    let id = out[0]["id"].as_u64().unwrap();
+    assert_eq!(summoning(&a), Some((Stage::Name, true, None)));
+    // A second Enter while it waits sends nothing more.
+    host(&mut a, b"\r");
+    assert!(sent(&mut a).is_empty());
+    daemon(&mut a, Reply::Error { id, error: "no claude on PATH".into() });
+    assert_eq!(summoning(&a), Some((Stage::Name, false, Some("no claude on PATH".into()))));
+    assert_eq!(said(&a), None, "the error is the modal's, not the sidebar's");
+    host(&mut a, b"\r");
+    let id = sent(&mut a)[0]["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Summoned { id, resident: resident(3, "Sakuya") });
+    assert!(a.m.modal.is_none());
+    assert_eq!(a.m.focused.as_deref(), Some("id-Sakuya"));
 }
 
 #[test]

@@ -20,6 +20,8 @@ pub struct Summon {
     pub completions: Vec<String>,
     pub name: String,
     pub error: Option<String>,
+    /// Sent, and waiting for the daemon to say it came or why not.
+    pub waiting: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -56,18 +58,27 @@ impl Summon {
             Stage::Name => vec![
                 Row::text(&format!("In {}", tilde(&self.path, &m.home))),
                 Row::Text(format!("name: {}█", self.name), PICK),
-                Row::dim("Enter picks a random name when this is empty"),
+                Row::dim(match self.waiting {
+                    true => "summoning…",
+                    false => "Enter picks a random name when this is empty",
+                }),
             ],
         };
         if let Some(e) = &self.error {
             rows.push(Row::Text(e.clone(), ERROR));
         }
-        rows.push(Row::yes_no("[summon ⏎]", "[cancel esc]"));
+        rows.push(match self.waiting {
+            true => Row::close(),
+            false => Row::yes_no("[summon ⏎]", "[cancel esc]"),
+        });
         (" summon ".into(), rows)
     }
 
     /// A key typed into it; true for Enter.
     pub(super) fn key(&mut self, k: Key, home: &str) -> bool {
+        if self.waiting {
+            return false;
+        }
         match (self.stage, k) {
             (_, Key::Enter) => return true,
             (Stage::Dir, Key::Up) => self.selected = self.selected.and_then(|i| i.checked_sub(1)),
@@ -120,13 +131,20 @@ impl Summon {
 }
 
 impl App {
-    /// The directory, once it is one, moves on to the name; the name summons.
+    /// The directory, once it is one, moves on to the name; the name summons, and the modal
+    /// stays until the daemon says how that went.
     pub(super) fn summon_confirm(&mut self, mut s: Summon) {
         let home = self.m.home.clone();
+        if s.waiting {
+            self.m.modal = Some(super::Modal::Summon(s));
+            return;
+        }
         if s.stage == Stage::Name {
             let cwd = expand(&s.path, &home).to_string_lossy().into_owned();
             let name = Some(s.name.trim().to_string()).filter(|n| !n.is_empty());
-            self.send(Request::Summon(proto::Summon { cwd, name, ..Default::default() }));
+            let id = self.send(Request::Summon(proto::Summon { cwd, name, ..Default::default() }));
+            (self.summoning, s.waiting, s.error) = (Some(id), true, None);
+            self.m.modal = Some(super::Modal::Summon(s));
             return;
         }
         let chosen = s.selected.and_then(|i| s.recent.get(i).cloned());

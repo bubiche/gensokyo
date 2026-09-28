@@ -32,8 +32,8 @@ pub struct Model {
     pub selection: Option<((u16, u16), (u16, u16))>,
     /// The leader was pressed and the next key is ours.
     pub leader: bool,
-    /// One line: an error or a notice.
-    pub message: Option<String>,
+    /// A line for the user, above the sidebar's buttons, until it expires.
+    pub message: Option<Message>,
     /// Drawn when the shrine is empty.
     pub banner: Vec<String>,
     /// Shown as `~` in paths.
@@ -44,6 +44,29 @@ pub struct Model {
     pub today: String,
     /// The timetable, once the daemon has sent it.
     pub rituals: Option<Vec<RitualInfo>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    pub text: String,
+    pub kind: Say,
+}
+
+/// What a message is: its colour, and how long it stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Say {
+    /// What was just done: `copied 12 characters`, a cast's reply.
+    Info,
+    /// A resident or a ritual has news, in gold.
+    Notice,
+    /// What could not be done.
+    Error,
+}
+
+impl Message {
+    pub fn new(kind: Say, text: impl Into<String>) -> Message {
+        Message { text: text.into(), kind }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,10 +294,15 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         buf.set_stringn(inner.x, up(1), "^] …", w, PICK.add_modifier(Modifier::BOLD));
     } else if let Some(msg) = &m.message {
         // Wrapped, not cut: a cast's reply names who was left out at its end.
-        let lines = wrap(msg, w, 5);
+        let lines = wrap(&msg.text, w, 5);
         let y = up(lines.len() as u16);
+        let style = match msg.kind {
+            Say::Info => Style::new(),
+            Say::Notice => Style::new().fg(Color::Yellow),
+            Say::Error => ERROR,
+        };
         for (i, l) in lines.iter().enumerate().take((inner.bottom() - y) as usize) {
-            buf.set_stringn(inner.x, y + i as u16, l, w, ERROR);
+            buf.set_stringn(inner.x, y + i as u16, l, w, style);
         }
     }
     for (i, r) in m.residents.iter().enumerate() {

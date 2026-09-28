@@ -2,7 +2,7 @@
 
 use super::{Key, Modal};
 use crate::client::app::App;
-use crate::client::render::{Model, Row, mark, window};
+use crate::client::render::{Model, Row, Say, mark, window};
 use crate::paths::tilde;
 use crate::proto::{self, Card, Request};
 
@@ -124,6 +124,6 @@ impl App {
             None => (vec![pick], None),
         };
         self.send(Request::Cast(proto::Cast { card: card.slug, targets, peer }));
-        self.m.message = Some(format!("casting {}…", card.title));
+        self.say(Say::Info, format!("casting {}…", card.title));
     }
 }

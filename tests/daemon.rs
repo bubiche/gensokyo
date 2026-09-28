@@ -798,6 +798,26 @@ fn list_all_shows_the_departed_of_an_earlier_run_and_resume_brings_one_back() {
     assert_eq!(names, ["Hatate", "Aya"]);
 }
 
+#[test]
+fn the_registry_is_asked_less_while_everyone_rests_and_again_once_someone_types() {
+    let d = Daemon::start("backoff", &[]);
+    let r = d.summon(json!({"name": "Reimu"}));
+    let id = r["id"].as_str().unwrap().to_string();
+    d.stub(&r["id"], "ready");
+    let calls = || {
+        let f = std::fs::read_to_string(d.dir.join("stub/agents.calls")).unwrap_or_default();
+        f.lines().count()
+    };
+    // One ask after the stub is up lists it, resting, with nothing in its way.
+    let n = calls();
+    wait(|| calls() > n, "an ask that lists it");
+    let n = calls();
+    std::thread::sleep(Duration::from_millis(6500));
+    assert_eq!(calls(), n, "asked again while it rested and nothing changed");
+    input(&d, &id, "hello");
+    common::wait_for(Duration::from_secs(5), || calls() > n, "an ask after the typing");
+}
+
 /// The resident's record as the daemon last wrote it, from the shrine or from `departed/`.
 fn record(d: &Daemon, id: &str) -> Value {
     let p = |dir: &str| d.dir.join(format!("{dir}/{id}.json"));

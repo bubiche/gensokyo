@@ -120,6 +120,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         conns: 0,
         rites: Default::default(),
         refused: HashSet::new(),
+        typed: false,
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -400,6 +401,7 @@ async fn input(
     if bytes.is_empty() {
         return Ok(());
     }
+    shrine.borrow_mut().typed = true;
     match tokio::time::timeout(INPUT_WAIT, h.input(&bytes)).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(format!("{name} has already departed")),

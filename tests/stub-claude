@@ -3,7 +3,8 @@
 # Claude Code or an Anthropic login. It implements just enough of Claude Code 2.1:
 #   --version                 prints a version line
 #   agents --json             the registry: $STUB_REGISTRY (a fixture file) if set, else one
-#                             entry per running stub session, status from <id>.status
+#                             entry per running stub session, status from <id>.status; each
+#                             call adds a line to agents.calls
 #   -p / --print              one headless run: the JSON object of --output-format json, else
 #                             the result as plain text. What it answers is set by STUB_P_* (see
 #                             below: SLEEP, FAIL, ERROR, RESULT, DENY, SESSION, COST, TURNS); every call leaves its arguments in print.args and its
@@ -57,6 +58,7 @@ write_entry() {   # <id> <name> <status>; whole, so a registry read never sees h
 case ${1:-} in
   --version) echo "2.1.282 (Claude Code)"; exit 0 ;;
   agents)
+    [ -d "${STUB_STATE:-}" ] && echo . >>"$STUB_STATE/agents.calls"
     if [ -n "${STUB_REGISTRY:-}" ]; then cat "$STUB_REGISTRY"; exit 0; fi
     printf '['
     sep=

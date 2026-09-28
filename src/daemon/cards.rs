@@ -226,24 +226,29 @@ pub(super) async fn deliver(
     let before = h.frame().text();
     // More rows than before: an echo of the last cast still on screen does not count.
     let was = shown(&before, &needle);
+    let mut changes = h.changes();
+    changes.borrow_and_update();
     let pasted = Instant::now();
     if !h.input(&typed(text, h.modes().paste)).await {
         return Err("is not reading its input".into());
     }
+    let until = tokio::time::Instant::from_std(pasted + SHOW_WAIT);
     loop {
         let now = h.frame().text();
         if now != before && shown(&now, &needle) > was {
             break;
         }
-        if h.exit().is_some() {
-            return Err(format!("left before the {what} showed"));
+        // The screen is looked at again only when it has changed; the changes end with the child.
+        tokio::select! {
+            c = changes.changed() => if c.is_err() {
+                return Err(format!("left before the {what} showed"));
+            },
+            () = tokio::time::sleep_until(until) => {
+                return Err(format!(
+                    "never showed the {what} in its input line; nothing was submitted"
+                ));
+            }
         }
-        if pasted.elapsed() > SHOW_WAIT {
-            return Err(format!(
-                "never showed the {what} in its input line; nothing was submitted"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
     }
     tokio::time::sleep(ENTER_GAP.saturating_sub(pasted.elapsed())).await;
     // A dialog that came up meanwhile would take the Enter.

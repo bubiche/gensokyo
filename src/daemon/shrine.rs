@@ -65,6 +65,9 @@ pub(super) struct Shrine {
     pub(super) rites: Rites,
     /// Hellos refused so far, by who and protocol: each is logged once.
     pub(super) refused: HashSet<(String, u32)>,
+    /// Someone typed into a resident since the registry was last asked: what they typed may
+    /// have changed what only the registry sees (a permission granted, a `/rename`).
+    pub(super) typed: bool,
 }
 
 impl Shrine {

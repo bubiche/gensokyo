@@ -291,12 +291,16 @@ async fn twelve_concurrent_spawns_then_reaps_return_to_baseline() {
 async fn wait_returns_while_a_setsid_grandchild_holds_the_slave() {
     let _g = shared();
     // macOS has no setsid(1); perl's POSIX::setsid stands in. The grandchild keeps the slave
-    // as stdout and tries to write a line 300 ms after the leader is gone.
-    let (mut r, _w, mut child, _) = bash(
-        "perl -e 'use POSIX; setsid(); $|=1; print \"GC $$\\n\"; \
-         select(undef,undef,undef,0.3); print \"LATE\\n\"; exec \"sleep\", \"303\"' & \
-         sleep 0.1; echo EXITING; exit 0",
-    );
+    // as stdout and tries to write a line a second after it has said it is there, by which time
+    // the leader, which waits for that, is long gone.
+    let there = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("gc-{}", std::process::id()));
+    let _ = std::fs::remove_file(&there);
+    let (mut r, _w, mut child, _) = bash(&format!(
+        "perl -e 'use POSIX; setsid(); $|=1; print \"GC $$\\n\"; open(F, \">{t}\"); close(F); \
+         select(undef,undef,undef,1); print \"LATE\\n\"; exec \"sleep\", \"303\"' & \
+         while [ ! -e {t} ]; do sleep 0.01; done; echo EXITING; exit 0",
+        t = there.display()
+    ));
     let pid = child.id().unwrap() as i32;
     let mut buf = vec![];
     read_until(&mut r, &mut buf, "GC ", 5).await;
@@ -309,8 +313,9 @@ async fn wait_returns_while_a_setsid_grandchild_holds_the_slave() {
     let second = Duration::from_secs(1);
     let eof = tokio::time::timeout(second, drain(&mut r)).await;
     let eof_at = t.elapsed();
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     let later = tokio::time::timeout(second, drain(&mut r)).await;
+    let _ = std::fs::remove_file(&there);
     buf.extend(eof.iter().chain(later.iter()).flatten());
     // Reparented to launchd in a session of its own, it is out of reach of a later snapshot.
     let (reach, survived) = (pty::snapshot(pid).contains(&gc), !pty::gone(gc));

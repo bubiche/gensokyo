@@ -32,8 +32,10 @@ impl Recall {
     /// A key; true for Enter.
     pub(super) fn key(&mut self, k: Key) -> bool {
         match k {
-            Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => self.selected = (self.selected + 1).min(self.list.len().saturating_sub(1)),
+            Key::Up | Key::Text('k') => self.selected = self.selected.saturating_sub(1),
+            Key::Down | Key::Text('j') => {
+                self.selected = (self.selected + 1).min(self.list.len().saturating_sub(1))
+            }
             Key::Enter => return true,
             _ => {}
         }

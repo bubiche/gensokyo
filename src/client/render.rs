@@ -166,10 +166,17 @@ fn focused(m: &Model) -> Option<&Resident> {
     m.residents.iter().find(|r| Some(&r.id) == m.focused.as_ref())
 }
 
-/// Where the host cursor goes: the focused resident's, when it shows one on its live screen
-/// and no modal is open.
+/// Where the host cursor goes: at the end of a modal's text field, or the focused resident's,
+/// when it shows one on its live screen and no modal is open.
 pub fn cursor(m: &Model, area: Rect) -> Option<(u16, u16)> {
     let g = grid_rect(area);
+    if let Some(md) = &m.modal {
+        let (_, inner, _, rows) = modal_layout(m, md, g);
+        let i = rows.iter().position(|r| matches!(r, Row::Field(..)))?;
+        let Row::Field(s, _) = &rows[i] else { return None };
+        let (x, y) = (inner.x + width(s), inner.y + i as u16);
+        return (x < inner.right() && y < inner.bottom()).then_some((x, y));
+    }
     let fr = m.screen.as_ref().filter(|fr| fr.back == 0)?;
     let (x, y) = fr.cursor?;
     let live = focused(m)?.departed.is_none();
@@ -475,6 +482,8 @@ pub fn style(s: vt::Style) -> Style {
 /// One line of a modal.
 pub(super) enum Row {
     Text(String, Style),
+    /// Text being typed, with the host cursor after it.
+    Field(String, Style),
     /// A clickable list row, highlighted when selected.
     Item(usize, String, bool),
     Buttons(Vec<(&'static str, Button)>),
@@ -498,23 +507,32 @@ impl Row {
     }
 }
 
-/// The open modal, centred over the grid, sized to its widest line.
-fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
+/// Where the open modal goes, centred over the grid and sized to its widest line: its box, the
+/// rect its rows are written in, its title and its rows.
+fn modal_layout(m: &Model, md: &Modal, g: Rect) -> (Rect, Rect, String, Vec<Row>) {
     use Row::*;
     let (title, rows) = md.view(m, g.width.min(72).saturating_sub(4) as usize);
     let text_w = |r: &Row| match r {
         Text(s, _) | Item(_, s, _) => width(s),
+        // Room for the cursor after it.
+        Field(s, _) => width(s) + 1,
         Buttons(b) => b.iter().map(|(l, _)| width(l) + 1).sum(),
     };
     let w = (rows.iter().map(text_w).max().unwrap_or(0) + 4).clamp(40, 72).min(g.width);
     let h = (rows.len() as u16 + 2).min(g.height);
     let r = Rect::new(g.x + (g.width - w) / 2, g.y + (g.height - h) / 2, w, h);
-    Clear.render(r, buf);
-    let block = Block::bordered().title(title).border_style(Style::new().fg(Color::Yellow));
-    let inner = block.inner(r);
-    block.render(r, buf);
-    hits.push(r, Hit::Modal);
+    let inner = Block::bordered().inner(r);
     let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(2), ..inner };
+    (r, inner, title, rows)
+}
+
+/// The open modal, drawn where `modal_layout` puts it.
+fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
+    use Row::*;
+    let (r, inner, title, rows) = modal_layout(m, md, g);
+    Clear.render(r, buf);
+    Block::bordered().title(title).border_style(Style::new().fg(Color::Yellow)).render(r, buf);
+    hits.push(r, Hit::Modal);
     for (i, row) in rows.iter().enumerate() {
         let y = inner.y + i as u16;
         if y >= inner.bottom() {
@@ -522,7 +540,7 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         let line = Rect { y, height: 1, ..inner };
         match row {
-            Text(s, st) => {
+            Text(s, st) | Field(s, st) => {
                 buf.set_stringn(line.x, y, s, line.width as usize, *st);
             }
             Item(n, s, sel) => {

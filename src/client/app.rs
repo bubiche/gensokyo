@@ -617,8 +617,12 @@ impl App {
             }
             self.forward(&c);
         } else if let Some(ch) = keys::chord(&c) {
-            // Nothing on screen takes keys, so the letters work without the leader.
-            self.chord(ch);
+            // Nothing on screen takes keys, so the letters work without the leader. On a
+            // departed screen `r` is its own `[recall r]`, and `Ctrl-] r` the whole list.
+            match ch {
+                Chord::Recall if self.focused().is_some() => self.recall_focused(),
+                ch => self.chord(ch),
+            }
         }
     }
 

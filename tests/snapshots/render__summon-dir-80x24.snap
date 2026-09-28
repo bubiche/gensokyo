@@ -11,7 +11,7 @@ expression: t.backend()
 "│                       ││line 05     ~~~~~                                    │"
 "│                       ││line 0┌ summon ──────────────────────────────┐       │"
 "│                       ││line 0│ Where?                               │       │"
-"│                       ││line 0│   /Users/someone/dev/sc█             │       │"
+"│                       ││line 0│   /Users/someone/dev/sc              │       │"
 "│                       ││line 0│ scratch_repo/  scripts/              │       │"
 "│                       ││line 1│ recent                               │       │"
 "│                       ││line 1│   ~/dev/gensokyo                     │       │"

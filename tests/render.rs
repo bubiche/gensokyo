@@ -527,6 +527,24 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
     assert_eq!(render::cursor(&m, AREA), Some((g.x + 2, g.y + 3)));
     m.modal = Some(Modal::Help);
     assert_eq!(render::cursor(&m, AREA), None);
+    // Scrolled back, the resident's cursor is somewhere below what is shown.
+    m.modal = None;
+    m.screen.as_mut().unwrap().back = 4;
+    assert_eq!(render::cursor(&m, AREA), None);
+}
+
+#[test]
+fn a_text_field_has_the_cursor_after_what_is_typed() {
+    for (stage, typed) in [(Stage::Dir, "  /Users/someone/dev/sc"), (Stage::Name, "name: Yuyu")] {
+        let mut m = shrine();
+        m.modal = Some(summon(stage));
+        let (t, _) = draw(&m, AREA.width, AREA.height);
+        let (x, y) = render::cursor(&m, AREA).expect("a cursor");
+        let buf = t.backend().buffer();
+        let row: String = (0..x).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(row.ends_with(typed), "{row:?}");
+        assert_eq!(buf[(x, y)].symbol(), " ");
+    }
 }
 
 #[test]
@@ -611,4 +629,15 @@ fn a_narrow_sidebar_drops_the_rituals_time_rather_than_draw_over_its_name() {
     assert_eq!(row(14), "│⏲ eve… 23:00│");
     let narrow = row(10);
     assert!(narrow.starts_with("│⏲ eveni…") && !narrow.contains("23"), "{narrow}");
+}
+
+#[test]
+fn a_long_ritual_name_is_cut_with_an_ellipsis_in_the_timetable() {
+    let mut m = shrine();
+    let mut rs = rituals();
+    rs[0].name = "a-ritual-name-past-twenty-columns".into();
+    (m.rituals, m.modal) = (Some(rs), Some(timetable(None, false)));
+    let t = modal_box(&m);
+    let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("a-ritual-name-past-…"), "{text}");
 }

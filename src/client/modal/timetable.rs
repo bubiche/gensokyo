@@ -86,7 +86,10 @@ impl Timetable {
                 let on = if r.enabled { "on " } else { "off" };
                 let flag = if r.problem.is_some() { "!" } else { " " };
                 let desc = r.description.as_deref().unwrap_or("");
-                let name: String = r.name.chars().take(nw).collect();
+                let name: String = match r.name.chars().count() > nw {
+                    true => r.name.chars().take(nw - 1).chain(['…']).collect(),
+                    false => r.name.clone(),
+                };
                 let line = format!("{}{name:<nw$} {on} {next:<11}{flag} {desc}", mark(i == sel));
                 Row::Item(i, line, i == sel)
             })

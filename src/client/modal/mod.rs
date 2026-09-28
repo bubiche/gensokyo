@@ -155,12 +155,18 @@ impl App {
         }
     }
 
-    /// Esc or a modal's cancel: the timetable goes back from a confirm to the ritual and from
-    /// the ritual to the list; everything else closes.
+    /// Esc or a modal's cancel: back one stage, and from the first, closed. A summon already
+    /// sent just closes; it still comes.
     pub(super) fn go_back(&mut self) {
         match &mut self.m.modal {
             Some(Modal::Timetable(tt)) if tt.confirm => tt.confirm = false,
             Some(Modal::Timetable(tt)) if tt.open.is_some() => tt.open = None,
+            Some(Modal::Summon(s)) if s.stage == Stage::Name && !s.waiting => {
+                (s.stage, s.error) = (Stage::Dir, None);
+                self.refresh_modal();
+            }
+            Some(Modal::Cast(c)) if c.target.is_some() => (c.target, c.selected) = (None, 0),
+            Some(Modal::Cast(c)) if c.card.is_some() => (c.card, c.selected) = (None, 0),
             _ => self.m.modal = None,
         }
     }

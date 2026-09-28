@@ -38,7 +38,7 @@ impl Summon {
                 let typed = if self.selected.is_none() { PICK } else { Style::new() };
                 let mut rows = vec![
                     Row::text("Where?"),
-                    Row::Text(format!("{}{}█", mark(self.selected.is_none()), self.path), typed),
+                    Row::Field(format!("{}{}", mark(self.selected.is_none()), self.path), typed),
                 ];
                 if !self.completions.is_empty() {
                     rows.push(Row::dim(&self.completions.join("  ")));
@@ -57,7 +57,7 @@ impl Summon {
             }
             Stage::Name => vec![
                 Row::text(&format!("In {}", tilde(&self.path, &m.home))),
-                Row::Text(format!("name: {}█", self.name), PICK),
+                Row::Field(format!("name: {}", self.name), PICK),
                 Row::dim(match self.waiting {
                     true => "summoning…",
                     false => "Enter picks a random name when this is empty",

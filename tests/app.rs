@@ -4,7 +4,7 @@
 use gensokyo::client::app::{App, Config};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
-use gensokyo::proto::{Reply, Resident, RitualInfo, State};
+use gensokyo::proto::{Card, Reply, Resident, RitualInfo, State};
 use gensokyo::vt::{Frame, Modes, Run, Style};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -213,6 +213,56 @@ fn j_and_k_go_round_the_sidebar_and_a_finds_whoever_needs_you() {
     assert_eq!((on(&a).as_str(), said(&a)), ("id-Sakuya", Some("nobody needs you")));
     host(&mut a, b"\x1d7");
     assert_eq!((on(&a).as_str(), said(&a)), ("id-Sakuya", Some("nobody is in slot 7")));
+}
+
+#[test]
+fn esc_goes_back_one_stage_in_summon_and_cast_too() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dn");
+    host(&mut a, b"/\r");
+    let stage = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => Some(s.stage),
+        _ => None,
+    };
+    assert_eq!(stage(&a), Some(Stage::Name));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), Some(Stage::Dir));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), None);
+    host(&mut a, b"\x1dc");
+    let card =
+        Card { slug: "pair".into(), title: "Pair".into(), summary: String::new(), pair: true };
+    daemon(&mut a, Reply::Cards { id: 1, cards: vec![card], unusable: vec![] });
+    let cast = |a: &App| match &a.m.modal {
+        Some(Modal::Cast(c)) => Some((c.card.is_some(), c.target.clone())),
+        _ => None,
+    };
+    host(&mut a, b"\r");
+    host(&mut a, b"\r");
+    assert_eq!(cast(&a), Some((true, Some("id-Reimu".into()))));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), Some((true, None)));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), Some((false, None)));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), None);
+    assert!(!sent(&mut a).iter().any(|r| r["t"] == "cast"));
+}
+
+#[test]
+fn on_a_departed_screen_r_recalls_it_and_the_chord_lists_them_all() {
+    let mut a = shrine();
+    let mut residents = a.m.residents.clone();
+    residents[0].departed = Some(1);
+    daemon(&mut a, Reply::Residents { residents });
+    sent(&mut a);
+    host(&mut a, b"r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["recall"]);
+    assert_eq!(out[0]["who"], "id-Reimu");
+    assert!(a.m.modal.is_none());
+    host(&mut a, b"\x1dr");
+    assert!(matches!(a.m.modal, Some(Modal::Recall(_))));
 }
 
 fn said(a: &App) -> Option<&str> {

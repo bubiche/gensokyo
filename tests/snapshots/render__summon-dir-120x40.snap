@@ -19,7 +19,7 @@ expression: t.backend()
 "│                       ││line 13     ~~~~~~~~~~~~~                                                                    │"
 "│                       ││line 14     ~~~~~~~~~~~~~~┌ summon ──────────────────────────────┐                           │"
 "│                       ││line 15     ~~~~~~~~~~~~~~│ Where?                               │                           │"
-"│                       ││line 16     ~~~~~~~~~~~~~~│   /Users/someone/dev/sc█             │                           │"
+"│                       ││line 16     ~~~~~~~~~~~~~~│   /Users/someone/dev/sc              │                           │"
 "│                       ││line 17     ~~~~~~~~~~~~~~│ scratch_repo/  scripts/              │                           │"
 "│                       ││line 18     ~~~~~~~~~~~~~~│ recent                               │                           │"
 "│                       ││line 19     ~~~~~~~~~~~~~~│   ~/dev/gensokyo                     │                           │"

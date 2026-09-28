@@ -1,0 +1,9 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ banish ──────────────────────────────┐"
+"│ Banish Reimu?                        │"
+"│ It gets HUP, then TERM, then KILL.   │"
+"│ [banish y] [cancel n]                │"
+"└──────────────────────────────────────┘"

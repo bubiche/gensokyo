@@ -1,0 +1,9 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ slack-morning ────────────────────────────────────────────────┐"
+"│ Remove slack-morning?                                         │"
+"│ Its file, its notes and its journal go, and do not come back. │"
+"│ [yes y] [no n]                                                │"
+"└───────────────────────────────────────────────────────────────┘"

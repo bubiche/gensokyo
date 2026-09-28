@@ -1,0 +1,15 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ broken ─────────────────────────────────────────────────────────────┐"
+"│ never comes round                                                   │"
+"│ schedule  0 0 30 2 *  (paused)                                      │"
+"│ next      paused                                                    │"
+"│ target    new                                                       │"
+"│ in        ~/dev/mozart                                              │"
+"│ last ran  never                                                     │"
+"│ schedule: 0 0 30 2 * never comes round (a date that does not exist, │"
+"│ like 30 February)                                                   │"
+"│ [run now r] [resume p] [remove x] [back esc]                        │"
+"└─────────────────────────────────────────────────────────────────────┘"

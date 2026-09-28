@@ -1,0 +1,9 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ Review Sign "Second Opinion" ─────────┐"
+"│ Reimu talks to whom?                  │"
+"│ › 2 ○ Marisa       ~/dev/scratch_repo │"
+"│ [cast ⏎] [cancel esc]                 │"
+"└───────────────────────────────────────┘"

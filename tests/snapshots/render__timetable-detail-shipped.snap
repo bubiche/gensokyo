@@ -1,0 +1,14 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ nightly-checks ──────────────────────────────────────┐"
+"│ the tests and the linter overnight                   │"
+"│ schedule  0 2 * * *  (paused)                        │"
+"│ next      paused                                     │"
+"│ target    new                                        │"
+"│ in        ~/dev/mozart                               │"
+"│ last ran  never                                      │"
+"│ An example gensokyo ships: pause it, or edit a copy. │"
+"│ [run now r] [resume p] [back esc]                    │"
+"└──────────────────────────────────────────────────────┘"

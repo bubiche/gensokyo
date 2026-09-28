@@ -1,0 +1,9 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ quit ───────────────────────────────────────┐"
+"│ Quit the shrine?                            │"
+"│ Everyone gets /exit, then the daemon stops. │"
+"│ [quit y] [cancel n]                         │"
+"└─────────────────────────────────────────────┘"

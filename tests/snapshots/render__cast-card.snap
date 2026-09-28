@@ -1,0 +1,12 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ cast ──────────────────────────────────┐"
+"│ Which spell card?                      │"
+"│   Review Sign "Second Opinion"  (pair) │"
+"│ › Spirit Sign "Status Report"          │"
+"│ three lines from every resident        │"
+"│ file names not usable: bad name.md     │"
+"│ [next ⏎] [cancel esc]                  │"
+"└────────────────────────────────────────┘"

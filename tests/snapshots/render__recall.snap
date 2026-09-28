@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ recall ──────────────────────────────┐"
+"│ › Cirno         5m ago  ~/tmp        │"
+"│ [recall ⏎] [cancel esc]              │"
+"└──────────────────────────────────────┘"

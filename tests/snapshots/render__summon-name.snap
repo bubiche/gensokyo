@@ -1,0 +1,11 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ summon ──────────────────────────────────────┐"
+"│ In ~/dev/scratch_repo                        │"
+"│ name: Yuyu█                                  │"
+"│ Enter picks a random name when this is empty │"
+"│ Yuyu is already here                         │"
+"│ [summon ⏎] [cancel esc]                      │"
+"└──────────────────────────────────────────────┘"

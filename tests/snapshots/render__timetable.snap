@@ -1,0 +1,12 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ timetable ───────────────────────────────────────────────────────────┐"
+"│   evening-notes  on  23:00        the day, in notes                  │"
+"│ › slack-morning  on  Tue 09:05    overnight Slack                    │"
+"│   inbox-zero     on  10-05 08:00  the morning's mail                 │"
+"│   broken         off paused     ! never comes round                  │"
+"│   nightly-checks off paused       the tests and the linter overnight │"
+"│ [close esc]                                                          │"
+"└──────────────────────────────────────────────────────────────────────┘"

@@ -1,0 +1,13 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ Spirit Sign "Status Report" ──────────┐"
+"│ On whom?                              │"
+"│   everyone                            │"
+"│ › everyone who needs you              │"
+"│   everyone resting                    │"
+"│   1 ○ Reimu        ~/dev/gensokyo     │"
+"│   2 ○ Marisa       ~/dev/scratch_repo │"
+"│ [cast ⏎] [cancel esc]                 │"
+"└───────────────────────────────────────┘"

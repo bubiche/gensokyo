@@ -1,0 +1,15 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ help ────────────────────────────────┐"
+"│ Ctrl-] then a key:                   │"
+"│   n  summon          b  banish       │"
+"│   r  recall          c  cast         │"
+"│   x  close           t  timetable    │"
+"│   q  quit            ?  help         │"
+"│   m  mouse capture   d  detach       │"
+"│   1-9  focus that slot               │"
+"│   Ctrl-]  a literal Ctrl-]           │"
+"│ [close esc]                          │"
+"└──────────────────────────────────────┘"

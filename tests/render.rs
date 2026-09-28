@@ -305,14 +305,37 @@ fn hits(m: &Model, area: Rect) -> HitMap {
 
 const AREA: Rect = Rect { x: 0, y: 0, width: 120, height: 40 };
 
+/// Drawn whole at both sizes: the screens themselves, and two modals for where a modal sits.
+const WHOLE: [&str; 2] = ["summon-dir", "timetable-detail"];
+
 #[test]
 fn snapshots() {
     for (name, m) in screens() {
+        if m.modal.is_some() && !WHOLE.contains(&name) {
+            insta::assert_snapshot!(name, modal_box(&m).backend());
+            continue;
+        }
         for (w, h) in [(120, 40), (80, 24)] {
             let (t, _) = draw(&m, w, h);
             insta::assert_snapshot!(format!("{name}-{w}x{h}"), t.backend());
         }
     }
+}
+
+/// Just the modal's box, as drawn at 120x40: a change to the sidebar or the grid leaves it be.
+fn modal_box(m: &Model) -> Terminal<TestBackend> {
+    let (t, map) = draw(m, AREA.width, AREA.height);
+    let (r, _) = *map.0.iter().find(|(_, h)| *h == Hit::Modal).expect("a modal");
+    let mut boxed = Terminal::new(TestBackend::new(r.width, r.height)).unwrap();
+    let whole = t.backend().buffer();
+    boxed
+        .draw(|f| {
+            for (y, x) in (0..r.height).flat_map(|y| (0..r.width).map(move |x| (y, x))) {
+                f.buffer_mut()[(x, y)] = whole[(r.x + x, r.y + y)].clone();
+            }
+        })
+        .unwrap();
+    boxed
 }
 
 /// The centre cell of every hit of this kind resolves to it.

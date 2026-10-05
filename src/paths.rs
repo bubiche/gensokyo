@@ -56,6 +56,15 @@ pub fn share_dir(exe: &Path) -> Option<PathBuf> {
     near(exe).or_else(|| near(&std::fs::canonicalize(exe).ok()?))
 }
 
+/// The release tree this binary was unpacked into: `<root>/bin/gensokyo`, with the `VERSION` and
+/// `install.sh` a release puts beside `bin/`. A build under `target/` is not one.
+pub fn release_root(exe: &Path) -> Option<PathBuf> {
+    let exe = std::fs::canonicalize(exe).ok()?;
+    let bin = exe.parent().filter(|b| b.file_name().is_some_and(|n| n == "bin"))?;
+    let root = bin.parent()?;
+    (root.join("VERSION").is_file() && root.join("install.sh").is_file()).then(|| root.into())
+}
+
 /// `$GENSOKYO_SOCKET`, else `run/gensokyo.sock` in the state dir, else, when that is past the
 /// 104 bytes a socket path may hold, a name in `$TMPDIR` derived from the state dir.
 pub fn socket_path() -> PathBuf {

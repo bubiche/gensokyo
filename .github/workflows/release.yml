@@ -1,0 +1,79 @@
+# Builds the release and checks that it installs; publishes it when a v* tag is pushed.
+#
+# The assets are the arm64 tarball, its SHA256SUMS, the one-line VERSION that install.sh and
+# `gensokyo update` read to find the newest release, and install.sh and uninstall.sh, which is
+# what makes these work:
+#   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/uninstall.sh | sh
+#
+# The tests run in test.yml on every push to main; this checks what it is about to publish.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # the build and the install check, by hand, without publishing
+
+permissions:
+  contents: write      # only publishing needs it, and only for a tag
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust
+        run: |
+          v=$(awk '$1 == "rust" { print $2 }' .tool-versions)
+          rustup toolchain install "$v" --profile minimal
+          rustup default "$v"
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            vendor
+            target
+          key: ${{ runner.os }}-release-${{ hashFiles('.tool-versions', 'Cargo.lock', 'scripts/ghostty.sh') }}
+          restore-keys: ${{ runner.os }}-release-
+
+      - name: ghostty source
+        run: scripts/ghostty.sh
+
+      # A tag names the version it releases; release.sh refuses one Cargo.toml does not carry.
+      - name: build the tarball
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then scripts/release.sh --version "${GITHUB_REF_NAME#v}"
+          else scripts/release.sh
+          fi
+          ls -l dist/
+          ( cd dist && shasum -a 256 -c SHA256SUMS )
+
+      - name: the packaged copy installs and runs
+        run: |
+          version=$(cat dist/VERSION)
+          home=$(mktemp -d)
+          tar -xzf "dist/gensokyo-$version-macos-arm64.tar.gz" -C "$home"
+          HOME=$home "$home/gensokyo-$version/install.sh" --bin-dir "$home/bin" --no-fetch
+          "$home/bin/gensokyo" --version
+          # doctor only reads: it starts no daemon and finds share/ beside the binary.
+          HOME=$home "$home/bin/gensokyo" doctor | tee doctor.txt
+          ! grep -E "^ *share +MISSING" doctor.txt
+
+      - name: publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "gensokyo $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/gensokyo-*.tar.gz dist/SHA256SUMS dist/VERSION dist/install.sh dist/uninstall.sh

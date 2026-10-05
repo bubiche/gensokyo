@@ -5,7 +5,7 @@ pub mod cards;
 mod headless;
 mod ingest;
 mod keep;
-mod launch;
+pub mod launch;
 mod log;
 mod notify;
 pub mod pty;

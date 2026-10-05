@@ -89,6 +89,22 @@ pub fn connect_or_start() -> Result<UnixStream, String> {
     if let Ok(s) = UnixStream::connect(&sock) {
         return Ok(s);
     }
+    let log_from = std::fs::metadata(paths::state_dir().join("daemon.log")).map_or(0, |m| m.len());
+    // With the login agent running this binary, launchd starts the daemon, and starts it again
+    // if it crashes; a plist written but not loaded leaves it to us.
+    if super::login::supervises_me() && super::login::kickstart() {
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(5) {
+            if let Ok(s) = UnixStream::connect(&sock) {
+                return Ok(s);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        return Err(format!(
+            "launchd started the daemon, and it did not answer in 5 s{}",
+            why(log_from)
+        ));
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
     cmd.arg("daemon").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -98,7 +114,6 @@ pub fn connect_or_start() -> Result<UnixStream, String> {
             (libc::setsid() != -1).then_some(()).ok_or_else(std::io::Error::last_os_error)
         })
     };
-    let log_from = std::fs::metadata(paths::state_dir().join("daemon.log")).map_or(0, |m| m.len());
     let mut child = cmd.spawn().map_err(|e| format!("start the daemon: {e}"))?;
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(5) {
@@ -197,6 +212,7 @@ pub fn restart() -> Result<(), String> {
     }
     live.sort_by_key(|r: &Record| (r.slot.unwrap_or(u8::MAX), r.launched));
     let ids: String = live.iter().map(|r| format!("{}\n", r.id)).collect();
+    let _ = std::fs::create_dir_all(paths::state_dir().join("run"));
     crate::daemon::store::write_atomic(&paths::comeback_path(), ids.as_bytes())
         .map_err(|e| format!("{}: {e}", paths::comeback_path().display()))?;
     let n = live.len();
@@ -218,6 +234,13 @@ pub fn restart() -> Result<(), String> {
     match old {
         None => println!("no daemon was running; started one{new}"),
         Some(_) => println!("the new daemon is up{new}"),
+    }
+    if let super::login::Agent::Ours(p) = super::login::agent()
+        && !super::login::supervises_me()
+    {
+        let p = paths::short(&p.to_string_lossy());
+        eprintln!("gensokyo: the login agent runs {p}, not this binary, so launchd does not");
+        eprintln!("  watch this daemon; `gensokyo login setup` from here points it at this one");
     }
     // The recalls are done by the time it answers: they come before its first request.
     let back: Vec<proto::Resident> = match request(Request::List { all: false }, false) {

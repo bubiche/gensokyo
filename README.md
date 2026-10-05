@@ -7,16 +7,41 @@ nobody has read — turns gold and rings. Prompts can be cast at several residen
 (**spell cards**) and fired on a schedule (**rituals**).
 
 **Status:** pre-release. One Rust binary: a daemon that owns every resident's terminal, and a
-client that draws the shrine. It needs macOS and is built for iTerm2; other terminals mostly
-work. There is no installer yet: build it from source (below).
+client that draws the shrine. It needs macOS on Apple silicon and is built for iTerm2; other
+terminals mostly work.
 
 ## Requirements
 
 - macOS, and Claude Code (`claude` on `PATH`, 2.1.224 or newer).
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
-- To build: Rust (the version in `.tool-versions`), Zig **0.16.0** exactly (the pinned Ghostty
+- To build it yourself: Rust (the version in `.tool-versions`), Zig **0.16.0** exactly (the pinned Ghostty
   builds with nothing else; `zig version` says which you have), and git.
+
+## Installing
+
+```sh
+curl -fsSL https://github.com/bubiche/gensokyo/releases/latest/download/install.sh | sh
+```
+
+That downloads the latest release, checks it against the release's `SHA256SUMS`, unpacks it
+into `~/.gensokyo` and links `~/.local/bin/gensokyo` (it says so if that is not on your `PATH`).
+Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR`. Nothing is written
+anywhere else.
+
+- `gensokyo doctor` says which binary and which `claude` are in use, whether the daemon and the
+  login agent are running, and what looks wrong.
+- `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
+  open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
+  is how the daemon finds `claude`: run it again after `claude` moves. `gensokyo login` says
+  whether it is on; `gensokyo login remove` turns it off. A daemon `gensokyo quit` stopped stays
+  stopped until the next login or the next `gensokyo`.
+- `gensokyo update` swaps `~/.gensokyo` for the latest release (`--check` only says whether there
+  is one). The running daemon keeps the old binary until `gensokyo restart`.
+- `gensokyo uninstall` removes the install, its link and the login agent, and asks before it
+  deletes your config and state (`--keep-data` keeps them). With the binary already gone,
+  `curl -fsSL …/releases/latest/download/uninstall.sh | sh` lists what is left, and
+  `sh -s -- --yes` removes it. Claude Code's own settings and sessions are never touched.
 
 ## Building
 
@@ -264,6 +289,15 @@ CI runs the same three on macOS. The tests start real daemons on the stub in
 state directory of its own under `target/`, so nothing touches yours and no Claude Code login is
 needed. A changed screen snapshot fails its test and leaves a `.snap.new` beside the old one in
 `tests/snapshots/`; read it, then `cargo insta review` (cargo-insta) or rename it over the old.
+The install, update and uninstall tests package this build with `scripts/release.sh` and run
+the shipped scripts in a home of their own, with a stand-in `launchctl`. One test loads a real
+launchd agent under a `dev.gensokyo.test.*` label and boots it out again: it is left out unless
+asked for, with `cargo nextest run --test login --run-ignored ignored-only`.
+
+A release is a `v<version>` tag matching `Cargo.toml`: the release workflow builds the arm64
+tarball with `scripts/release.sh`, installs it into a scratch home, and publishes it with
+`SHA256SUMS`, `VERSION`, `install.sh` and `uninstall.sh`. `scripts/release.sh` alone builds the
+same into `dist/`.
 
 - `src/daemon/`: the daemon, on one thread: the shrine, each resident's PTY and emulator
   (libghostty-vt), the socket, hooks, spell cards and the ritual clock.

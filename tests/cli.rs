@@ -65,7 +65,10 @@ fn help_names_every_verb_and_each_verb_has_its_own() {
     let e = Env::new("help");
     for args in [&["--help"][..], &["-h"], &["help"]] {
         let text = e.ok(args);
-        for verb in ["list", "new", "resume", "banish", "broadcast", "ritual", "quit", "restart"] {
+        for verb in ["list", "new", "resume", "banish", "broadcast", "ritual", "quit", "restart"]
+            .into_iter()
+            .chain(["doctor", "login", "update", "uninstall"])
+        {
             assert!(text.contains(&format!("  {verb} ")), "{verb} missing from {args:?}: {text}");
         }
     }

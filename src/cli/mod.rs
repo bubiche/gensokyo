@@ -1,6 +1,9 @@
 //! The plumbing verbs: one request over the socket, starting the daemon when nobody answers.
 
 mod conn;
+mod doctor;
+mod install;
+mod login;
 mod rituals;
 
 pub use conn::{Error, connect_or_start, peer_pid, refusal, request};
@@ -74,6 +77,31 @@ enum Cmd {
     /// Each is asked to /exit, the daemon stops, this binary's daemon starts, and each is
     /// recalled into its own conversation. A turn in progress is cut short.
     Restart,
+    /// Which binary, which claude, the daemon, the login agent, and what may be wrong
+    Doctor,
+    /// Start the daemon when you log in; alone, whether it does
+    Login {
+        #[command(subcommand)]
+        cmd: Option<login::Cmd>,
+    },
+    /// Swap this install for the latest release (or --version's)
+    Update {
+        /// Only say whether a newer release is out
+        #[arg(long)]
+        check: bool,
+        /// That release instead of the latest
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+    },
+    /// Remove this install, its link and the login agent; asks before your config and state
+    Uninstall {
+        /// Remove without asking
+        #[arg(short, long)]
+        yes: bool,
+        /// Keep the config, the rituals and the records
+        #[arg(long)]
+        keep_data: bool,
+    },
     /// Print the version
     Version,
 }
@@ -120,6 +148,10 @@ pub fn main(args: &[String]) -> ExitCode {
             r => say(r),
         },
         Cmd::Restart => conn::restart(),
+        Cmd::Doctor => doctor::main(),
+        Cmd::Login { cmd } => login::main(cmd),
+        Cmd::Update { check, version } => install::update(check, version),
+        Cmd::Uninstall { yes, keep_data } => install::uninstall(yes, keep_data),
         Cmd::Version => {
             println!("gensokyo {}", env!("CARGO_PKG_VERSION"));
             Ok(())

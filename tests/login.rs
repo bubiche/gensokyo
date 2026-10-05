@@ -214,6 +214,13 @@ fn doctor_reads_without_starting_anything() {
     e.ok(&["list"]);
     let text = e.ok(&["doctor"]);
     assert!(text.contains("daemon     running (pid ") && text.contains(", 0 residents"), "{text}");
+    assert!(!text.contains("never reach residents"), "{text}");
+    e.ok(&["login", "setup"]);
+    let mut c = e.command(Path::new(BIN), &["doctor"]);
+    let o =
+        c.env("ANTHROPIC_BASE_URL", "http://x").env("https_proxy", "http://y").output().unwrap();
+    let want = "ANTHROPIC_BASE_URL https_proxy set here never reach residents launchd starts";
+    assert!(out(&o).contains(want), "{}", out(&o));
 }
 
 #[test]
@@ -302,6 +309,22 @@ fn a_real_agent_starts_the_daemon_and_brings_it_back_after_a_crash() {
     std::fs::create_dir_all(dir.join("work")).unwrap();
     let said = gensokyo(&["new", &dir.join("work").display().to_string(), "-n", "Reimu"]);
     assert!(said.starts_with("summoned Reimu"), "{said}");
+
+    // While launchd's daemon has a resident, neither setup nor remove may boot it out.
+    let refused = |args: &[&str], path: &str| {
+        let mut c = Command::new(BIN);
+        c.args(args).env_remove("GENSOKYO_SOCKET").env_remove("GENSOKYO_CLAUDE");
+        c.env("GENSOKYO_STATE_DIR", &dir).env("GENSOKYO_CONFIG_DIR", dir.join("conf"));
+        c.env("CLAUDE_CONFIG_DIR", dir.join("claude")).env("PATH", path);
+        c.env("GENSOKYO_LAUNCH_DIR", dir.join("agents")).env("GENSOKYO_LAUNCH_LABEL", &label);
+        let o = c.stdin(Stdio::null()).output().unwrap();
+        assert!(!o.status.success(), "gensokyo {args:?} went through: {}", out(&o));
+        assert!(err(&o).contains("`gensokyo quit` first"), "{}", err(&o));
+    };
+    refused(&["login", "remove"], &path);
+    refused(&["login", "setup"], &format!("/opt/new:{path}"));
+    assert_eq!(pid(), Some(first));
+    assert!(gensokyo(&["list"]).contains("Reimu"));
 
     // A crash: launchd starts it again (its throttle is 10 s).
     unsafe { libc::kill(first, libc::SIGKILL) };

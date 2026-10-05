@@ -33,7 +33,10 @@ anywhere else.
   login agent are running, and what looks wrong.
 - `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
   open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
-  is how the daemon finds `claude`: run it again after `claude` moves. `gensokyo login` says
+  is how the daemon finds `claude`: run it again after `claude` moves. Only that `PATH` and
+  gensokyo's own variables carry over (the agent's file is readable by anyone), so a variable
+  such as `ANTHROPIC_BASE_URL` or a proxy set in your shell does not reach residents once
+  launchd starts the daemon; `doctor` names any it sees. `gensokyo login` says
   whether it is on; `gensokyo login remove` turns it off. A daemon `gensokyo quit` stopped stays
   stopped until the next login or the next `gensokyo`.
 - `gensokyo update` swaps `~/.gensokyo` for the latest release (`--check` only says whether there

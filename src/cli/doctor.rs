@@ -73,6 +73,17 @@ pub fn main() -> Result<(), String> {
     }
     line("daemon", daemon());
     line("at login", login::status());
+    // A daemon launchd starts has the agent's environment, not this shell's.
+    if let login::Agent::Ours(_) = login::agent() {
+        let proxy = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+        let mut unseen: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
+        unseen
+            .retain(|k| k.starts_with("ANTHROPIC_") || proxy.contains(&k.to_uppercase().as_str()));
+        unseen.sort();
+        if !unseen.is_empty() {
+            line("", format!("{} set here never reach residents launchd starts", unseen.join(" ")));
+        }
+    }
     let state = paths::state_dir();
     line("state", short(&state));
     let config = paths::config_dir();

@@ -123,6 +123,112 @@ fn esc_in_the_timetable_goes_back_one_stage_at_a_time() {
     assert!(!sent(&mut a).iter().any(|r| r["t"] == "ritual"));
 }
 
+/// What the app draws at 120x40, row by row.
+fn screen(a: &mut App) -> Vec<String> {
+    let area = Rect::new(0, 0, 120, 40);
+    let mut buf = Buffer::empty(area);
+    a.paint(area, &mut buf);
+    let cells: Vec<&str> = buf.content.iter().map(|c| c.symbol()).collect();
+    cells.chunks(120).map(|r| r.concat()).collect()
+}
+
+/// A left click on the first cell of `text`.
+fn click(a: &mut App, text: &str) {
+    let rows = screen(a);
+    let (y, line) = rows.iter().enumerate().find(|(_, l)| l.contains(text)).expect(text);
+    let x = line[..line.find(text).unwrap()].chars().count() + 1;
+    host(a, format!("\x1b[<0;{x};{}M\x1b[<0;{x};{}m", y + 1, y + 1).as_bytes());
+}
+
+#[test]
+fn the_timetable_picks_runs_pauses_and_removes_with_a_yes() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dt");
+    assert_eq!(kinds(&sent(&mut a)), ["rituals"]);
+    let ritual = |name: &str, next: Option<i64>| RitualInfo {
+        name: name.into(),
+        enabled: true,
+        next_fire: next,
+        next_fire_local: next.map(|_| "2026-09-21 16:00".into()),
+        ..Default::default()
+    };
+    let slack = RitualInfo { shipped: true, enabled: false, ..ritual("slack-morning", None) };
+    let list = vec![ritual("alpha", Some(50)), ritual("beta", Some(100)), slack.clone()];
+    daemon(&mut a, Reply::Rituals { id: 1, rituals: list, unusable: vec![] });
+    let tt = |a: &App| match &a.m.modal {
+        Some(Modal::Timetable(tt)) => (tt.selected, tt.open.clone(), tt.confirm),
+        _ => panic!("the timetable closed"),
+    };
+
+    // Soonest first: alpha, beta, then the paused example. j, k and the arrows stop at the ends.
+    let keys: [(&[u8], usize); 7] = [
+        (b"j", 1),
+        (b"k", 0),
+        (b"k", 0),
+        (b"\x1b[B", 1),
+        (b"\x1b[B", 2),
+        (b"\x1b[B", 2),
+        (b"\x1b[A", 1),
+    ];
+    for (k, at) in keys {
+        host(&mut a, k);
+        assert_eq!(tt(&a).0, at, "after {k:?}");
+    }
+    host(&mut a, b"k");
+    host(&mut a, b"\r");
+    assert_eq!(tt(&a).1.as_deref(), Some("alpha"));
+
+    // Run now, then pause; once the daemon says it is paused, p resumes it.
+    // The first paint also asks for its size.
+    let rituals = |a: &mut App| sent(a).into_iter().filter(|r| r["t"] == "ritual").collect();
+    let verb = |a: &mut App| {
+        let out: Vec<Value> = rituals(a);
+        assert_eq!(out.len(), 1, "{out:?}");
+        (out[0]["verb"].as_str().unwrap().to_string(), out[0]["name"].as_str().unwrap().into())
+    };
+    host(&mut a, b"r");
+    assert_eq!(verb(&mut a), ("run".into(), "alpha".to_string()));
+    assert_eq!(said(&a), Some("running alpha…"));
+    host(&mut a, b"p");
+    assert_eq!(verb(&mut a), ("disable".into(), "alpha".to_string()));
+    let paused = RitualInfo { enabled: false, ..ritual("alpha", None) };
+    let list = vec![paused, ritual("beta", Some(100)), slack.clone()];
+    daemon(&mut a, Reply::Rituals { id: 0, rituals: list, unusable: vec![] });
+    assert!(screen(&mut a).iter().any(|l| l.contains("[resume p]")));
+    host(&mut a, b"p");
+    assert_eq!(verb(&mut a), ("enable".into(), "alpha".to_string()));
+
+    // Back on the list, the selection stayed on alpha, paused and so now after beta.
+    host(&mut a, b"\x1b");
+    assert_eq!(tt(&a), (1, None, false));
+    // A click on a row opens it. An example has no remove, and x says what to do instead.
+    click(&mut a, "slack-morning");
+    assert_eq!(tt(&a).1.as_deref(), Some("slack-morning"));
+    assert!(!screen(&mut a).iter().any(|l| l.contains("[remove x]")));
+    host(&mut a, b"x");
+    assert_eq!(said(&a), Some("slack-morning ships with gensokyo: pause it instead"));
+    assert!(!tt(&a).2);
+    assert!(rituals(&mut a).is_empty());
+
+    // Remove asks; n backs out, and a y straight after the x is taken for typing, not a yes.
+    host(&mut a, b"\x1b");
+    click(&mut a, "beta");
+    assert!(screen(&mut a).iter().any(|l| l.contains("[remove x]")));
+    host(&mut a, b"x");
+    assert_eq!(tt(&a), (0, Some("beta".into()), true));
+    host(&mut a, b"n");
+    assert_eq!(tt(&a), (0, Some("beta".into()), false));
+    host(&mut a, b"x");
+    host(&mut a, b"y");
+    assert!(tt(&a).2, "a y in the same breath as the x");
+    assert!(rituals(&mut a).is_empty());
+    a.later(Duration::from_millis(400));
+    host(&mut a, b"y");
+    assert_eq!(verb(&mut a), ("remove".into(), "beta".to_string()));
+    assert_eq!(tt(&a), (0, None, false));
+    assert_eq!(said(&a), Some("removing beta…"));
+}
+
 #[test]
 fn a_resident_nobody_watches_rings_and_says_why() {
     let mut a = shrine();

@@ -128,6 +128,13 @@ fn stub(dir: &Path, ext: &str) -> String {
     f.and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default()
 }
 
+/// How many of the stubs are reading their tty.
+fn ready(dir: &Path) -> usize {
+    dir.join("stub").read_dir().map_or(0, |d| {
+        d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "ready")).count()
+    })
+}
+
 /// Quits the test's daemon when dropped, so a failed test leaves nothing running.
 struct Quit(PathBuf);
 
@@ -170,12 +177,7 @@ async fn summon_type_click_detach_reattach() {
     assert!(s.contains("1 ○ Reimu"), "{s}");
     // Typing waits until the stub reads, and past the reattach nudge's two resizes: a SIGWINCH
     // in the middle of the stub's `read` would lose the line.
-    c.wait("the stub reading", |_| {
-        dir.join("stub").read_dir().is_ok_and(|mut d| {
-            d.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "ready")))
-        })
-    })
-    .await;
+    c.wait("the stub reading", |_| ready(&dir) == 1).await;
     let t = Instant::now();
     c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(200)).await;
 
@@ -265,12 +267,7 @@ async fn a_resident_nobody_watches_rings_the_host() {
     cli(&dir, &["new", "work", "-n", "Marisa"]);
     let mut c = Client::spawn(&dir, 120, 40);
     c.wait("both residents", |s| s.contains("1 ○ Reimu") && s.contains("2 ○ Marisa")).await;
-    let ready = || {
-        dir.join("stub").read_dir().map_or(0, |d| {
-            d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "ready")).count()
-        })
-    };
-    c.wait("both stubs reading", |_| ready() == 2).await;
+    c.wait("both stubs reading", |_| ready(&dir) == 2).await;
     // On Marisa, in a focused terminal: her finished turn is seen as it finishes, so she never
     // turns gold, and nothing rings.
     c.send(b"\x1b[I\x1d2").await;
@@ -343,4 +340,132 @@ async fn a_resident_nobody_watches_rings_the_host() {
         .await;
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_timetable_runs_pauses_and_removes_a_ritual_and_keeps_the_examples() {
+    let dir = state("timetable");
+    let _quit = Quit(dir.clone());
+    let rituals = dir.join("conf/rituals");
+    std::fs::create_dir_all(&rituals).unwrap();
+    let file = rituals.join("tt.md");
+    let text = format!(
+        "---\nschedule: \"@yearly\"\nheadless: true\ncwd: \"{}\"\n---\nSay the time.\n",
+        dir.join("work").display()
+    );
+    std::fs::write(&file, text).unwrap();
+    let mut c = Client::spawn(&dir, 120, 40);
+    // The examples are paused, so the sidebar's next fire is this one; a click there opens the
+    // timetable.
+    let s = c.wait("the next fire", |s| s.contains("⏲ tt")).await;
+    let (x, y) = find(&s, "⏲ tt");
+    c.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes()).await;
+    let s =
+        c.wait("the timetable", |s| s.contains("┌ timetable") && s.contains("slack-morning")).await;
+    let (x, y) = find(&s, " tt ");
+    c.send(format!("\x1b[<0;{};{y}M\x1b[<0;{};{y}m", x + 1, x + 1).as_bytes()).await;
+    c.wait("its detail", |s| s.contains("┌ tt ") && s.contains("last ran  never")).await;
+
+    // Run now: the run goes headless, and the detail says when it ran.
+    c.send(b"r").await;
+    c.wait("the run", |s| s.contains("last ran ") && !s.contains("last ran  never")).await;
+    let journal =
+        || std::fs::read_to_string(dir.join("rituals/tt/journal.jsonl")).unwrap_or_default();
+    // Done, too: a ritual whose run is still going is not removed.
+    let done =
+        |s: &str| journal().contains("done (headless") && !s.contains("a run of it is going");
+    c.wait("its run done", done).await;
+
+    // Pause and resume: the file says so, and so do the buttons.
+    c.send(b"p").await;
+    c.wait("paused", |s| s.contains("[resume p]")).await;
+    assert!(std::fs::read_to_string(&file).unwrap().contains("enabled: false"));
+    c.send(b"p").await;
+    c.wait("resumed", |s| s.contains("[pause p]")).await;
+    assert!(std::fs::read_to_string(&file).unwrap().contains("enabled: true"));
+
+    // Remove asks; n keeps it. A yes a moment later takes it, and the list comes back without it.
+    c.send(b"x").await;
+    c.wait("the question", |s| s.contains("Remove tt?")).await;
+    c.send(b"n").await;
+    c.wait("kept", |s| !s.contains("Remove tt?") && s.contains("[pause p]")).await;
+    c.send(b"x").await;
+    c.wait("the question again", |s| s.contains("Remove tt?")).await;
+    let t = Instant::now();
+    c.wait("a breath", |_| t.elapsed() > Duration::from_millis(400)).await;
+    c.send(b"y").await;
+    let s =
+        c.wait("the list without it", |s| s.contains("┌ timetable") && !s.contains(" tt ")).await;
+    assert!(!file.exists() && !dir.join("rituals/tt").exists());
+
+    // An example has no remove.
+    let (x, y) = find(&s, "slack-morning");
+    c.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes()).await;
+    let s = c.wait("the example", |s| s.contains("┌ slack-morning ")).await;
+    assert!(s.contains("[resume p]") && !s.contains("[remove x]"), "{s}");
+    c.send(b"\x1b").await;
+    c.wait("the list", |s| s.contains("┌ timetable")).await;
+    c.send(b"\x1b").await;
+    c.wait("closed", |s| !s.contains("┌ timetable")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_wheel_scrolls_back_for_every_client_and_a_letter_goes_home_and_on() {
+    let dir = state("scroll");
+    let _quit = Quit(dir.clone());
+    cli(&dir, &["new", "work", "-n", "Reimu"]);
+    let mut c = Client::spawn(&dir, 120, 40);
+    let mut c2 = Client::spawn(&dir, 120, 40);
+    c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
+    c2.wait("Reimu, twice", |s| s.contains("stub-claude Reimu")).await;
+    c.wait("the stub reading", |_| ready(&dir) == 1).await;
+    let t = Instant::now();
+    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    // One paste, which the stub echoes whole: 60 lines, more than the screen holds.
+    let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
+    c.send(format!("\x1b[200~{}\x1b[201~\r", lines.join("\r")).as_bytes()).await;
+    c.wait("the echo", |s| s.contains("> line59")).await;
+
+    // The wheel over the grid: three rows back, on both clients' screens.
+    let back =
+        |n: u64| move |s: &str| s.contains(&format!("↑ {n} of ")) && s.contains("esc returns");
+    c.send(b"\x1b[<64;60;20M").await;
+    c.wait("three rows back", back(3)).await;
+    c2.wait("three rows back, for the other client too", back(3)).await;
+    // The chord, half a screen more; g the top; q home.
+    c.send(b"\x1d[").await;
+    c.wait("further back", |s| s.contains("↑ ") && !back(3)(s)).await;
+    c.send(b"g").await;
+    // The tty echoed the paste before the stub did: its first line is the top's.
+    c.wait("the top", |s| s.contains("200~line0") && !s.contains("> line59")).await;
+    c.send(b"q").await;
+    c.wait("home", |s| !s.contains("esc returns") && s.contains("> line59")).await;
+    c2.wait("home, for the other client too", |s| !s.contains("esc returns")).await;
+
+    // A letter while scrolled back goes home and on to the resident.
+    c.send(b"\x1b[<64;60;20M").await;
+    c.wait("back again", back(3)).await;
+    c.send(b"x").await;
+    c.wait("home with the letter", |s| !s.contains("esc returns") && s.contains("││x ")).await;
+    c.send(b"\r").await;
+    c.wait("the letter read", |_| stub(&dir, "input").lines().last() == Some("x")).await;
+    // Output that comes while scrolled back keeps the view on its rows, so the stub's answer
+    // has to be in first.
+    c.wait("the stub's answer", |s| s.contains("> x")).await;
+
+    // Detached while scrolled back, the view is the resident's: it is still there on return.
+    c.send(b"\x1b[<64;60;20M").await;
+    c.wait("back once more", back(3)).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("still back", back(3)).await;
+    c.send(b"\x1b").await;
+    c.wait("home at last", |s| !s.contains("esc returns")).await;
+    for mut c in [c, c2] {
+        c.send(b"\x1dd").await;
+        assert!(c.exit().await.success());
+    }
 }

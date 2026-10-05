@@ -167,6 +167,35 @@ fn a_fire_missed_while_down_is_made_up_once_at_the_start() {
 }
 
 #[test]
+fn a_lid_shut_through_fires_makes_up_the_newest_once_and_the_next_comes_as_usual() {
+    let text = "---\nschedule: every 10m\nheadless: true\ncwd: \"@cwd\"\n---\nSay the time.\n";
+    let d = Daemon::start("lid", T0 + 120, &[("lid", text)], &[]);
+    wait(|| d.stamp("lid") == Some(T0 + 120), "first sight's stamp");
+    let done = |n: usize| d.evs("lid", "done").len() == n;
+    d.clock(T0 + 600 + 5);
+    wait(|| done(1), "the 15:10 run");
+
+    // Shut at 15:12, open at 15:37: 15:20 and 15:30 went by while the daemon was not ticking.
+    d.clock(T0 + 37 * 60 + 20);
+    wait(|| done(2), "the catch-up run");
+    d.settle();
+    let ran = ["ran (due 2026-09-21 15:10)", "ran (catch-up 2026-09-21 15:30)"];
+    assert_eq!(d.evs("lid", "ran"), ran, "one run for both misses");
+    assert_eq!(d.stamp("lid"), Some(T0 + 1800));
+    let log = std::fs::read_to_string(d.dir.join("daemon.log")).unwrap();
+    assert!(log.contains(r#""gap_s":1635"#), "the gap is logged");
+
+    // The next fire is due as usual, neither swallowed nor doubled.
+    d.clock(T0 + 2400 + 5);
+    wait(|| done(3), "the 15:40 run");
+    // Shut again between fires, 15:41 to 15:48: nothing was missed, so nothing runs.
+    d.clock(T0 + 48 * 60);
+    d.settle();
+    assert_eq!(d.evs("lid", "ran").len(), 3, "{:?}", d.evs("lid", "ran"));
+    assert_eq!(d.stamp("lid"), Some(T0 + 2400));
+}
+
+#[test]
 fn overlap_skips_queues_or_runs_alongside_a_run_still_going() {
     let rituals = [
         ("skipper", hourly("")),

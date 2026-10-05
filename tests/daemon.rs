@@ -777,8 +777,10 @@ fn scrollback_is_the_residents_and_typing_brings_it_back_to_the_live_screen() {
 
     c.send(json!({"t": "input", "who": r["id"], "bytes": b"typed\r"}));
     c.until("the live screen", |ev| s.apply(ev) && back(ev) == Some(0));
-    // The stub reads the focus report as part of the line: a tab before it on screen.
-    s.wait_for(&mut c, "typed");
+    // The stub's answer, not the tty's echo: output that comes while scrolled back keeps the
+    // view on its rows. It reads the focus report as part of the line, a tab on screen.
+    let answer = |s: &Screen| s.rows.iter().any(|r| r.starts_with("> ") && r.contains("typed"));
+    c.until("the stub's answer", |ev| s.apply(ev) && answer(&s));
     c2.until("the live screen, for the other viewer too", |ev| back(ev) == Some(0));
 
     // A card is looked for on the live screen, so casting one scrolls there first.

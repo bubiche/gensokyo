@@ -84,6 +84,18 @@ impl Daemon {
         std::fs::read_to_string(p).ok()?.trim().parse().ok()
     }
 
+    /// Until the daemon has asked the registry since now, and had time to read the answer:
+    /// whoever is up by now is listed.
+    fn listed(&self) {
+        let calls = || {
+            let f = std::fs::read_to_string(self.dir.join("stub/agents.calls")).unwrap_or_default();
+            f.lines().count()
+        };
+        let n = calls();
+        wait_for(Duration::from_secs(15), || calls() > n, "an ask of the registry");
+        self.settle();
+    }
+
     /// A few ticks' worth, for asserting that nothing more happens.
     fn settle(&self) {
         std::thread::sleep(Duration::from_millis(600));
@@ -194,8 +206,8 @@ fn keep_closes_a_finished_run_and_typing_puts_its_life_back() {
     wait(|| d.live().len() == 1, "the run");
     let id = d.live()[0]["id"].clone();
     d.stub(&id, "ready");
-    // Finished only once the registry lists it (a poll every 3 s): not stuck at a trust dialog.
-    std::thread::sleep(Duration::from_millis(3500));
+    // Finished only once the registry lists it: not stuck at a trust dialog.
+    d.listed();
     // Finished at +5; typed into at +1000, and finished again at once.
     d.clock(T0 + 3600 + 1000);
     d.settle();
@@ -533,8 +545,8 @@ fn a_recalled_run_does_not_hold_up_the_next_fire() {
     let r = d.req(json!({"t": "recall", "id": 5, "who": "rounds"}));
     assert_eq!(r["t"], "summoned", "{r}");
     wait(|| d.stub(&id, "args").contains("--resume"), "the resumed session");
-    // Listed by the registry (a poll every 3 s), so it is not at a trust dialog.
-    std::thread::sleep(Duration::from_millis(3500));
+    // Listed by the registry, so it is not at a trust dialog.
+    d.listed();
     d.clock(T0 + 7200 + 5);
     wait(|| d.evs("rounds", "ran").len() == 2, "the next run");
     assert!(d.evs("rounds", "skipped").is_empty());

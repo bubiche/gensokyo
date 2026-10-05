@@ -112,7 +112,8 @@ fn summon_launches_claude_with_our_argv_and_env() {
         (json!({"name": "reimu"}), "already here"),
         (json!({"name": "9lives"}), "starts with a letter"),
         (json!({"cwd": "/no/such/dir"}), "no such directory"),
-        (json!({"prompt": "two\nlines"}), "single line"),
+        (json!({"prompt": "x".repeat(65 * 1024)}), "at most 64 KB"),
+        (json!({"allowed_tools": ["Read", "-p"]}), "-p starts with -"),
     ] {
         let mut req = json!({"t": "summon", "id": 3, "cwd": d.dir});
         req.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
@@ -1143,6 +1144,56 @@ fn a_card_reaches_everyone_free_and_names_whoever_holds_a_dialog() {
     let e = d.command(&["broadcast", "nope", "all"]).output().unwrap();
     assert!(!e.status.success());
     assert!(String::from_utf8_lossy(&e.stderr).contains("no spell card 'nope'"));
+}
+
+#[test]
+fn a_prompt_half_typed_keeps_cards_out_until_it_is_sent_or_cleared() {
+    let d = Daemon::start("draft", &[("STUB_HOOKS", "1")]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
+    let r = d.summon(json!({"name": "Reimu"}));
+    d.stub(&r["id"], "ready");
+    let me = || d.list()[0].clone();
+    wait(|| me()["state"] == "resting" && me()["blocked"].is_null(), "Reimu free");
+    // Keys as the client sends them, legacy and kitty: answered only when they fail.
+    let keys = |bytes: &[u8]| {
+        let (mut w, mut lines) = d.connect();
+        let req = json!({"t": "input", "id": 1, "who": "Reimu", "bytes": bytes});
+        writeln!(w, "{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
+        assert_eq!(next(&mut lines)["t"], "list");
+    };
+    let cast = |targets: &[&str]| {
+        let r = d.req(json!({"t": "cast", "id": 3, "card": "hi", "targets": targets}));
+        r[if r["t"] == "done" { "message" } else { "error" }].as_str().unwrap().to_string()
+    };
+    let draft = "has a prompt half typed into it (Ctrl-C there clears it)";
+    keys(b"half");
+    assert_eq!(me()["blocked"], draft);
+    assert_eq!(
+        cast(&["Reimu"]),
+        format!("Hi reached nobody; Reimu {draft}; not cast at, or the card would go in with it")
+    );
+    assert_eq!(cast(&["all"]), format!("nobody to cast Hi at; Reimu {draft}; left out"));
+    // Arrows, Backspace and a focus report leave it as it was; the prompt is still there.
+    keys(b"\x1b[D\x7f\x1b[I");
+    assert_eq!(me()["blocked"], draft);
+    // Ctrl-C clears the line (the tty drops it), and the card goes in alone.
+    keys(b"\x03");
+    assert!(me()["blocked"].is_null());
+    assert_eq!(cast(&["Reimu"]), "cast Hi on Reimu");
+    wait(|| d.stub(&r["id"], "input").contains("Hello Reimu."), "the card");
+    assert!(!d.stub(&r["id"], "input").contains("half"), "{}", d.stub(&r["id"], "input"));
+    // A key for the daemon to encode, then sent: the prompt's own hook clears it.
+    let (mut w, mut lines) = d.connect();
+    let key =
+        json!({"t": "input", "id": 1, "who": "Reimu", "key": {"code": 109, "mods": 0, "event": 1}});
+    writeln!(w, "{key}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    assert_eq!(me()["blocked"], draft);
+    keys(b"ore\r");
+    wait(|| me()["blocked"].is_null(), "the prompt sent");
+    assert_eq!(cast(&["Reimu"]), "cast Hi on Reimu");
 }
 
 /// A resident with scrollback holding an earlier paste, as `[Pasted text …]`, on view.

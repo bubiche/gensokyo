@@ -72,7 +72,7 @@ fn load(sh: &Shrine) -> (Vec<Ritual>, Vec<PathBuf>) {
 }
 
 /// The trust file, read again only when it has changed.
-fn trust(shrine: &Shared) -> Rc<Trust> {
+pub(super) fn trust(shrine: &Shared) -> Rc<Trust> {
     let mtime = std::fs::metadata(Trust::path()).and_then(|m| m.modified()).ok();
     let mut sh = shrine.borrow_mut();
     match (&sh.rites.trust, mtime) {

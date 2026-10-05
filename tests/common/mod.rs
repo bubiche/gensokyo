@@ -113,7 +113,11 @@ impl Daemon {
 
     pub fn command(&self, args: &[&str]) -> Command {
         let mut c = Command::new(BIN);
-        c.args(args).envs(self.env.iter().map(|(k, v)| (k, v))).env_remove("GENSOKYO_SOCKET");
+        // Run from inside a resident, the tests would have its rights and none of the user's.
+        c.args(args)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .env_remove("GENSOKYO_SOCKET")
+            .env_remove("GENSOKYO_RESIDENT");
         c
     }
 

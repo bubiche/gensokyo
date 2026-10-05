@@ -161,7 +161,7 @@ pub fn request(req: Request, start: bool) -> Result<Reply, Error> {
     let pid = peer_pid(&s);
     let io = |e: std::io::Error| Error::Io(e.to_string());
     let mut w = s.try_clone().map_err(io)?;
-    let hello = Envelope { id: 0, req: Request::Hello { proto: proto::PROTO, who: "cli".into() } };
+    let hello = Envelope { id: 0, req: proto::hello("cli") };
     let line = |e: &Envelope| serde_json::to_string(e).unwrap_or_default();
     writeln!(w, "{}\n{}", line(&hello), line(&Envelope { id: 1, req })).map_err(io)?;
     let mut lines = BufReader::new(s).lines();

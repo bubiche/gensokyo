@@ -82,7 +82,7 @@ pub(super) async fn poll(shrine: Shared) {
                 continue;
             }
             let resting =
-                live().all(|e| e.aware.state() == State::Resting && e.aware.blocked().is_none());
+                live().all(|e| e.aware.state() == State::Resting && e.aware.dialog().is_none());
             let drew = live().any(|e| {
                 let h = e.handle.as_ref().expect("live");
                 asked.is_none_or(|t| h.last_output() > t)

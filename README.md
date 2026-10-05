@@ -112,7 +112,7 @@ The same things from a shell, for scripts and for the residents' own skills:
 
 ```sh
 gensokyo list [--all] [--json]          # who is here: slot, state, directory, model, context
-gensokyo new ~/dev/x -n Marisa -m haiku # summon; --prompt gives it a first prompt
+gensokyo new ~/dev/x -n Marisa -m haiku # summon; also --prompt-file -, --allowed-tools, --json
 gensokyo resume [Marisa]                # the departed; with a name, slot or id, bring one back
 gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
 gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar
@@ -122,6 +122,12 @@ gensokyo quit                           # everyone /exit, then the daemon stops
 gensokyo restart                        # a new daemon, the same residents
 gensokyo help <command>                 # every command has its own
 ```
+
+Run from inside a resident, by its skills, these have a resident's rights rather than yours. It
+can list, summon, cast and keep rituals as its skill does, but not `quit`, and not close, banish or recall a resident. It can't
+type into, show or resize any screen either: the screens and keyboards are yours. A card it casts
+at `all` leaves it out. Its `new` refuses a directory Claude Code was never trusted in, because
+nobody would be there to answer the trust dialog.
 
 ## When a resident needs you
 
@@ -179,8 +185,10 @@ asked writes it into its own screen, where the one waiting never sees it.
 
 Casting never types into a resident that has something open — a permission dialog, a
 question of its own, the trust dialog of a new directory — because the Enter after the card
-would answer the dialog. Those residents are named and left out, and a card that does not show
-up in a resident's prompt is reported as not sent:
+would answer the dialog. Nor into one where you have half typed a prompt: the card would go in
+with it, as one prompt, until you send that or clear it with Ctrl-C (a line emptied with
+Backspace still counts, since gensokyo doesn't read it). Those residents are named
+and left out, and a card that does not show up in a resident's prompt is reported as not sent:
 
 ```
 $ gensokyo broadcast status-report all

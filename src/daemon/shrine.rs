@@ -99,6 +99,8 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         mode: flag(&r.argv, "--permission-mode"),
         branch: None,
         telemetry: None,
+        blocked: None,
+        finished: false,
     }
 }
 
@@ -107,6 +109,7 @@ fn entry_info(e: &Entry) -> proto::Resident {
     let mut r = info(&e.rec, e.handle.as_ref().map(|h| h.pid));
     if e.handle.is_some() {
         (r.state, r.detail) = (e.aware.state(), e.aware.detail.clone());
+        (r.blocked, r.finished) = (e.aware.blocked().map(Into::into), e.aware.finished());
     }
     r.mode = e.aware.mode.clone().or(r.mode);
     r.branch = tele::git_branch(Path::new(&e.rec.cwd));
@@ -170,12 +173,42 @@ fn launch(
     Ok((program.to_string_lossy().into_owned(), argv, handle))
 }
 
-pub(super) fn summon(shrine: &Shared, s: Summon) -> Result<proto::Resident, String> {
-    if s.prompt.as_deref().is_some_and(|p| p.contains('\n')) {
-        return Err("a prompt is a single line".into());
+/// The longest first prompt: it goes on claude's command line.
+const PROMPT_MOST: usize = 64 * 1024;
+
+/// `caller` is the resident asking, if one is. Nobody watches what a resident summons, so a
+/// directory Claude Code was never trusted in is refused: the new one would sit at the trust
+/// prompt, looking as if it were resting. The user's own summon shows them that prompt.
+pub(super) fn summon(
+    shrine: &Shared,
+    s: Summon,
+    caller: Option<&str>,
+) -> Result<proto::Resident, String> {
+    let Summon { cwd, name, model, effort, mode, prompt, allowed_tools } = s;
+    if prompt.as_ref().is_some_and(|p| p.len() > PROMPT_MOST) {
+        return Err(format!(
+            "a first prompt is at most {} KB: put the rest in a file and name it",
+            PROMPT_MOST / 1024
+        ));
     }
-    let Summon { cwd, name, model, effort, mode, prompt } = s;
-    start(shrine, Start { cwd, name, model, effort, mode, prompt, ..Start::default() })
+    if let Some(t) = allowed_tools.iter().find(|t| t.starts_with('-')) {
+        return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
+    }
+    let dir = Path::new(&cwd);
+    if caller.is_some() && dir.is_dir() && !super::rituals::trust(shrine).trusted(dir) {
+        return Err(format!(
+            "nothing has answered Claude Code's trust prompt for {} (the user opens Claude Code \
+             there once and accepts)",
+            crate::paths::short(&cwd)
+        ));
+    }
+    let mut extra = Vec::new();
+    if !allowed_tools.is_empty() {
+        // Variadic: `launch::argv` puts a flag after it.
+        extra.push("--allowedTools".into());
+        extra.extend(allowed_tools);
+    }
+    start(shrine, Start { cwd, name, model, effort, mode, prompt, extra, ..Start::default() })
 }
 
 /// What a resident is started with: a summon's fields, and a ritual run's own.

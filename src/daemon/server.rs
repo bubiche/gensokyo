@@ -9,7 +9,7 @@ use super::notify::looked;
 use super::registry::poll;
 use super::rituals;
 use super::shrine::{
-    SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
+    SIZE, Shared, Shrine, View, banish, close, find, leave_all, list, live, recall, summon,
 };
 use super::store::{self, Store};
 use super::stream::{self, send, send_written, view, writer};
@@ -240,6 +240,8 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
     // Greeted in another protocol by a hook: a binary updated under a running resident still
     // reports, and Hook and Statusline are all it may send.
     let mut hooks_only = false;
+    // The resident this connection runs inside, as its hello said: it has a resident's rights.
+    let mut caller: Option<String> = None;
     let (mut watching, mut viewing): (Option<AbortHandle>, Option<AbortHandle>) = (None, None);
     let mut viewed = false;
     while let Ok(Some(line)) = lines.next_line().await {
@@ -255,8 +257,9 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
         };
         let fail = move |error: String| Reply::Error { id, error };
         let reply = match req {
-            Request::Hello { proto, who } => {
+            Request::Hello { proto, who, resident } => {
                 greeted = proto == proto::PROTO;
+                caller = resident;
                 hooks_only = !greeted && who == "hook";
                 if !greeted {
                     refused(&mut shrine.borrow_mut(), &who, proto, hooks_only);
@@ -279,9 +282,13 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 send(&out, &fail("say hello first".into())).await;
                 break;
             }
+            ref r if let Some(why) = caller.as_deref().and_then(|c| refuse(&shrine, c, r)) => {
+                Some(fail(why))
+            }
             Request::List { all } => Some(Reply::List { id, residents: list(&shrine, all) }),
             Request::Summon(s) => Some(
-                summon(&shrine, s).map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+                summon(&shrine, s, caller.as_deref())
+                    .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
             ),
             Request::Recall { who } => Some(
                 recall(&shrine, &who)
@@ -293,12 +300,12 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                     .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
             Request::Banish { .. } | Request::Close { .. } | Request::Cast(_) => {
-                let (shrine, out) = (shrine.clone(), out.clone());
+                let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
                         Request::Banish { who } => banish(&shrine, &who).await,
                         Request::Close { who } => close(&shrine, &who).await,
-                        Request::Cast(c) => cards::cast(&shrine, c).await,
+                        Request::Cast(c) => cards::cast(&shrine, c, caller.as_deref()).await,
                         _ => unreachable!("matched above"),
                     };
                     send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
@@ -399,7 +406,7 @@ async fn input(
     mut bytes: Vec<u8>,
     key: Option<proto::Key>,
 ) -> Result<(), String> {
-    let (_, name, h) = live(shrine, who)?;
+    let (rid, name, h) = live(shrine, who)?;
     if let Some(k) = key {
         let ev = KeyEvent::from_kitty(k.code, k.mods, k.event).ok_or("no such key")?;
         bytes.extend(h.encode(ev));
@@ -407,7 +414,15 @@ async fn input(
     if bytes.is_empty() {
         return Ok(());
     }
-    shrine.borrow_mut().typed = true;
+    {
+        let mut sh = shrine.borrow_mut();
+        sh.typed = true;
+        if let Some(draft) = super::aware::typing(&bytes)
+            && let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == rid)
+        {
+            e.aware.typed(draft);
+        }
+    }
     // A focus report is the terminal's, not typing: it leaves the view where it is.
     if !matches!(bytes.as_slice(), b"\x1b[I" | b"\x1b[O") {
         h.to_live();
@@ -416,6 +431,44 @@ async fn input(
         Ok(true) => Ok(()),
         Ok(false) => Err(format!("{name} has already departed")),
         Err(_) => Err(format!("{name} is not reading its input")),
+    }
+}
+
+/// Why resident `caller`'s connection may not make this request, or nothing. The same uid is on
+/// both ends, so this keeps a resident from slips, not from a will to: it could unset
+/// `GENSOKYO_RESIDENT`. Its own Bash call is in the way of most of these, and the screen and the
+/// keyboard are the user's, where an `input` could answer another resident's dialog.
+fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
+    match r {
+        Request::Quit => Some(
+            "quit stops every resident, this one too; the user quits from a terminal of their own"
+                .into(),
+        ),
+        Request::Input { .. }
+        | Request::View { .. }
+        | Request::Scroll { .. }
+        | Request::Focus { .. }
+        | Request::Resize { .. } => Some(
+            "the screens and keyboards are the user's: a resident does not type into, show or \
+             size them (SendMessage reaches another resident)"
+                .into(),
+        ),
+        Request::Close { who } | Request::Banish { who } | Request::Recall { who } => {
+            mine(&shrine.borrow(), caller, who).err()
+        }
+        _ => None,
+    }
+}
+
+/// Whether resident `caller` may close, banish or recall `who`: only one it leads may be.
+fn mine(sh: &Shrine, caller: &str, who: &str) -> Result<(), String> {
+    match find(sh, who).map(|i| &sh.entries[i].rec) {
+        Some(r) if r.id == caller => Err(format!(
+            "{} is you: finish your turn instead, and the user closes or banishes you",
+            r.name
+        )),
+        Some(r) => Err(format!("{} is not one of your helpers; only the user can do that", r.name)),
+        None => Err(format!("{who} is not one of your helpers; only the user can do that")),
     }
 }
 

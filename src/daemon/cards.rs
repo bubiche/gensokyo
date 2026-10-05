@@ -52,8 +52,9 @@ fn names(v: &[String]) -> String {
 
 /// A card typed into each target, the registry asked first: gensokyo never types into a
 /// resident with a dialog open, where the Enter would answer it. Who got it, who was left out and
-/// why, in one line; an error when nobody did.
-pub(super) async fn cast(shrine: &Shared, c: Cast) -> Result<String, String> {
+/// why, in one line; an error when nobody did. A resident casting (`caller`) is never typed
+/// into itself: it is mid-turn, in the Bash call that cast.
+pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Result<String, String> {
     let (card, (claude, env)) = {
         let sh = shrine.borrow();
         if sh.quitting {
@@ -78,7 +79,7 @@ pub(super) async fn cast(shrine: &Shared, c: Cast) -> Result<String, String> {
         .await
         .ok_or("the registry could not be read, so a dialog cannot be ruled out")?;
     registry::seen(shrine, &list, at);
-    let (targets, mut notes) = aim(&shrine.borrow(), &card, &c)?;
+    let (targets, mut notes) = aim(&shrine.borrow(), &card, &c, caller)?;
     let runs: Vec<_> = targets
         .into_iter()
         .map(|t| {
@@ -108,15 +109,21 @@ pub(super) async fn cast(shrine: &Shared, c: Cast) -> Result<String, String> {
 
 /// Who gets the card and what it says to each, and a note on everyone left out, all before
 /// anything is typed.
-fn aim(sh: &Shrine, card: &Card, c: &Cast) -> Result<(Vec<Target>, Vec<String>), String> {
+fn aim(
+    sh: &Shrine,
+    card: &Card,
+    c: &Cast,
+    caller: Option<&str>,
+) -> Result<(Vec<Target>, Vec<String>), String> {
     let live = |i: usize| sh.entries[i].handle.as_ref().filter(|h| h.exit().is_none());
+    let me = |i: usize| caller == Some(sh.entries[i].rec.id.as_str());
     let mut ids: Vec<usize> = Vec::new();
     let mut notes = Vec::new();
     let group = c.targets.iter().any(|t| ["all", "awaiting", "idle"].contains(&t.as_str()));
     for t in &c.targets {
         let hits: Vec<usize> = match t.as_str() {
             "all" | "awaiting" | "idle" => (0..sh.entries.len())
-                .filter(|&i| live(i).is_some() && sh.entries[i].aware.blocked().is_none())
+                .filter(|&i| !me(i) && live(i).is_some() && sh.entries[i].aware.blocked().is_none())
                 .filter(|&i| {
                     let st = sh.entries[i].aware.state();
                     match t.as_str() {
@@ -136,7 +143,7 @@ fn aim(sh: &Shrine, card: &Card, c: &Cast) -> Result<(Vec<Target>, Vec<String>),
     }
     if group {
         for (i, e) in sh.entries.iter().enumerate() {
-            if let (Some(_), Some(why)) = (live(i), e.aware.blocked()) {
+            if let (Some(_), Some(why), false) = (live(i), e.aware.blocked(), me(i)) {
                 notes.push(format!("{} {why}; left out", e.rec.name));
             }
         }
@@ -177,13 +184,18 @@ fn aim(sh: &Shrine, card: &Card, c: &Cast) -> Result<(Vec<Target>, Vec<String>),
     let mut targets = Vec::new();
     for i in ids {
         let e = &sh.entries[i];
+        if me(i) {
+            notes.push(format!("{} is you; not cast at", e.rec.name));
+            continue;
+        }
         let Some(h) = live(i) else {
             notes.push(format!("{} has departed; not cast at", e.rec.name));
             continue;
         };
         // Named by hand, a resident comes straight past the groups' guard.
         if let Some(why) = e.aware.blocked() {
-            notes.push(format!("{} {why}; not cast at, or the card would answer it", e.rec.name));
+            let would = if e.aware.dialog().is_some() { "answer it" } else { "go in with it" };
+            notes.push(format!("{} {why}; not cast at, or the card would {would}", e.rec.name));
             continue;
         }
         let others: Vec<&str> = (0..sh.entries.len())

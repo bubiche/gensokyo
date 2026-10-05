@@ -3,7 +3,7 @@
 
 mod common;
 
-use gensokyo::daemon::aware::{Aware, Registry};
+use gensokyo::daemon::aware::{Aware, Registry, key_typing, typing};
 use gensokyo::daemon::registry;
 use gensokyo::hooks::{reduce, take_spool};
 use gensokyo::proto::{Hook, State};
@@ -353,4 +353,67 @@ fn a_card_may_go_to_a_finished_turn_but_never_into_a_dialog_or_an_unlisted_sessi
     a.registry(None, 90);
     assert!(!a.listed());
     assert_eq!(a.blocked(), Some("is still starting up"));
+}
+
+#[test]
+fn what_the_user_types_leaves_a_draft_or_clears_one_and_keys_that_type_nothing_say_nothing() {
+    // Text, a paste, and kitty-encoded letters (shifted too) leave something in the line.
+    for b in [&b"a"[..], b"\x1b[200~card\x1b[201~", b"\x1b[97u", b"\x1b[65;2u", "é".as_bytes()] {
+        assert_eq!(typing(b), Some(true), "{b:?}");
+    }
+    // Ctrl-C clears it, legacy or kitty; the last of several keys wins.
+    for b in [&b"\x03"[..], b"\x1b[99;5u", b"abc\x03", b"\x1b[99;5:1u"] {
+        assert_eq!(typing(b), Some(false), "{b:?}");
+    }
+    assert_eq!(typing(b"\x03x"), Some(true));
+    // Up brings an earlier prompt back into the line.
+    assert_eq!((typing(b"\x1b[A"), typing(b"\x1bOA")), (Some(true), Some(true)));
+    // Enter, Tab, Backspace, Esc, arrows, F1, Alt-x, focus, SGR and X10 mouse reports, a
+    // key's release, Ctrl-A and a kitty Enter: nothing typed, nothing cleared.
+    for b in [
+        &b"\r"[..],
+        b"\t",
+        b"\x7f",
+        b"\x1b",
+        b"\x1b[B",
+        b"\x1b[1;5A",
+        b"\x1bOP",
+        b"\x1bx",
+        b"\x1b[I",
+        b"\x1b[<0;12;5M",
+        b"\x1b[M !!",
+        b"\x1b[97;1:3u",
+        b"\x1b[97;5u",
+        b"\x1b[13u",
+        b"\x1b[57399u",
+    ] {
+        assert_eq!(typing(b), None, "{b:?}");
+    }
+    assert_eq!(key_typing(99, 4 | 64, 1), Some(false), "Ctrl-C with Caps Lock on");
+    assert_eq!(key_typing(97, 2, 1), None, "Alt-a");
+}
+
+#[test]
+fn a_draft_is_kept_from_the_keys_to_the_next_prompt_and_never_typed_into_a_dialog() {
+    let draft = |a: &Aware| a.blocked().is_some_and(|b| b.contains("half typed"));
+    let mut a = Aware::default();
+    // Keys before the registry lists it go to its input line, or to a trust dialog: a draft.
+    a.typed(true);
+    a.registry(Some(Registry::Idle), 1);
+    assert!(draft(&a) && a.dialog().is_none());
+    a.hook(&hook(json!({"hook_event_name": "UserPromptSubmit"}), 2));
+    assert_eq!(a.blocked(), None);
+    // Typed during the turn, it is still in the line when the turn ends; which still ends.
+    a.typed(true);
+    a.hook(&hook(json!({"hook_event_name": "Stop", "last_assistant_message": "ok"}), 3));
+    assert!(draft(&a));
+    assert!(a.finished(), "a draft holds back cards, not the end of a turn");
+    a.hook(&hook(json!({"hook_event_name": "SessionStart", "source": "clear"}), 4));
+    assert_eq!(a.blocked(), None);
+    // Keys while a permission prompt is open answer it.
+    let perm = json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "m"});
+    a.hook(&hook(perm, 5));
+    a.typed(true);
+    a.registry(Some(Registry::Idle), 6);
+    assert_eq!(a.blocked(), None, "answered, and nothing left in the line");
 }

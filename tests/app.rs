@@ -60,6 +60,7 @@ fn resident(slot: u8, name: &str) -> Resident {
         mode: None,
         branch: None,
         telemetry: None,
+        ..Default::default()
     }
 }
 

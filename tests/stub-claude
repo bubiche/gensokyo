@@ -42,7 +42,7 @@ mkdir -p "$STUB_STATE"
 
 # A JSON string, newlines included: a headless run's `result` is prose and runs to several lines.
 json_str() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+  printf '%s' "$1" | tr -d '\001-\010\013-\037' | tr '\011' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
 }
 
 # Claude Code keeps a conversation only once a prompt is submitted, and cannot resume any other.
@@ -220,6 +220,9 @@ while :; do
   printf '%s\n' "$line" >> "$STUB_STATE/$id.input"
   case $line in
     *"$pstart"*)
+      # Whatever was typed before the paste stays in front of it, as a half-typed prompt does
+      # in Claude Code's input line: the two go in as one prompt.
+      typed=${line%%"$pstart"*}
       pasted=${line#*"$pstart"}
       while :; do
         case $pasted in *"$pend"*) break ;; esac
@@ -232,16 +235,18 @@ $more"
       pastes=$((pastes + 1))
       lines=$(printf '%s\n' "$pasted" | grep -c '')
       if [ "$lines" -gt 1 ]; then
-        printf '[Pasted text #%s +%s lines]\n' "$pastes" "$((lines - 1))"
+        printf '%s[Pasted text #%s +%s lines]\n' "$typed" "$pastes" "$((lines - 1))"
       else
-        printf '%s\n' "$pasted"   # a one-liner arrives literally, as it does in Claude Code
+        printf '%s%s\n' "$typed" "$pasted"   # a one-liner arrives literally, as in Claude Code
       fi
       # Then submit it, as one prompt however many lines it holds. Claude Code holds a paste
       # until Enter and this cannot: the tty here is line-buffered, so the newline that finishes
       # the paste *is* the Enter that was sent after it, already consumed as this line's
       # terminator. What this stub checks is the part that can go wrong silently - that the
       # card arrives whole.
-      printf '%s\n' "$pasted" | sed 's/^/> /'
+      printf '%s%s\n' "$typed" "$pasted" | sed 's/^/> /'
+      fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$typed$pasted")\""
+      fire Stop ', "permission_mode": "default", "last_assistant_message": "pasted"'
       pasted=''
       continue ;;
   esac

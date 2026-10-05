@@ -7,7 +7,7 @@
 use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 5;
+pub const PROTO: u32 = 6;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -23,6 +23,10 @@ pub enum Request {
     Hello {
         proto: u32,
         who: String,
+        /// The resident this runs inside (`GENSOKYO_RESIDENT`), by id: its connection has a
+        /// resident's rights, not the user's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resident: Option<String>,
     },
     List {
         /// Also everyone in `departed/`, from earlier runs.
@@ -99,6 +103,12 @@ pub enum Request {
         resident: String,
         telemetry: Telemetry,
     },
+}
+
+/// The hello a client or the CLI says, naming the resident it runs inside, if any.
+pub fn hello(who: &str) -> Request {
+    let resident = std::env::var("GENSOKYO_RESIDENT").ok().filter(|r| !r.is_empty());
+    Request::Hello { proto: PROTO, who: who.into(), resident }
 }
 
 /// What a hook said, as much of it as the shrine needs: never the prompt itself.
@@ -201,8 +211,12 @@ pub struct Summon {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Any number of lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// `claude --allowedTools`, kept for a recall too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -350,7 +364,7 @@ pub enum Reply {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Resident {
     pub id: String,
     pub name: String,
@@ -374,4 +388,11 @@ pub struct Resident {
     pub branch: Option<String>,
     #[serde(default)]
     pub telemetry: Option<Telemetry>,
+    /// Why nothing may be typed into it now (a dialog, a question, a prompt the user has half
+    /// typed), which `awaits` and `asked` alone do not tell apart from a finished turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<String>,
+    /// Done with the last prompt it was given, and nothing waits on the user.
+    #[serde(default)]
+    pub finished: bool,
 }

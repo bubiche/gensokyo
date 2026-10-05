@@ -28,6 +28,7 @@ fn resident(n: u8, name: &str, cwd: &str, departed: Option<i64>) -> Resident {
         mode: None,
         branch: None,
         telemetry: None,
+        ..Default::default()
     }
 }
 

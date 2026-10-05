@@ -125,6 +125,15 @@ struct New {
     /// Its first prompt
     #[arg(long, allow_hyphen_values = true)]
     prompt: Option<String>,
+    /// Its first prompt from a file, or with - from stdin: any number of lines
+    #[arg(long, value_name = "FILE", conflicts_with = "prompt")]
+    prompt_file: Option<String>,
+    /// A tool it may use without asking (claude --allowedTools); again for more
+    #[arg(long = "allowed-tools", value_name = "TOOL")]
+    allowed_tools: Vec<String>,
+    /// Print the new resident as JSON: id, name, slot and the rest `list --json` gives
+    #[arg(long)]
+    json: bool,
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -227,15 +236,30 @@ fn new(n: New) -> Result<(), String> {
         None | Some("") => here,
         Some(d) => here.join(d),
     };
+    let prompt = match n.prompt_file.as_deref() {
+        None => n.prompt,
+        Some("-") => {
+            let mut p = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut p)
+                .map_err(|e| format!("--prompt-file -: {e}"))?;
+            Some(p)
+        }
+        Some(f) => Some(std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?),
+    };
     let s = Summon {
         cwd: cwd.to_string_lossy().into_owned(),
         name: n.name,
         model: n.model,
         effort: n.effort,
         mode: n.mode,
-        prompt: n.prompt,
+        prompt: prompt.filter(|p| !p.trim().is_empty()),
+        allowed_tools: n.allowed_tools,
     };
     match request(Request::Summon(s), true)? {
+        Reply::Summoned { resident: r, .. } if n.json => {
+            println!("{}", serde_json::to_string(&r).unwrap_or_default());
+            Ok(())
+        }
         Reply::Summoned { resident: r, .. } => {
             let slot = r.slot.map_or(String::new(), |s| format!(" (slot {s})"));
             println!("summoned {}{slot} in {}", r.name, r.cwd);

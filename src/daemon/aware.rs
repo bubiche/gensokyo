@@ -44,6 +44,84 @@ pub struct Aware {
     /// The flag is a dialog the registry shows as `waiting` while it is open (a permission
     /// prompt, a question), so an idle snapshot means it was answered.
     shown: bool,
+    /// The user has typed into its input line since its last prompt. A card or a ritual's
+    /// prompt pasted now would go in with it, as one prompt (seen on 2.1.289).
+    drafting: bool,
+}
+
+/// What a resident's input line has in it: something the user typed and has not sent.
+const DRAFT: &str = "has a prompt half typed into it (Ctrl-C there clears it)";
+
+/// What keys typed into a resident do to its input line: `Some(true)` leaves text there (Up
+/// too, which brings back an earlier prompt), `Some(false)` empties it (Ctrl-C), `None`
+/// neither: Enter, Tab, Backspace, the other arrows, focus and mouse reports. The last key that
+/// does either wins. Legacy bytes and kitty's `CSI u` alike. A backspaced line stays a draft:
+/// nothing here sees the line itself.
+pub fn typing(bytes: &[u8]) -> Option<bool> {
+    let (mut out, mut i) = (None, 0);
+    while i < bytes.len() {
+        if bytes[i] != 0x1b {
+            match bytes[i] {
+                0x03 => out = Some(false),
+                0x20..=0x7e | 0x80.. => out = Some(true),
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1) {
+            // CSI: parameters up to a final byte. X10 mouse is `CSI M` and three bytes of its
+            // own, which look like text.
+            Some(b'[') => {
+                let body = &bytes[i + 2..];
+                let Some(end) = body.iter().position(|c| (0x40..=0x7e).contains(c)) else {
+                    break;
+                };
+                let (params, fin) = (&body[..end], body[end]);
+                i += 3 + end;
+                match fin {
+                    b'M' if params.is_empty() => i += 3,
+                    b'A' if params.is_empty() || params == b"1" => out = Some(true),
+                    b'u' => out = csi_u(params).or(out),
+                    _ => {}
+                }
+            }
+            // SS3 (F1-F4, arrows in application mode), then Alt and a key.
+            Some(b'O') => {
+                if bytes.get(i + 2) == Some(&b'A') {
+                    out = Some(true);
+                }
+                i += 3;
+            }
+            Some(_) => i += 2,
+            None => i += 1,
+        }
+    }
+    out
+}
+
+/// `code[:alternates];mods[:event]` of a kitty key, as `typing` reads it.
+fn csi_u(params: &[u8]) -> Option<bool> {
+    let p = std::str::from_utf8(params).ok()?;
+    let mut fields = p.split(';');
+    let code = fields.next()?.split(':').next()?.parse().ok()?;
+    let mut m = fields.next().unwrap_or("1").split(':');
+    let mods: u8 = m.next()?.parse().ok()?;
+    let event = m.next().map_or(Some(1), |e| e.parse().ok())?;
+    key_typing(code, mods.saturating_sub(1), event)
+}
+
+/// One kitty key: `code` a codepoint or a functional key's number, `mods` its modifier bits.
+pub fn key_typing(code: u32, mods: u8, event: u8) -> Option<bool> {
+    // Shift, Caps Lock and Num Lock still type text; Alt, Ctrl and Super do not.
+    let others = mods & !(1 | 64 | 128);
+    match code {
+        _ if event == 3 => None,
+        99 | 67 if others == 4 => Some(false),
+        // The functional keys start at 57344, in the private use area.
+        _ if others == 0 && code >= 0x20 && code != 0x7f && code < 57344 => Some(true),
+        _ => None,
+    }
 }
 
 impl Aware {
@@ -63,6 +141,7 @@ impl Aware {
                 self.set(None, None);
                 self.running = true;
                 self.prompted = true;
+                self.drafting = false;
             }
             ("Stop", _) => {
                 self.set(Some(Pending::Stopped), text);
@@ -102,6 +181,7 @@ impl Aware {
             ("SessionStart", Some("clear")) => {
                 self.set(None, None);
                 self.running = false;
+                self.drafting = false;
             }
             _ => {}
         }
@@ -129,11 +209,17 @@ impl Aware {
         }
     }
 
-    /// Why nothing may be typed into it now, or nothing. A dialog open would take the Enter
-    /// after a card and answer it. So would one the registry cannot see yet: a session it does
-    /// not list may be on the workspace trust dialog, where no hook fires either. A finished
-    /// turn is not in the way: typing into that is what a card is for.
+    /// Why nothing may be typed into it now, or nothing: a dialog, or what the user has typed
+    /// into its input line, which a card would be sent along with. A finished turn is not in
+    /// the way: typing into that is what a card is for.
     pub fn blocked(&self) -> Option<&'static str> {
+        self.dialog().or(self.drafting.then_some(DRAFT))
+    }
+
+    /// A dialog open, which would take the Enter after a card and answer it. So would one the
+    /// registry cannot see yet: a session it does not list may be on the workspace trust
+    /// dialog, where no hook fires either.
+    pub fn dialog(&self) -> Option<&'static str> {
         match (self.pending, self.registry) {
             (Some(Pending::Asked), _) => Some("is asking you a question"),
             (_, None) => Some("is still starting up"),
@@ -151,8 +237,9 @@ impl Aware {
 
     /// Done with what it was given: a prompt went in, its turn is over and nothing waits on the
     /// user. One just started has not got as far as its prompt (SessionStart comes first).
+    /// A draft does not count: a ritual run the user typed into and left would never finish.
     pub fn finished(&self) -> bool {
-        self.prompted && !self.running && self.blocked().is_none() && self.state() != State::Busy
+        self.prompted && !self.running && self.dialog().is_none() && self.state() != State::Busy
     }
 
     /// Resumed with its conversation: its prompts went in before this start.
@@ -168,6 +255,17 @@ impl Aware {
             self.set(None, None);
         }
         stopped
+    }
+
+    /// The user typed into it: `typing` says what that did to its input line. Not while a
+    /// dialog the hooks or the registry show is open, which is what the keys went to. One still
+    /// starting up counts as the input line: keys at a trust dialog are safer called a draft.
+    pub fn typed(&mut self, draft: bool) {
+        let open = matches!(self.pending, Some(Pending::Awaits | Pending::Asked))
+            || matches!(self.registry, Some((Registry::Waiting, _)));
+        if !open {
+            self.drafting = draft;
+        }
     }
 
     /// Typed to by gensokyo (a spell card, a ritual): whatever it waited to be told, it was.

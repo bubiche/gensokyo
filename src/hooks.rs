@@ -71,7 +71,7 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
 /// busy: it has the request, and spooling it too would replay it twice.
 fn deliver(req: &Request) -> bool {
     let Ok(mut s) = UnixStream::connect(paths::socket_path()) else { return false };
-    let hello = Request::Hello { proto: proto::PROTO, who: "hook".into() };
+    let hello = Request::Hello { proto: proto::PROTO, who: "hook".into(), resident: None };
     let mut b = Vec::new();
     for req in [hello, req.clone()] {
         let _ = serde_json::to_writer(&mut b, &Envelope { id: 0, req });

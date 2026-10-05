@@ -140,7 +140,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         signal(SignalKind::terminate()).map_err(err)?,
     );
     let mut app = App::new(Config::from_env());
-    app.send(Request::Hello { proto: proto::PROTO, who: "client".into() });
+    app.send(proto::hello("client"));
     app.send(Request::Watch);
     app.list();
     let mut input = reader();

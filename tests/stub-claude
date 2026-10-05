@@ -14,7 +14,7 @@
 #                             modes Claude Code pushes, echoes input, /rename <name> renames,
 #                             /exit exits 0 - unless <id>.eat-exit says to drop that many first;
 #                             /sync <s> draws SYNC-MID, waits <s> seconds, then SYNC-END, all in
-#                             one synchronized-output block (2026)
+#                             one synchronized-output block (2026); /sync 0 waits a moment
 #                             /mouse turns on mouse reporting (1000, SGR 1006)
 #                             /clear starts a new session id (the files below keep the first)
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
@@ -268,6 +268,10 @@ $more"
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
     /finish) fire Stop ', "permission_mode": "default", "last_assistant_message": "finished"'; echo "finished" ;;
+    # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
+    # exec can take longer than the daemon's hold on a loaded runner.
+    /sync\ 0) printf '%s[?2026hSYNC-MID\n' "$esc"; n=0; while [ $n -lt 3000 ]; do n=$((n + 1)); done
+               printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /sync\ *) printf '%s[?2026hSYNC-MID\n' "$esc"; sleep "${line#/sync }"
                printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"

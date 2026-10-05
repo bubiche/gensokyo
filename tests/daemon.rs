@@ -685,7 +685,7 @@ fn a_synchronized_block_is_shown_whole_unless_it_never_ends() {
     std::thread::sleep(Duration::from_millis(200));
 
     // A short block: nobody sees its first half alone.
-    c.send(json!({"t": "input", "who": r["id"], "bytes": b"/sync 0.05\r"}));
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"/sync 0\r"}));
     c.until("the short block's end", |ev| {
         s.apply(ev);
         assert!(!(s.has("SYNC-MID") && !s.has("SYNC-END")), "half a block was shown: {ev}");

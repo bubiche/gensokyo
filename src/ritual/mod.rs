@@ -48,6 +48,7 @@ pub struct Ritual {
     // The words as written; `problem` says when one means nothing.
     pub keep: String,
     pub overlap: String,
+    pub deliver: String,
     pub headless: String,
     pub catch_up: String,
     pub enabled: String,
@@ -119,6 +120,11 @@ impl Ritual {
         yes(&self.quiet)
     }
 
+    /// A prompt typed into a resident waits until it is idle: `deliver: idle`, the default.
+    pub fn deliver_idle(&self) -> bool {
+        self.deliver == "idle"
+    }
+
     /// How long a finished run stays; None for `forever`.
     pub fn keep_secs(&self) -> Option<u64> {
         keep_len(&self.keep).ok().flatten()
@@ -188,6 +194,7 @@ const KEYS: &[&str] = &[
     "mcp_config",
     "keep",
     "overlap",
+    "deliver",
     "headless",
     "catch_up",
     "enabled",
@@ -218,6 +225,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
         when: None,
         keep: "2h".into(),
         overlap: "skip".into(),
+        deliver: "idle".into(),
         headless: "false".into(),
         catch_up: "true".into(),
         enabled: "true".into(),
@@ -241,6 +249,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "mcp_config" => r.mcp_config = some(v),
             "keep" => r.keep = v,
             "overlap" => r.overlap = v,
+            "deliver" => r.deliver = v,
             "headless" => r.headless = v,
             "catch_up" => r.catch_up = v,
             "enabled" => r.enabled = v,
@@ -450,6 +459,19 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             r.overlap
         ));
     }
+    if !["idle", "now"].contains(&r.deliver.as_str()) {
+        return p(format!(
+            "deliver: {} is not when to type a prompt into a resident (idle, now)",
+            r.deliver
+        ));
+    }
+    if r.target() == Target::New && r.deliver != "idle" {
+        return p(format!(
+            "deliver: {} is about a prompt typed into a resident that is already there (a \
+             resident's name, or persistent); a run of target new starts with its prompt",
+            r.deliver
+        ));
+    }
     if keep_len(&r.keep).is_err() {
         return p(format!("keep: {} is not a length (30m, 2h, 1d, forever)", r.keep));
     }
@@ -548,6 +570,7 @@ pub fn info(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust, dir: &Dir) -> Ri
         headless: r.headless(),
         keep: r.keep.clone(),
         overlap: r.overlap.clone(),
+        deliver: r.deliver.clone(),
         cwd: r.cwd.clone(),
         description: r.description.clone(),
         problem,

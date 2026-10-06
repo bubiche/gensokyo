@@ -202,6 +202,12 @@ and "what have I got scheduled?" work the same way.
   for the ritual: the first fire starts it and every later fire is typed into it, recalling it
   first if it has left. `target: <name>` types the prompt into a resident you run yourself.
   A fire that cannot be delivered says so in the journal and as a notification.
+- **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire
+  until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
+  question open, nothing half typed into it. Whether it is on screen makes no difference. A
+  newer fire takes the place of one still held, and one held for 4 h is dropped; the journal
+  says `held`, then `sent` or `not sent`. `deliver: now` types it in at once, mid-turn too,
+  where Claude Code queues it, and gives up on a dialog instead of waiting.
 - **`model`**, **`effort`**, **`mode`** (the permission mode), **`allowed_tools`** and
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts
   with. A ritual that reads Slack or mail needs its MCP server: a claude.ai connector, the

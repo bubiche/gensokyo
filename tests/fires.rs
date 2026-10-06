@@ -29,6 +29,7 @@ impl Daemon {
             ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
             ("GENSOKYO_NOW_FILE".into(), dir.join("now").display().to_string()),
             ("GENSOKYO_TICK_MS".into(), "100".into()),
+            ("GENSOKYO_IDLE_HOLD_MS".into(), "300".into()),
             ("TZ".into(), "UTC".into()),
         ];
         extra.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
@@ -624,7 +625,8 @@ fn the_queue_is_one_fire_deep_and_drops_one_an_hour_late() {
 
 #[test]
 fn a_resident_at_a_dialog_is_not_typed_into() {
-    let d = Daemon::start("dialog", T0 + 120, &[("ask", &hourly("target: Sakuya\n"))], &[]);
+    let ask = hourly("target: Sakuya\ndeliver: now\n");
+    let d = Daemon::start("dialog", T0 + 120, &[("ask", &ask)], &[]);
     let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
     let id = r["resident"]["id"].clone();
     d.stub(&id, "ready");
@@ -980,8 +982,8 @@ fn a_probed_fire_into_a_resident_still_starting_is_sent_once_and_measures_the_ne
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(probes.join("feed"), std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(d.dir.join("feed"), "line-one\n").unwrap();
-    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n---\n\
-        Keep the page current.\n";
+    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n\
+        deliver: now\n---\nKeep the page current.\n";
     // Seen in a minute of its schedule, so it fires at once: the first time always does.
     d.ritual("watch", text);
     wait(|| d.calls() == 1, "the first fire's probe");
@@ -1006,4 +1008,61 @@ fn a_probed_fire_into_a_resident_still_starting_is_sent_once_and_measures_the_ne
     std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
     d.minute(5);
     wait(|| typed() == 2, "the change sent");
+}
+
+#[test]
+fn a_fire_waits_for_its_residents_turn_to_end_and_the_newest_one_is_typed() {
+    let d = Daemon::start("idle", T0 + 120, &[("ask", &hourly("target: Sakuya\n"))], &[]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    wait(|| d.stamp("ask").is_some(), "first sight");
+    // Tools run for 4 s; the turn ends with the line typed after them.
+    let t = Instant::now();
+    d.input("Sakuya", "/busy 4\r");
+    wait(|| d.live()[0]["state"] == "busy", "the turn");
+    let typed = || d.stub(&id, "input").matches("Do the rounds.").count();
+
+    // Mid-turn, both fires wait; the second takes the first's place.
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.evs("ask", "held").len() == 1, "the first fire held");
+    d.clock(T0 + 7200 + 5);
+    wait(|| d.evs("ask", "held").len() == 2, "the second fire held");
+    d.settle();
+    assert_eq!(typed(), 0, "typed mid-turn");
+
+    // The turn ends: one prompt, the newest fire's, once the hold has passed.
+    std::thread::sleep(Duration::from_secs(5).saturating_sub(t.elapsed()));
+    d.input("Sakuya", "and done\r");
+    wait(|| d.evs("ask", "sent").len() == 1, "the prompt typed in");
+    d.settle();
+    assert_eq!(typed(), 1);
+    assert_eq!(d.evs("ask", "sent"), ["sent to Sakuya (due 2026-09-21 17:00)"]);
+    assert!(d.evs("ask", "not-sent").is_empty());
+}
+
+#[test]
+fn a_fire_waits_no_longer_than_its_limit_and_deliver_now_does_not_wait() {
+    let rituals =
+        [("ask", hourly("target: Sakuya\n")), ("now", hourly("target: Sakuya\ndeliver: now\n"))];
+    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let d = Daemon::start("idle-most", T0 + 120, &rituals, &[("GENSOKYO_HOLD_MOST_MS", "1500")]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    wait(|| d.stamp("ask").is_some() && d.stamp("now").is_some(), "first sight");
+    d.input("Sakuya", "/busy 60\r");
+    wait(|| d.live()[0]["state"] == "busy", "the turn");
+    d.clock(T0 + 3600 + 5);
+    // `now` types into the turn, which Claude Code queues; `ask` gives up after its limit.
+    wait(|| d.evs("now", "sent").len() == 1, "deliver: now sent mid-turn");
+    wait(|| d.evs("ask", "not-sent").len() == 1, "the held fire dropped");
+    assert!(
+        d.evs("ask", "not-sent")[0].contains("Sakuya was not idle for"),
+        "{:?}",
+        d.evs("ask", "not-sent")
+    );
+    assert!(d.evs("ask", "sent").is_empty());
 }

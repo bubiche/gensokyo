@@ -42,7 +42,11 @@ fn fired(d: &Dir) -> PathBuf {
 
 /// Unchanged since the last fire that launched. Never true the first time.
 pub(super) fn same(d: &Dir, s: &Said) -> bool {
-    std::fs::read(fired(d)).is_ok_and(|f| f == s.key)
+    same_key(d, &s.key)
+}
+
+pub(super) fn same_key(d: &Dir, key: &[u8]) -> bool {
+    std::fs::read(fired(d)).is_ok_and(|f| f == key)
 }
 
 /// The fire this said brought about has launched: later ones are measured against it.

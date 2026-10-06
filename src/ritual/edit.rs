@@ -22,6 +22,7 @@ pub struct Add {
     pub target: Option<String>,
     pub keep: Option<String>,
     pub overlap: Option<String>,
+    pub deliver: Option<String>,
     pub headless: bool,
     pub catch_up: Option<String>,
     pub prompt: String,
@@ -104,7 +105,12 @@ pub fn add(
     if let Some(m) = &a.mcp_config {
         f += &format!("mcp_config: {}\n", quote(m)?);
     }
-    for (k, v) in [("keep", &a.keep), ("overlap", &a.overlap), ("catch_up", &a.catch_up)] {
+    for (k, v) in [
+        ("keep", &a.keep),
+        ("overlap", &a.overlap),
+        ("deliver", &a.deliver),
+        ("catch_up", &a.catch_up),
+    ] {
         if let Some(v) = v {
             f += &format!("{k}: {}\n", word(k, v)?);
         }

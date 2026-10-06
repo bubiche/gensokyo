@@ -349,6 +349,8 @@ pub struct RitualInfo {
     pub headless: bool,
     pub keep: String,
     pub overlap: String,
+    /// `idle` or `now`: when a prompt is typed into a resident.
+    pub deliver: String,
     pub cwd: Option<String>,
     pub description: Option<String>,
     /// Why it cannot fire, when something is wrong with it.

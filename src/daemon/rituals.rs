@@ -31,6 +31,20 @@ const QUEUE_LIFE: i64 = 3600;
 /// before the fire is given up.
 const READY_WAIT: Duration = Duration::from_secs(60);
 
+/// `deliver: idle`: how long a resident must have been idle, by its last hook, before a fire is
+/// typed into it. A Stop is its last hook while it rests, so this is the time since its turn
+/// ended: long enough for a reply the user is reading to be seen first.
+const IDLE_HOLD: Duration = Duration::from_secs(10);
+
+/// `deliver: idle`: a fire still waiting after this is dropped. The prompt was written for its
+/// time, and a newer fire would have replaced it had there been one.
+const HOLD_MOST: Duration = Duration::from_secs(4 * 3600);
+
+/// A length from the environment in ms, for tests; else `d`.
+fn env_ms(var: &str, d: Duration) -> Duration {
+    std::env::var(var).ok().and_then(|v| v.parse().ok()).map_or(d, Duration::from_millis)
+}
+
 /// What the daemon keeps about rituals between ticks. None of it outlives the daemon: the
 /// stamps and the journal are on disk, and a queued fire or a complaint is worth no more than
 /// this run of it.
@@ -51,6 +65,10 @@ pub(super) struct Rites {
     probing: HashMap<String, i32>,
     /// `.claude.json`, as of its mtime: it is large, and the listing wants it every tick.
     trust: Option<(SystemTime, Rc<Trust>)>,
+    /// Fires waiting for their resident to be idle (`deliver: idle`), by ritual and resident:
+    /// the newest one's number. An older one that finds it is not the newest gives up.
+    waiting: HashMap<(String, String), u64>,
+    held: u64,
     /// The listing last sent to watchers.
     listing: Vec<RitualInfo>,
     /// When the clock last ticked. Here rather than in the clock: one started again after a
@@ -490,7 +508,11 @@ fn undelivered(shrine: &Shared, r: &Ritual, why: &str) {
 }
 
 /// The prompt into resident `id`'s input line, as a spell card goes: never into a dialog. One
-/// that is still starting (just recalled) is waited for; a dialog is reported instead.
+/// that is still starting (just recalled) is waited for; a dialog is reported instead. With
+/// `deliver: idle` (the default) it also waits, up to `HOLD_MOST`, for the resident to be idle:
+/// no turn running, no dialog, nothing half typed, and `IDLE_HOLD` since its last hook. Focus
+/// plays no part. A newer fire for the same resident replaces a waiting one, and the probe goes
+/// on meanwhile, so what is typed is the newest.
 async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Option<Fired>) {
     let t = Instant::now();
     // Fresh once, for the dialog guard; while it starts up the poll keeps it current.
@@ -501,37 +523,93 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Op
             registry::seen(shrine, &list, at);
         }
     }
+    let idle = r.deliver_idle();
+    let (hold, most) =
+        (env_ms("GENSOKYO_IDLE_HOLD_MS", IDLE_HOLD), env_ms("GENSOKYO_HOLD_MOST_MS", HOLD_MOST));
+    // Waiting, the probe's next fire may run: it replaces this one if it says something new.
+    let (key, _hold) = match key {
+        Some(f) if idle => (Some(f.key), None),
+        Some(f) => (Some(f.key), Some(f._hold)),
+        None => (None, None),
+    };
+    let slot = (r.slug.clone(), id.to_string());
+    let mine = {
+        let mut sh = shrine.borrow_mut();
+        sh.rites.held += 1;
+        let n = sh.rites.held;
+        sh.rites.waiting.insert(slot.clone(), n);
+        n
+    };
+    let gone = |shrine: &Shared| {
+        let mut sh = shrine.borrow_mut();
+        if sh.rites.waiting.get(&slot) == Some(&mine) {
+            sh.rites.waiting.remove(&slot);
+        }
+    };
+    let mut said_held = false;
     let (name, handle) = loop {
         let state = {
             let sh = shrine.borrow();
             if sh.quitting {
                 drop(sh);
+                gone(shrine);
                 return undelivered(shrine, r, "the daemon is stopping");
             }
+            if sh.rites.waiting.get(&slot) != Some(&mine) {
+                log(json!({"ev": "ritual", "slug": r.slug, "replaced": label}));
+                return;
+            }
             sh.entries.iter().find(|e| e.rec.id == id).map(|e| {
+                let quiet = hooks::now_ms() - e.aware.heard() >= hold.as_millis() as i64;
                 (
                     e.rec.name.clone(),
                     e.handle.clone().filter(|h| h.exit().is_none()),
                     e.aware.blocked(),
+                    e.aware.idle() && quiet,
                 )
             })
         };
         match state {
-            None | Some((_, None, _)) => return undelivered(shrine, r, "its resident has left"),
-            Some((name, Some(h), None)) => break (name, h),
-            Some((name, _, Some(why)))
-                if why != "is still starting up" || t.elapsed() > READY_WAIT =>
+            None | Some((_, None, ..)) => {
+                gone(shrine);
+                return undelivered(shrine, r, "its resident has left");
+            }
+            Some((name, Some(h), None, ready)) if ready || !idle => break (name, h),
+            Some((name, _, Some(why), _))
+                if !idle && (why != "is still starting up" || t.elapsed() > READY_WAIT) =>
             {
+                gone(shrine);
                 return undelivered(shrine, r, &format!("{name} {why}"));
             }
-            Some(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+            Some((name, ..)) if t.elapsed() > most => {
+                gone(shrine);
+                let waited = tele::age(most.as_secs());
+                return undelivered(shrine, r, &format!("{name} was not idle for {waited}"));
+            }
+            Some((name, ..)) => {
+                if idle && !said_held && t.elapsed() > Duration::from_secs(2) {
+                    said_held = true;
+                    let text = format!("held for {name} ({label}): sent once it is idle");
+                    Dir::of(&r.slug).note(now(), "held", &text);
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
         }
     };
-    let text = ritual::prompt_text(r, &Dir::of(&r.slug).memory());
+    gone(shrine);
+    let d = Dir::of(&r.slug);
+    // A fire replaced by this one may have been typed while this one waited for the turn it
+    // started to end: what it said is not said twice.
+    if idle && key.as_deref().is_some_and(|k| super::probe::same_key(&d, k)) {
+        return log(json!({"ev": "ritual", "slug": r.slug, "already": label}));
+    }
+    let text = ritual::prompt_text(r, &d.memory());
     match deliver(shrine, id, &handle, &text, "prompt").await {
         Ok(()) => {
-            delivered(&Dir::of(&r.slug), key);
-            Dir::of(&r.slug).note(now(), "sent", &format!("sent to {name} ({label})"));
+            if let Some(k) = &key {
+                super::probe::commit(&d, k);
+            }
+            d.note(now(), "sent", &format!("sent to {name} ({label})"));
             shrine.borrow_mut().rites.undelivered.remove(&r.slug);
         }
         Err(why) => undelivered(shrine, r, &format!("{name} {why}")),

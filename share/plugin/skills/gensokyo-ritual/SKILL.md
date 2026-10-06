@@ -69,6 +69,10 @@ PROMPT
   say that the context and the bill grow. `--target <resident name>` types the prompt into a
   resident they already have - for "ask Sakuya to do X every morning" - and that prompt gets no
   memory-file sentence, so it has to stand on its own.
+- `--deliver` is for a prompt typed into a resident (`persistent` or a name). The default,
+  `idle`, waits until that resident's turn is over and nothing is open or half typed in it, so
+  the prompt never lands mid-task; leave it out. `--deliver now` is for the rare ritual that must
+  reach a busy session at once (Claude Code queues it behind the turn).
 - `--disabled` writes it without turning it on, for a ritual the user wants to look at first.
 - `--headless` is the run with no pane at all (see below).
 - `--when <probe>` makes the schedule a polling interval: each fire first runs the probe, a
@@ -219,8 +223,8 @@ gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and it
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
 each ritual's `name`, `enabled`, `schedule`, `next_fire` (epoch seconds; `next_fire_local` is
 the same minute on this machine's clock), `last_run`, `target`, `headless`, `keep`, `overlap`,
-`cwd`, `problem`, `path` and `shipped`. A `problem` is why that ritual is not firing, and it is
-the answer to "why didn't it run?".
+`deliver`, `cwd`, `problem`, `path` and `shipped`. A `problem` is why that ritual is not firing,
+and it is the answer to "why didn't it run?".
 
 That listing is the whole answer to what the user has scheduled - there is nowhere else on this
 machine to look, and nothing else to ask. A ritual with `"enabled": false` is one the user has,

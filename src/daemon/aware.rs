@@ -258,8 +258,13 @@ impl Aware {
         !self.open() && !self.drafting && self.state() != State::Busy
     }
 
+    /// When it was last heard from by a hook.
+    pub fn heard(&self) -> i64 {
+        self.hook_at
+    }
+
     /// A dialog the hooks or the registry show.
-    fn open(&self) -> bool {
+    pub fn open(&self) -> bool {
         matches!(self.pending, Some(Pending::Awaits | Pending::Asked))
             || matches!(self.registry, Some((Registry::Waiting, _)))
     }

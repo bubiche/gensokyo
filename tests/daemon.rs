@@ -199,6 +199,27 @@ fn close_asks_for_exit_and_asks_again_when_it_was_lost() {
 }
 
 #[test]
+fn close_sends_no_enter_once_a_turn_has_started_after_its_ctrl_c() {
+    let d = Daemon::start("close-busy", &[("STUB_HOOKS", "1")]);
+    let r = d.summon(json!({"name": "Sakuya"}));
+    d.stub(&r["id"], "ready");
+    // Its hooks keep coming through the Ctrl-C: the Enter could answer a dialog just opened.
+    let n = d.log().len();
+    let (mut w, mut lines) = d.connect();
+    let input = json!({"t": "input", "id": 2, "who": "Sakuya", "bytes": b"/busy 30\r"});
+    writeln!(w, "{input}\n{}", json!({"t": "list", "id": 1})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    let tools = || d.log()[n..].iter().filter(|e| e["event"] == "PreToolUse").count();
+    wait(|| tools() > 1, "its tools at work");
+    let c = d.req(json!({"t": "close", "id": 3, "who": "Sakuya"}));
+    assert_eq!(c["t"], "error", "{c}");
+    assert!(alive(r["pid"].as_i64().unwrap()), "it took the Enter");
+    let held = d.log().iter().filter(|e| e["ev"] == "exit" && e["held"].is_string()).count();
+    assert_eq!(held, 2, "asked twice, and held back both times");
+    assert!(!d.stub(&r["id"], "input").lines().any(|l| l.ends_with("/exit")));
+}
+
+#[test]
 fn quit_asks_everyone_to_leave_and_stops() {
     let d = Daemon::start("quit", &[]);
     let rs: Vec<Value> = (0..3).map(|_| d.summon(json!({}))).collect();

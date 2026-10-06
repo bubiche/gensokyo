@@ -24,7 +24,8 @@
 # denial does), AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer.
 # /fail is a prompt whose turn ends in StopFailure (an API error); /hang one with no Stop at
 # all, whose idle_prompt Notification comes $STUB_IDLE seconds later (default 2); /flood <n>
-# one whose answer is <n> bytes. With STUB_HOLD=1 the command line's prompt gets no Stop until
+# one whose answer is <n> bytes; /busy <s> one whose tools fire PreToolUse every 0.2 s for <s>
+# seconds, Ctrl-C or not, as a turn started again by a queued message does. With STUB_HOLD=1 the command line's prompt gets no Stop until
 # /finish: a run still going.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
@@ -286,6 +287,9 @@ $more"
                echo "flooded $n" ;;
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
+    /busy\ *) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/busy"'; echo "> $line"; submitted "$line"
+             ( n=$(( ${line#/busy } * 5 )); while [ $n -gt 0 ]; do n=$((n - 1)); sleep 0.2
+               fire PreToolUse ', "tool_name": "Bash", "tool_input": {}'; done ) & ;;
     /finish) fire Stop ', "permission_mode": "default", "last_assistant_message": "finished"'; echo "finished" ;;
     # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
     # exec can take longer than the daemon's hold on a loaded runner.

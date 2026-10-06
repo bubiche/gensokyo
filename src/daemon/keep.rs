@@ -92,7 +92,7 @@ async fn take(shrine: &Shared, id: &str, launched: i64) {
     if let Some(mut h) = live.clone() {
         let mut left = false;
         for _ in 0..2 {
-            if ask_once(&h).await {
+            if ask_once(shrine, &h).await {
                 left = true;
                 break;
             }

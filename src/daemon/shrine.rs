@@ -518,29 +518,43 @@ pub(super) async fn banish(shrine: &Shared, who: &str) -> Result<String, String>
 /// `/exit` and Enter. True once the resident has left. Esc goes as the resident asked keys to
 /// be sent, so it is not read as Alt with what follows; the rest as plain bytes, which Claude
 /// Code takes in kitty mode too.
-async fn ask_leave(h: &Handle, wait: Duration) -> bool {
+async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
     if let Some(esc) = crate::vt::KeyEvent::from_kitty(27, 0, 1) {
         h.input(&h.encode(esc)).await;
         h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;
     }
     h.input(b"\x03").await;
     h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;
+    let calm = stir(shrine, h);
     h.input(b"/exit").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
+    // A turn begun meanwhile (a message queued for it, say) may have opened a dialog, which the
+    // Enter would answer yes: none goes, and the next ask starts again from Esc.
+    if stir(shrine, h) != calm {
+        log(json!({"ev": "exit", "pid": h.pid, "held": "a hook came"}));
+        return false;
+    }
     h.input(b"\r").await;
     tokio::time::timeout(wait, h.exited()).await.is_ok()
 }
 
+/// What a turn starting changes on the resident at `h`: the last hook heard, and a dialog.
+fn stir(shrine: &Shared, h: &Handle) -> (i64, bool) {
+    let sh = shrine.borrow();
+    let e = sh.entries.iter().find(|e| e.handle.as_ref().is_some_and(|x| x.pid == h.pid));
+    e.map_or((0, false), |e| (e.aware.heard(), e.aware.open()))
+}
+
 /// One `/exit`, bounded: a resident that stopped reading its tty blocks the keystrokes too.
-pub(super) async fn ask_once(h: &Handle) -> bool {
+pub(super) async fn ask_once(shrine: &Shared, h: &Handle) -> bool {
     let most = EXIT_WAIT + Duration::from_secs(3);
-    tokio::time::timeout(most, ask_leave(h, EXIT_WAIT)).await.unwrap_or(false)
+    tokio::time::timeout(most, ask_leave(shrine, h, EXIT_WAIT)).await.unwrap_or(false)
 }
 
 /// A keystroke that went missing would leave the resident sitting there, so the gesture is
 /// repeated once when nothing comes of it.
-async fn ask_twice(h: &Handle) -> bool {
-    ask_leave(h, EXIT_WAIT).await || ask_leave(h, EXIT_WAIT).await
+async fn ask_twice(shrine: &Shared, h: &Handle) -> bool {
+    ask_leave(shrine, h, EXIT_WAIT).await || ask_leave(shrine, h, EXIT_WAIT).await
 }
 
 pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> {
@@ -562,10 +576,12 @@ pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> 
     };
     // Bounded as a whole: a resident that stopped reading its tty blocks the keystrokes too.
     let most = 2 * (EXIT_WAIT + Duration::from_secs(3));
-    if tokio::time::timeout(most, ask_twice(&h)).await.unwrap_or(false) {
+    if tokio::time::timeout(most, ask_twice(shrine, &h)).await.unwrap_or(false) {
         Ok(format!("{name} has left (/exit)"))
     } else {
-        Err(format!("{name} did not answer /exit in {}s, twice", EXIT_WAIT.as_secs()))
+        Err(format!(
+            "{name} did not leave on /exit, asked twice (it may be at work: banish ends it)"
+        ))
     }
 }
 
@@ -580,9 +596,9 @@ pub(super) async fn leave_all(shrine: &Shared) {
     let asks: Vec<_> = live
         .iter()
         .map(|h| {
-            let h = h.clone();
+            let (shrine, h) = (shrine.clone(), h.clone());
             tokio::task::spawn_local(async move {
-                tokio::time::timeout_at(deadline, ask_twice(&h)).await
+                tokio::time::timeout_at(deadline, ask_twice(&shrine, &h)).await
             })
         })
         .collect();

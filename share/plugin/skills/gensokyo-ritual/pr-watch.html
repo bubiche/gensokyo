@@ -118,8 +118,10 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
     return li;
   }
 
-  function today() {
+  // The date is the Mac's and the clock the viewer's: a day behind may be a time zone, two are not.
+  function yesterday() {
     const d = new Date();
+    d.setDate(d.getDate() - 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
@@ -130,7 +132,7 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
     if (!doc) return;
     const prs = (Array.isArray(doc.prs) ? doc.prs : []).filter(p => p && typeof p === "object");
     const at = typeof doc.as_of === "string" ? doc.as_of : "";
-    asof.textContent = at ? `As of ${at}` + (at < today() ? ", not checked since" : "") : "";
+    asof.textContent = at ? `As of ${at}` + (at < yesterday() ? ", not checked since" : "") : "";
     alert.hidden = !doc.failure;
     alert.replaceChildren();
     if (doc.failure) alert.append(el("b", null, "The last check failed: "), String(doc.failure),

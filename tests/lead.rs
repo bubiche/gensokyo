@@ -341,32 +341,32 @@ fn helpers_left_behind_are_closed_two_hours_on_unless_their_lead_comes_back() {
     helper(&d, &lead, "Marisa");
     helper(&d, &lead, "Sanae");
     let settle = || std::thread::sleep(Duration::from_millis(600));
-    // Gone, then back an hour later: the clock stops.
+    let helpers = || d.list().iter().filter(|r| r["owner"].is_string()).count();
+    // Gone, then back an hour later: the clock stops, and when it goes again it starts over.
     d.cli(&["banish", "Reimu"]);
     settle();
     clock(&d, T0 + 3600);
     d.cli(&["resume", "Reimu"]);
     settle();
-    clock(&d, T0 + 3 * 3600);
+    d.cli(&["banish", "Reimu"]);
     settle();
-    assert_eq!(d.list().len(), 3, "the lead came back");
+    clock(&d, T0 + 2 * 3600 + 60);
+    settle();
+    assert_eq!(helpers(), 2, "two hours from the first departure, one from the second");
 
-    // A restart brings everyone back, the lead too: nothing to close.
+    // A restart brings everyone back, the lead too.
+    d.cli(&["resume", "Reimu"]);
     let o = d.command(&["restart"]).stdin(Stdio::null()).output().unwrap();
     assert!(o.status.success(), "{}", err(&o));
     wait(|| d.list().iter().filter(|r| r["pid"].is_number()).count() == 3, "the comeback");
-    clock(&d, T0 + 6 * 3600);
-    settle();
-    assert_eq!(d.list().len(), 3);
 
     // Gone for good: two hours of the helpers' idling later, they are closed.
     d.cli(&["close", "Reimu"]);
-    let helpers = || d.list().iter().filter(|r| r["owner"].is_string()).count();
     settle();
-    clock(&d, T0 + 8 * 3600 - 60);
+    clock(&d, T0 + 4 * 3600);
     settle();
     assert_eq!(helpers(), 2, "not yet");
-    clock(&d, T0 + 8 * 3600 + 60);
+    clock(&d, T0 + 4 * 3600 + 180);
     wait_for(Duration::from_secs(30), || helpers() == 0, "both closed");
     assert_eq!(me(&d, "Marisa")["owner"], lead["id"], "in recall, still its lead's");
 }

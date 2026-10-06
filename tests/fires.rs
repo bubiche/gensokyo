@@ -901,3 +901,43 @@ fn a_probe_that_says_too_much_fails_at_once_and_a_chatty_one_still_works() {
     let err = std::fs::read(d.dir.join("rituals/chatty/probe.err")).unwrap();
     assert_eq!(err.len(), 64 * 1024, "kept up to its cap");
 }
+
+#[test]
+fn a_probed_fire_into_a_resident_still_starting_is_sent_once_and_measures_the_next() {
+    let d = Daemon::start("probe-named", T0 + 5, &[], &[]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    // As Claude Code's registry lists a session it has not finished starting.
+    let status = d.dir.join(format!("stub/{}.status", id.as_str().unwrap()));
+    std::fs::write(&status, "null").unwrap();
+    d.listed();
+    let probes = d.dir.join("conf/probes");
+    std::fs::create_dir_all(&probes).unwrap();
+    std::fs::write(probes.join("feed"), "#!/bin/sh\necho >> calls\ncat feed\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(probes.join("feed"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(d.dir.join("feed"), "line-one\n").unwrap();
+    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n---\n\
+        Keep the page current.\n";
+    d.ritual("watch", text);
+    wait(|| d.stamp("watch").is_some(), "first sight");
+
+    // Two minutes of the change, while the prompt waits for Sakuya: one delivery between them.
+    d.minute(1);
+    d.clock(T0 + 120 + 5);
+    wait(|| d.stamp("watch") == Some(T0 + 120), "the next minute's stamp");
+    d.settle();
+    std::fs::write(&status, "idle").unwrap();
+    wait(|| d.evs("watch", "sent").len() == 1, "the prompt typed in");
+    d.minute(3);
+    let typed = || d.stub(&id, "input").matches("Keep the page current.").count();
+    assert_eq!((typed(), d.evs("watch", "sent").len()), (1, 1), "sent twice");
+
+    // What reached Sakuya is what the next probe is measured against.
+    d.minute(4);
+    assert_eq!(typed(), 1, "the same output sent again");
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    d.minute(5);
+    wait(|| typed() == 2, "the change sent");
+}

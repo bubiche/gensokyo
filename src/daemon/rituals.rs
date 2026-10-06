@@ -46,7 +46,8 @@ pub(super) struct Rites {
     pub(super) reaping: HashSet<String>,
     /// The last "not sent" notice per ritual: a missing resident is news once, not every fire.
     undelivered: HashMap<String, String>,
-    /// Probes running, one at most per ritual: its process group, once it has one.
+    /// Probed fires under way, one at most per ritual, from the probe until its prompt is
+    /// delivered or not: the probe's process group while it runs.
     probing: HashMap<String, i32>,
     /// `.claude.json`, as of its mtime: it is large, and the listing wants it every tick.
     trust: Option<(SystemTime, Rc<Trust>)>,
@@ -222,14 +223,15 @@ fn probed(
 ) -> Result<(), String> {
     let argv = ritual::probe(r)?.ok_or("it has no probe")?;
     if shrine.borrow_mut().rites.probing.insert(r.slug.clone(), 0).is_some() {
-        return Err("its probe is running right now; try again soon".into());
+        return Err("its probe, or the fire it set off, is under way; try again soon".into());
     }
     let (shrine, slug) = (shrine.clone(), r.slug.clone());
+    let hold = Hold(shrine.clone(), slug.clone());
     tokio::task::spawn_local(async move {
         let d = Dir::of(&slug);
-        let r = probe_and_read(&shrine, &slug, &argv, &d, by_hand).await;
-        shrine.borrow_mut().rites.probing.remove(&slug);
-        let Some((r, said)) = r else { return };
+        let Some((r, said)) = probe_and_read(&shrine, &slug, &argv, &d, by_hand).await else {
+            return;
+        };
         let now = now();
         log(
             json!({"ev": "ritual", "slug": slug, "probe": said.failed.as_deref().unwrap_or("new")}),
@@ -247,7 +249,8 @@ fn probed(
             None => ", its probe said something new",
             Some(_) => ", its probe failed",
         };
-        match fire(&shrine, &run, &d, &format!("{label}{why}"), alongside, now, Some(said.key)) {
+        let key = Some(Fired { key: said.key, _hold: hold });
+        match fire(&shrine, &run, &d, &format!("{label}{why}"), alongside, now, key) {
             Ok(_) => _ = shrine.borrow_mut().rites.complained.remove(&slug),
             Err(e) => complain(&shrine, &r, &d, now, &e),
         }
@@ -276,6 +279,7 @@ async fn probe_and_read(
     };
     let set = |pid| _ = shrine.borrow_mut().rites.probing.insert(slug.into(), pid);
     let said = super::probe::run(argv, &cwd, d, set).await;
+    set(0);
     if shrine.borrow().quitting || (!by_hand && super::probe::same(d, &said)) {
         return None;
     }
@@ -291,11 +295,30 @@ async fn probe_and_read(
     Some((r, said))
 }
 
+/// What a probe said that set a fire off. While it is held, the ritual's next fire is not
+/// probed: measured against a change still on its way, that one would send it again.
+struct Fired {
+    key: Vec<u8>,
+    _hold: Hold,
+}
+
+/// A ritual's place in `probing`, given up when the fire it led to is delivered or not.
+struct Hold(Shared, String);
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        match self.0.try_borrow_mut() {
+            Ok(mut sh) => _ = sh.rites.probing.remove(&self.1),
+            Err(_) => log(json!({"ev": "ritual", "slug": self.1, "error": "left probing"})),
+        }
+    }
+}
+
 /// A fire's prompt has reached its run: what its probe said is what the next fire is measured
 /// against.
-fn delivered(d: &Dir, key: Option<Vec<u8>>) {
-    if let Some(k) = key {
-        super::probe::commit(d, &k);
+fn delivered(d: &Dir, key: Option<Fired>) {
+    if let Some(f) = key {
+        super::probe::commit(d, &f.key);
     }
 }
 
@@ -338,7 +361,7 @@ fn fire(
     label: &str,
     alongside: bool,
     now: i64,
-    key: Option<Vec<u8>>,
+    key: Option<Fired>,
 ) -> Result<String, String> {
     let cwd = r.cwd.as_deref().map(crate::paths::short).unwrap_or_default();
     log(json!({"ev": "ritual", "slug": r.slug, "ran": label, "alongside": alongside}));
@@ -406,7 +429,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
 
 /// The session a persistent ritual keeps: typed into when it is here, recalled when it has
 /// left, started when there has never been one.
-async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Vec<u8>>) {
+async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Fired>) {
     let d = Dir::of(&r.slug);
     let id = d.session().filter(|id| {
         let sh = shrine.borrow();
@@ -437,7 +460,7 @@ async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Vec<u8
 
 /// A resident the user manages, by name: the prompt alone. Typed in as a spell card is, so a
 /// fire into a resident on screen can land after something the user had half typed there.
-async fn send(shrine: &Shared, r: &Ritual, who: &str, label: &str, key: Option<Vec<u8>>) {
+async fn send(shrine: &Shared, r: &Ritual, who: &str, label: &str, key: Option<Fired>) {
     let found = {
         let sh = shrine.borrow();
         let e = sh.entries.iter().find(|e| e.rec.name.eq_ignore_ascii_case(who));
@@ -468,7 +491,7 @@ fn undelivered(shrine: &Shared, r: &Ritual, why: &str) {
 
 /// The prompt into resident `id`'s input line, as a spell card goes: never into a dialog. One
 /// that is still starting (just recalled) is waited for; a dialog is reported instead.
-async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Option<Vec<u8>>) {
+async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Option<Fired>) {
     let t = Instant::now();
     // Fresh once, for the dialog guard; while it starts up the poll keeps it current.
     let claude = shrine.borrow().claude("");
@@ -627,7 +650,9 @@ fn remove(shrine: &Shared, r: &Ritual, asked: &str) -> Result<String, String> {
             ));
         }
         if sh.rites.probing.contains_key(slug) {
-            return Err(format!("{slug}'s probe is running right now; try again in a minute"));
+            return Err(format!(
+                "{slug}'s probe, or the fire it set off, is under way; try again in a minute"
+            ));
         }
         let e = sh.entries.iter().find(|e| e.rec.ritual.as_deref() == Some(slug.as_str()));
         e.map(|e| e.rec.name.clone())

@@ -812,10 +812,16 @@ fn a_probe_must_come_from_a_probes_dir() {
         ("flat", format!("{base}when: flat\n---\nGo.\n")),
         ("loud", format!("{base}when: feed\nheadless: true\nquiet: true\n---\nGo.\n")),
         ("kept", format!("{base}target: persistent\nquiet: true\n---\nGo.\n")),
+        ("out", format!("{base}when: out -c true\n---\nGo.\n")),
+        ("inner", format!("{base}when: inner\n---\nGo.\n")),
     ];
     let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
     let d = Daemon::new("probe-dirs", T0 + 5, &rituals, &[]);
-    std::fs::create_dir_all(d.dir.join("conf/probes")).unwrap();
+    // The dir a link, as a dotfiles checkout makes it: what is in it still counts as in it.
+    std::fs::create_dir_all(d.dir.join("mine")).unwrap();
+    std::os::unix::fs::symlink(d.dir.join("mine"), d.dir.join("conf/probes")).unwrap();
+    std::os::unix::fs::symlink("/bin/sh", d.dir.join("conf/probes/out")).unwrap();
+    std::os::unix::fs::symlink("feed", d.dir.join("conf/probes/inner")).unwrap();
     std::fs::write(d.dir.join("conf/probes/flat"), "#!/bin/sh\necho\n").unwrap();
     std::fs::write(d.dir.join("conf/probes/feed"), "#!/bin/sh\necho\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -834,6 +840,8 @@ fn a_probe_must_come_from_a_probes_dir() {
     assert!(problem("flat").ends_with("flat is not executable (chmod +x it)"), "{r}");
     assert!(problem("loud").starts_with("quiet: true is about the fresh resident"), "{r}");
     assert!(problem("kept").ends_with("and persistent is not one"), "{r}");
+    assert!(problem("out").contains("out leads out of"), "{r}");
+    assert_eq!(problem("inner"), "", "{r}");
 }
 
 #[test]

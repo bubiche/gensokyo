@@ -260,7 +260,9 @@ and "what have I got scheduled?" work the same way.
   another. The run reads the output from `probe.out` in the ritual's directory; it never goes
   into the prompt. A probe runs outside Claude's permissions, so it must be a program in the
   config dir's `probes/` or the shipped `share/probes/`, named without a path
-  (`when: gh-prs`).
+  (`when: gh-prs`), and not a link out of there. That only holds while no resident can write
+  those directories: keep them outside every resident's `cwd` if it runs with edits
+  accepted.
 - **`quiet: true`** (with `target: new`): its runs' finished turns neither ring nor turn gold.
   Their permission prompts still do.
 

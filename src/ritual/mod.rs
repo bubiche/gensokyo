@@ -335,10 +335,21 @@ pub fn probe(r: &Ritual) -> Result<Option<Vec<String>>, String> {
         ));
     }
     use std::os::unix::fs::PermissionsExt;
-    let found = dirs.iter().map(|d| d.join(&prog)).find(|p| p.is_file());
-    let Some(found) = found else {
+    let found = dirs.iter().map(|d| (d, d.join(&prog))).find(|(_, p)| p.is_file());
+    let Some((dir, found)) = found else {
         return Err(format!("when: there is no probe called {prog} in {}", places()));
     };
+    // A link in a probe dir to a program elsewhere would run that program unchecked. The dir
+    // itself may be a link.
+    let real = std::fs::canonicalize(&found).map_err(|e| format!("when: {prog}: {e}"))?;
+    if !std::fs::canonicalize(dir).is_ok_and(|d| real.starts_with(d)) {
+        return Err(format!(
+            "when: {} leads out of {} (copy the program in rather than link to it)",
+            paths::short(&found.to_string_lossy()),
+            paths::short(&dir.to_string_lossy())
+        ));
+    }
+    let found = real;
     if std::fs::metadata(&found).is_ok_and(|m| m.permissions().mode() & 0o111 == 0) {
         return Err(format!(
             "when: {} is not executable (chmod +x it)",

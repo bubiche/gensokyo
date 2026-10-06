@@ -245,7 +245,9 @@ fn keep_closes_a_finished_run_and_typing_puts_its_life_back() {
     d.clock(T0 + 3600 + 1000);
     d.settle();
     d.input("rounds", "one more thing\r");
-    wait(|| d.stub(&id, "input").contains("one more thing"), "the typing");
+    // The daemon has heard the turn's hooks: one still on its way would come in the middle of
+    // the /exit, which then holds back its Enter and leaves the run be.
+    wait(|| d.live()[0]["turns"] == 2, "the typed turn");
     d.settle();
     d.clock(T0 + 3600 + 5 + 1800 + 10);
     d.settle();
@@ -820,7 +822,8 @@ fn a_change_turned_away_by_a_run_still_going_fires_at_the_next_tick() {
 
 #[test]
 fn a_failing_probe_fires_once_then_again_when_it_works_and_a_slow_one_is_killed_whole() {
-    let d = feeding("probe-fail", "", &[("GENSOKYO_PROBE_LIMIT_MS", "3000")]);
+    // Room for the first run of a script just written, which a busy machine scans for seconds.
+    let d = feeding("probe-fail", "", &[("GENSOKYO_PROBE_LIMIT_MS", "6000")]);
     std::fs::write(d.dir.join("fail"), "3").unwrap();
     d.minute(2);
     wait(|| d.runs() == 2, "the failure's fire");
@@ -846,9 +849,9 @@ fn a_failing_probe_fires_once_then_again_when_it_works_and_a_slow_one_is_killed_
     wait(|| d.dir.join("kid").exists(), "the slow probe's child");
     wait(|| d.runs() == 4, "the timeout's fire");
     let id = d.list()[3]["id"].clone();
-    assert!(d.stub(&id, "args").contains("still running after 3s, and was stopped"));
+    assert!(d.stub(&id, "args").contains("still running after 6s, and was stopped"));
     let err = std::fs::read_to_string(d.dir.join("rituals/watch/probe.err")).unwrap();
-    assert_eq!(err, "gensokyo: it was still running after 3s, and was stopped\n");
+    assert_eq!(err, "gensokyo: it was still running after 6s, and was stopped\n");
     let kid: i32 = std::fs::read_to_string(d.dir.join("kid")).unwrap().trim().parse().unwrap();
     wait(|| !alive(kid), "the probe's child killed with it");
     // Timing out again: once the second slow probe has been stopped, nothing more.
@@ -979,14 +982,18 @@ fn a_probed_fire_into_a_resident_still_starting_is_sent_once_and_measures_the_ne
     std::fs::write(d.dir.join("feed"), "line-one\n").unwrap();
     let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n---\n\
         Keep the page current.\n";
+    // Seen in a minute of its schedule, so it fires at once: the first time always does.
     d.ritual("watch", text);
-    wait(|| d.stamp("watch").is_some(), "first sight");
+    wait(|| d.calls() == 1, "the first fire's probe");
 
-    // Two minutes of the change, while the prompt waits for Sakuya: one delivery between them.
-    d.minute(1);
-    d.clock(T0 + 120 + 5);
-    wait(|| d.stamp("watch") == Some(T0 + 120), "the next minute's stamp");
+    // Two more minutes of the change while the prompt waits for Sakuya: not probed, so not sent
+    // again behind it.
+    for minute in [1, 2] {
+        d.clock(T0 + 60 * minute + 5);
+        wait(|| d.stamp("watch") == Some(T0 + 60 * minute), "the minute's stamp");
+    }
     d.settle();
+    assert_eq!(d.calls(), 1, "probed while its fire was on its way");
     std::fs::write(&status, "idle").unwrap();
     wait(|| d.evs("watch", "sent").len() == 1, "the prompt typed in");
     d.minute(3);

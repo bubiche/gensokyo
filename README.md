@@ -206,7 +206,9 @@ and "what have I got scheduled?" work the same way.
   until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
   question open, nothing half typed into it. Whether it is on screen makes no difference. A
   newer fire takes the place of one still held, and one held for 4 h is dropped; the journal
-  says `held`, then `sent` or `not sent`. `deliver: now` types it in at once, mid-turn too,
+  says `held`, then `sent` or `not sent`. When what holds it is yours to clear (a dialog, or
+  text typed and not sent), a notification says so. A built-in command such as `/model` sends
+  Claude Code no prompt, so until the next prompt, Ctrl-C or `/clear` its text counts as unsent. `deliver: now` types it in at once, mid-turn too,
   where Claude Code queues it, and gives up on a dialog instead of waiting.
 - **`model`**, **`effort`**, **`mode`** (the permission mode), **`allowed_tools`** and
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts

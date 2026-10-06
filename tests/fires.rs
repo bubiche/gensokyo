@@ -692,6 +692,20 @@ fn feeding(name: &str, extra: &str, env: &[(&str, &str)]) -> Daemon {
 }
 
 impl Daemon {
+    /// Resident `id` mid-turn, as Claude Code's registry shows it, until it is told otherwise:
+    /// then a prompt and its Stop end the turn.
+    fn busy(&self, id: &Value, on: bool) {
+        let status = self.dir.join(format!("stub/{}.status", id.as_str().unwrap()));
+        std::fs::write(&status, if on { "busy" } else { "idle" }).unwrap();
+        // Typing is what has the registry asked again.
+        let name = self.live()[0]["name"].as_str().unwrap().to_string();
+        self.input(&name, if on { "work\r" } else { "and done\r" });
+        if on {
+            self.listed();
+            wait(|| self.live()[0]["state"] == "busy", "the turn");
+        }
+    }
+
     /// The clock to `minute` minutes past T0 (and a few seconds), and the probe run for it: its
     /// call counted, and time for what follows from it.
     fn minute(&self, minute: i64) {
@@ -1018,23 +1032,21 @@ fn a_fire_waits_for_its_residents_turn_to_end_and_the_newest_one_is_typed() {
     d.stub(&id, "ready");
     d.listed();
     wait(|| d.stamp("ask").is_some(), "first sight");
-    // Tools run for 4 s; the turn ends with the line typed after them.
-    let t = Instant::now();
-    d.input("Sakuya", "/busy 4\r");
-    wait(|| d.live()[0]["state"] == "busy", "the turn");
+    d.busy(&id, true);
     let typed = || d.stub(&id, "input").matches("Do the rounds.").count();
 
     // Mid-turn, both fires wait; the second takes the first's place.
     d.clock(T0 + 3600 + 5);
     wait(|| d.evs("ask", "held").len() == 1, "the first fire held");
     d.clock(T0 + 7200 + 5);
-    wait(|| d.evs("ask", "held").len() == 2, "the second fire held");
+    let replaced = || d.log().iter().any(|l| l["slug"] == "ask" && !l["replaced"].is_null());
+    wait(replaced, "the second fire in the first's place");
+    assert_eq!(d.evs("ask", "held").len(), 1, "held is said once");
     d.settle();
     assert_eq!(typed(), 0, "typed mid-turn");
 
     // The turn ends: one prompt, the newest fire's, once the hold has passed.
-    std::thread::sleep(Duration::from_secs(5).saturating_sub(t.elapsed()));
-    d.input("Sakuya", "and done\r");
+    d.busy(&id, false);
     wait(|| d.evs("ask", "sent").len() == 1, "the prompt typed in");
     d.settle();
     assert_eq!(typed(), 1);
@@ -1044,25 +1056,63 @@ fn a_fire_waits_for_its_residents_turn_to_end_and_the_newest_one_is_typed() {
 
 #[test]
 fn a_fire_waits_no_longer_than_its_limit_and_deliver_now_does_not_wait() {
-    let rituals =
-        [("ask", hourly("target: Sakuya\n")), ("now", hourly("target: Sakuya\ndeliver: now\n"))];
-    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
-    let d = Daemon::start("idle-most", T0 + 120, &rituals, &[("GENSOKYO_HOLD_MOST_MS", "1500")]);
+    let ask = hourly("target: Sakuya\n").replace("0 * * * *", "0 16 * * *");
+    let rituals = [("ask", ask.as_str()), ("now", &hourly("target: Sakuya\ndeliver: now\n"))];
+    let d = Daemon::start("idle-most", T0 + 120, &rituals, &[]);
     let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
-    let id = r["resident"]["id"].clone();
-    d.stub(&id, "ready");
+    d.stub(&r["resident"]["id"], "ready");
     d.listed();
     wait(|| d.stamp("ask").is_some() && d.stamp("now").is_some(), "first sight");
     d.input("Sakuya", "/busy 60\r");
     wait(|| d.live()[0]["state"] == "busy", "the turn");
+    // `now` types into the turn, which Claude Code queues; `ask` waits.
     d.clock(T0 + 3600 + 5);
-    // `now` types into the turn, which Claude Code queues; `ask` gives up after its limit.
     wait(|| d.evs("now", "sent").len() == 1, "deliver: now sent mid-turn");
+    wait(|| d.evs("ask", "held").len() == 1, "the daily fire held");
+    assert!(d.evs("ask", "held")[0].contains("which is busy"), "{:?}", d.evs("ask", "held"));
+    // Four hours on, by the ritual clock, it gives up.
+    d.clock(T0 + 3600 + 4 * 3600 + 10);
     wait(|| d.evs("ask", "not-sent").len() == 1, "the held fire dropped");
-    assert!(
-        d.evs("ask", "not-sent")[0].contains("Sakuya was not idle for"),
-        "{:?}",
-        d.evs("ask", "not-sent")
-    );
+    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h"]);
     assert!(d.evs("ask", "sent").is_empty());
+}
+
+#[test]
+fn a_held_probe_fire_types_the_newest_once_and_a_fire_by_hand_still_sends() {
+    let d = Daemon::start("idle-probe", T0 + 5, &[], &[]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    let probes = d.dir.join("conf/probes");
+    std::fs::create_dir_all(&probes).unwrap();
+    std::fs::write(probes.join("feed"), "#!/bin/sh\necho >> calls\ncat feed\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(probes.join("feed"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(d.dir.join("feed"), "line-one\n").unwrap();
+    d.busy(&id, true);
+    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n---\n\
+        Keep the page current.\n";
+    d.ritual("watch", text);
+    wait(|| d.calls() == 1, "the first fire's probe");
+    // The output changes while the fire is held: the probe runs on, and the newer one replaces it.
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    d.minute(1);
+    d.minute(2);
+    let typed = || d.stub(&id, "input").matches("Keep the page current.").count();
+    assert_eq!(typed(), 0, "typed mid-turn");
+    // Held long enough to be journaled, once for all three.
+    wait(|| d.evs("watch", "held").len() == 1, "held said");
+    d.busy(&id, false);
+    wait(|| d.evs("watch", "sent").len() == 1, "the prompt typed in");
+    d.settle();
+    assert_eq!(typed(), 1, "sent twice");
+    assert_eq!(d.evs("watch", "held").len(), 1, "{:?}", d.evs("watch", "held"));
+    let fired = std::fs::read_to_string(d.dir.join("rituals/watch/probe.fired")).unwrap();
+    assert_eq!(fired, "ok\nline-two\n", "the newest output is what was sent");
+    // By hand, with nothing new, it is sent all the same.
+    d.minute(3);
+    assert_eq!(typed(), 1);
+    assert_eq!(d.verb("run", "watch")["t"], "done");
+    wait(|| typed() == 2, "the fire by hand typed in");
 }

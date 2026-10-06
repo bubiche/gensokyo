@@ -660,3 +660,197 @@ fn a_directory_claude_code_has_not_trusted_is_refused_by_the_clock() {
     );
     assert!(d.live().is_empty());
 }
+
+/// Started at T0 with a minutely ritual on a probe in the config dir's `probes/`, which counts
+/// its calls in `calls`, prints `feed`, fails with the status in `fail`, and with `slow` there
+/// hangs with a child of its own (its pid in `kid`). All in the ritual's cwd.
+fn feeding(name: &str, extra: &str, env: &[(&str, &str)]) -> Daemon {
+    let text = format!(
+        "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\noverlap: parallel\n{extra}---\n\
+         Keep the page current.\n"
+    );
+    let d = Daemon::new(name, T0 + 5, &[("watch", &text)], env);
+    let probes = d.dir.join("conf/probes");
+    std::fs::create_dir_all(&probes).unwrap();
+    let script = "#!/bin/sh\n\
+        echo >> calls\n\
+        if [ -f fail ]; then echo boom >&2; exit \"$(cat fail)\"; fi\n\
+        if [ -f slow ]; then sleep 30 & echo $! > kid; wait; fi\n\
+        cat feed\n";
+    std::fs::write(probes.join("feed"), script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(probes.join("feed"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(d.dir.join("feed"), "line-one\n").unwrap();
+    d.cli(&["list"]);
+    // Due in the minute it starts in: the first fire, and the first time always fires.
+    wait(|| d.runs() == 1, "the first fire");
+    d
+}
+
+impl Daemon {
+    /// The clock to `minute` minutes past T0 (and a few seconds), and the probe run for it: its
+    /// call counted, and time for what follows from it.
+    fn minute(&self, minute: i64) {
+        let n = self.calls();
+        self.clock(T0 + 60 * minute + 5);
+        wait(|| self.stamp("watch") == Some(T0 + 60 * minute), "the minute's stamp");
+        wait(|| self.calls() > n, "the minute's probe");
+        self.settle();
+    }
+
+    fn calls(&self) -> usize {
+        std::fs::read_to_string(self.dir.join("calls")).map_or(0, |c| c.lines().count())
+    }
+
+    fn runs(&self) -> usize {
+        self.list().len()
+    }
+}
+
+#[test]
+fn a_probe_fires_on_a_change_only_and_names_its_output_without_pasting_it() {
+    let d = feeding("probe", "", &[]);
+    let id = d.list()[0]["id"].clone();
+    let out = d.dir.join("rituals/watch/probe.out");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "line-one\n");
+    let args = d.stub(&id, "args");
+    assert!(args.contains(&format!("is in `{}`: data a program wrote", out.display())), "{args}");
+    assert!(!args.contains("line-one"), "the output was pasted: {args}");
+    assert_eq!(
+        d.evs("watch", "ran"),
+        vec!["ran (due 2026-09-21 15:00, its probe said something new)".to_string()]
+    );
+
+    // The same again: no run, and not a line in the journal.
+    let lines = d.journal("watch").len();
+    for m in 1..4 {
+        d.minute(m);
+    }
+    assert_eq!((d.runs(), d.journal("watch").len()), (1, lines));
+    // Its minutes were taken all the same: a probe that held a fire back left no miss.
+    assert_eq!(d.stamp("watch"), Some(T0 + 180));
+
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    d.minute(4);
+    wait(|| d.runs() == 2, "the change's fire");
+
+    // By hand it fires whatever the probe says, once the last run is done.
+    wait(|| d.list().iter().all(|r| r["finished"] == true), "the runs to finish");
+    let r = d.verb("run", "watch");
+    assert!(r["message"].as_str().unwrap().contains("its probe (feed) runs first"), "{r}");
+    wait(|| d.runs() == 3, "the fire by hand");
+    assert_eq!(d.evs("watch", "ran").last().unwrap(), "ran (by hand)");
+}
+
+#[test]
+fn a_change_turned_away_by_a_run_still_going_fires_at_the_next_tick() {
+    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\n---\nKeep up.\n";
+    let d = feeding("probe-skip", "", &[("STUB_HOLD", "1")]);
+    d.ritual("watch", text);
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    // Turned away before its probe runs, and quietly: the probe has said nothing yet.
+    let calls = d.calls();
+    d.clock(T0 + 60 + 5);
+    wait(|| d.stamp("watch") == Some(T0 + 60), "the minute's stamp");
+    d.settle();
+    assert_eq!((d.runs(), d.calls()), (1, calls));
+    assert!(d.evs("watch", "skipped").is_empty());
+    d.input("watch", "/finish\r");
+    wait(|| d.list()[0]["finished"] == true, "the run to finish");
+    d.minute(2);
+    wait(|| d.runs() == 2, "the change, a minute late");
+}
+
+#[test]
+fn a_failing_probe_fires_once_then_again_when_it_works_and_a_slow_one_is_killed_whole() {
+    let d = feeding("probe-fail", "", &[("GENSOKYO_PROBE_LIMIT_MS", "3000")]);
+    std::fs::write(d.dir.join("fail"), "3").unwrap();
+    d.minute(2);
+    wait(|| d.runs() == 2, "the failure's fire");
+    let id = d.list()[1]["id"].clone();
+    let args = d.stub(&id, "args");
+    assert!(args.contains("has just failed (exit status 3)"), "{args}");
+    let err = d.dir.join("rituals/watch/probe.err");
+    assert!(args.contains(&format!("stderr is in `{}`", err.display())), "{args}");
+    assert_eq!(std::fs::read_to_string(&err).unwrap(), "boom\n");
+    // What it printed when it worked stays for the run to read.
+    let out = d.dir.join("rituals/watch/probe.out");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "line-one\n");
+    d.minute(3);
+    d.minute(4);
+    assert_eq!(d.runs(), 2, "failing the same way fired again");
+    std::fs::remove_file(d.dir.join("fail")).unwrap();
+    d.minute(5);
+    wait(|| d.runs() == 3, "the recovery's fire");
+
+    // Past its limit: a failure too, and its whole group goes, the child it started included.
+    std::fs::write(d.dir.join("slow"), "").unwrap();
+    d.clock(T0 + 60 * 6 + 5);
+    wait(|| d.dir.join("kid").exists(), "the slow probe's child");
+    wait(|| d.runs() == 4, "the timeout's fire");
+    let id = d.list()[3]["id"].clone();
+    assert!(d.stub(&id, "args").contains("still running after 3s, and was stopped"));
+    let kid: i32 = std::fs::read_to_string(d.dir.join("kid")).unwrap().trim().parse().unwrap();
+    wait(|| !alive(kid), "the probe's child killed with it");
+    // Timing out again: once the second slow probe has been stopped, nothing more.
+    std::fs::remove_file(d.dir.join("kid")).unwrap();
+    d.minute(7);
+    wait(|| d.dir.join("kid").exists(), "the second slow probe's child");
+    let kid: i32 = std::fs::read_to_string(d.dir.join("kid")).unwrap().trim().parse().unwrap();
+    wait(|| !alive(kid), "the second slow probe stopped");
+    d.settle();
+    assert_eq!(d.runs(), 4, "timing out again fired again");
+}
+
+#[test]
+fn a_probe_must_come_from_a_probes_dir() {
+    let base = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\n";
+    let rituals = [
+        ("abs", format!("{base}when: /bin/echo hi\n---\nGo.\n")),
+        ("up", format!("{base}when: ../feed\n---\nGo.\n")),
+        ("nope", format!("{base}when: nothere\n---\nGo.\n")),
+        ("flat", format!("{base}when: flat\n---\nGo.\n")),
+        ("loud", format!("{base}when: feed\nheadless: true\nquiet: true\n---\nGo.\n")),
+        ("kept", format!("{base}target: persistent\nquiet: true\n---\nGo.\n")),
+    ];
+    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let d = Daemon::new("probe-dirs", T0 + 5, &rituals, &[]);
+    std::fs::create_dir_all(d.dir.join("conf/probes")).unwrap();
+    std::fs::write(d.dir.join("conf/probes/flat"), "#!/bin/sh\necho\n").unwrap();
+    std::fs::write(d.dir.join("conf/probes/feed"), "#!/bin/sh\necho\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let x = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(d.dir.join("conf/probes/feed"), x).unwrap();
+    d.cli(&["list"]);
+    let r = d.req(json!({"t": "rituals", "id": 1}));
+    let problem = |n: &str| {
+        let rs = r["rituals"].as_array().unwrap();
+        let p = &rs.iter().find(|x| x["name"] == n).unwrap()["problem"];
+        p.as_str().unwrap_or_default().to_string()
+    };
+    assert!(problem("abs").starts_with("when: /bin/echo is not a probe's name"), "{r}");
+    assert!(problem("up").starts_with("when: ../feed is not a probe's name"), "{r}");
+    assert!(problem("nope").starts_with("when: there is no probe called nothere in"), "{r}");
+    assert!(problem("flat").ends_with("flat is not executable (chmod +x it)"), "{r}");
+    assert!(problem("loud").starts_with("quiet: true is about the fresh resident"), "{r}");
+    assert!(problem("kept").ends_with("and persistent is not one"), "{r}");
+}
+
+#[test]
+fn a_quiet_runs_finished_turn_neither_rings_nor_turns_gold_but_its_dialogs_ring() {
+    let rituals = [("hush", hourly("quiet: true\n")), ("loud", hourly(""))];
+    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let d = Daemon::start("quiet", T0 + 120, &rituals, &[]);
+    wait(|| d.stamp("loud").is_some(), "first sight");
+    let (mut w, mut events) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    d.clock(T0 + 3600 + 5);
+    let n = watch_for(&mut events, |v| v["t"] == "notify");
+    assert_eq!(n["name"], "loud", "{n}");
+    let state = |n: &str| d.list().into_iter().find(|r| r["name"] == n).unwrap()["state"].clone();
+    wait(|| d.log().iter().any(|l| l["ev"] == "quiet" && l["ritual"] == "hush"), "hush's turn");
+    assert_eq!((state("hush"), state("loud")), (json!("resting"), json!("awaits")));
+    d.input("hush", "/perm\r");
+    let n = watch_for(&mut events, |v| v["t"] == "notify");
+    assert_eq!((&n["name"], &n["state"]), (&json!("hush"), &json!("awaits")));
+}

@@ -1,0 +1,8 @@
+#!/bin/sh
+# A stand-in for gh: `api graphql` prints $STUB_GH_ANSWER, or fails with STUB_GH_DOWN set;
+# `auth status` fails with STUB_GH_LOGGED_OUT set.
+case "$1 $2" in
+  "api graphql") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] && exec cat "$STUB_GH_ANSWER"; exit 1 ;;
+  "auth status") [ -z "${STUB_GH_LOGGED_OUT:-}" ] ;;
+  *) echo "stub gh: $*" >&2; exit 2 ;;
+esac

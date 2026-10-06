@@ -42,6 +42,9 @@ pub struct Record {
     /// The resident that summoned this one, its lead, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+    /// A ritual run whose finished turns neither ring nor turn gold (`quiet: true`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiet: bool,
     /// Turns ended and dialogs or questions opened, over its life: what `wait` counts. Kept
     /// here so they survive a recall and a restart.
     #[serde(default)]

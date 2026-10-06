@@ -291,6 +291,8 @@ pub(super) struct Start {
     pub(super) extra: Vec<String>,
     /// Its lead, by id.
     pub(super) owner: Option<String>,
+    /// A ritual run whose finished turns stay quiet.
+    pub(super) quiet: bool,
 }
 
 pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String> {
@@ -341,6 +343,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         keep: s.keep,
         extra: s.extra,
         owner: s.owner,
+        quiet: s.quiet,
         turns: 0,
         needs: 0,
         told: (0, 0),
@@ -567,6 +570,7 @@ pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> 
 /// every record leaves the shrine for `departed/`.
 pub(super) async fn leave_all(shrine: &Shared) {
     shrine.borrow_mut().quitting = true;
+    super::rituals::stop_probes(&shrine.borrow());
     let live: Vec<Rc<Handle>> =
         shrine.borrow().entries.iter().filter_map(|e| e.handle.clone()).collect();
     let deadline = tokio::time::Instant::now() + QUIT_WAIT;

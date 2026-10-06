@@ -13,6 +13,8 @@ terminals mostly work.
 ## Requirements
 
 - macOS, and Claude Code (`claude` on `PATH`, 2.1.224 or newer).
+- For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
+  claude.ai login for the page.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - To build it yourself: Rust (the version in `.tool-versions`), Zig **0.16.0** exactly (the pinned Ghostty
@@ -251,6 +253,24 @@ and "what have I got scheduled?" work the same way.
   hour).
 - **`catch_up`**: a fire missed while the machine slept or the daemon was down is made up once,
   for the newest miss within a week; `catch_up: false` makes up nothing.
+- **`when`**: a probe, which turns the schedule into a polling interval. Each fire runs the
+  probe first, in the ritual's `cwd` with a 60 s limit, and starts a run only when its output
+  differs from what it printed for the last run that started. Output that has not changed
+  starts nothing and goes in no journal. A probe that fails starts one run, and its recovery
+  another. The run reads the output from `probe.out` in the ritual's directory; it never goes
+  into the prompt. A probe runs outside Claude's permissions, so it must be a program in the
+  config dir's `probes/` or the shipped `share/probes/`, named without a path
+  (`when: gh-prs`).
+- **`quiet: true`** (with `target: new`): its runs' finished turns neither ring nor turn gold.
+  Their permission prompts still do.
+
+**Watching your pull requests.** Ask a resident to *"watch my PRs"*. It publishes a private
+page on claude.ai, and adds a ritual on the shipped `gh-prs` probe, which asks GitHub every five
+minutes. When something has changed, a short quiet haiku run copies the new list to the page,
+and an open page redraws by itself, on the phone too. The list carries the day's date, so there is
+one run a day even when nothing changed, and a page whose date is old says it has not been
+checked since. It needs `gh` logged in and a claude.ai login. The page groups your open pull requests by what each needs from you: failing checks,
+changes requested or conflicts first, then ready to merge, then waiting on others.
 
 Every fire's prompt names the ritual's own `memory.md`, so a fresh session per run still knows
 what it handled last time.
@@ -298,10 +318,10 @@ description sits in a resident's context; the rest is read when it is used.
 
 ## Files
 
-- `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `rituals/`.
+- `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `rituals/`, `probes/`.
   `GENSOKYO_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gensokyo`.
 - `~/.local/state/gensokyo/`: `residents/` and `departed/` (one JSON record each),
-  `answers/` (each resident's last answer), `daemon.log`, `run/` (the socket and locks) and each ritual's notes and journal.
+  `answers/` (each resident's last answer), `daemon.log`, `run/` (the socket and locks) and each ritual's notes and journal, and a probe's last output.
   `GENSOKYO_STATE_DIR` moves it.
 
 ## Developing

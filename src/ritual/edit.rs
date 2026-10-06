@@ -27,6 +27,8 @@ pub struct Add {
     pub prompt: String,
     pub disabled: bool,
     pub allowed_tools: Vec<String>,
+    pub when: Option<String>,
+    pub quiet: bool,
 }
 
 /// A plain word: no quoting, and nothing that would read as something else.
@@ -107,8 +109,14 @@ pub fn add(
             f += &format!("{k}: {}\n", word(k, v)?);
         }
     }
+    if let Some(w) = &a.when {
+        f += &format!("when: {}\n", quote(w)?);
+    }
     if a.headless {
         f += "headless: true\n";
+    }
+    if a.quiet {
+        f += "quiet: true\n";
     }
     if a.disabled {
         f += "enabled: false\n";

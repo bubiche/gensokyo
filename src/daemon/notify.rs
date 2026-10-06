@@ -14,7 +14,7 @@ pub(super) fn after(sh: &mut Shrine, i: usize, before: State) {
         sh.entries[i].aware.seen();
     }
     let mut now = sh.entries[i].aware.state();
-    if now.needs_you() && now != before && super::lead::hush(sh, i) {
+    if now.needs_you() && now != before && (quiet(sh, i) || super::lead::hush(sh, i)) {
         now = sh.entries[i].aware.state();
     }
     // A lead done being busy: what it held of its helpers and did not collect rings now.
@@ -29,6 +29,18 @@ pub(super) fn after(sh: &mut Shrine, i: usize, before: State) {
         let _ = sh.notices.send(Reply::Notify { who, name, state: now, text, watched });
     }
     touch(sh);
+}
+
+/// A quiet ritual run's turn has just finished: seen at once, so it neither rings nor turns
+/// gold. Its dialogs still ring: a run stuck at one does nothing more.
+fn quiet(sh: &mut Shrine, i: usize) -> bool {
+    let e = &mut sh.entries[i];
+    if !e.rec.quiet || e.aware.pending != Some(super::aware::Pending::Stopped) {
+        return false;
+    }
+    e.aware.seen();
+    log(json!({"ev": "quiet", "id": e.rec.id, "ritual": e.rec.ritual}));
+    true
 }
 
 /// Connection `me` changed what it views or its focus: a resident it now shows in a focused

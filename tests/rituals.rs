@@ -501,6 +501,22 @@ fn add_writes_a_file_that_reads_back_the_same() {
     assert!(
         ritual::add(&a, now, &tz, &trust, &mine, None).unwrap_err().contains("is already there")
     );
+    // A probe the install ships, and quiet runs.
+    let prs = Add {
+        name: "prs".into(),
+        when: Some("gh-prs".into()),
+        quiet: true,
+        keep: Some("1m".into()),
+        ..a.clone()
+    };
+    let (path, _) = ritual::add(&prs, now, &tz, &trust, &mine, None).unwrap();
+    let r = ritual::parse("prs", &path, false, &std::fs::read_to_string(&path).unwrap());
+    assert_eq!((r.when.as_deref(), r.quiet()), (Some("gh-prs"), true));
+    let probe = ritual::probe(&r).unwrap().unwrap();
+    assert!(probe[0].ends_with("/share/probes/gh-prs") && probe.len() == 1, "{probe:?}");
+    let far = Add { name: "far".into(), when: Some("/bin/echo".into()), ..a.clone() };
+    let e = ritual::add(&far, now, &tz, &trust, &mine, None).unwrap_err();
+    assert!(e.starts_with("when: /bin/echo is not a probe's name"), "{e}");
     // Anything wrong but the directory writes nothing.
     let bad = Add { name: "b".into(), overlap: Some("twice".into()), ..a.clone() };
     let e = ritual::add(&bad, now, &tz, &trust, &mine, None).unwrap_err();

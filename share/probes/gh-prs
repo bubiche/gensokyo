@@ -1,0 +1,59 @@
+#!/bin/bash
+# gh-prs: a gensokyo probe (a ritual's `when: gh-prs`). Prints the user's open pull requests,
+# across every repository, as one line of JSON: {"as_of", "prs": [...], "failure"?}, which the
+# PR watch page shows as it stands. Only fields that mean something to the user are kept, keys
+# and PRs sorted, so the same PRs print the same bytes and a change is a real one: no
+# updatedAt (a bot comment moves it), and a `mergeable` GitHub has not worked out yet
+# (UNKNOWN) keeps the value it had last time ($GENSOKYO_PROBE_LAST). Titles are the one piece
+# of GitHub's text in it; no comment or review body ever is.
+#
+# A failure it can name prints the last list with a `failure` sentence and exits 0, so the
+# page says so once and repeats nothing while it lasts. Needs gh (logged in) and jq.
+set -u
+last=${GENSOKYO_PROBE_LAST:-}
+[ -n "$last" ] && jq -e .prs "$last" >/dev/null 2>&1 || last=/dev/null
+
+failed() {
+  if [ "$last" = /dev/null ]; then
+    jq -ncS --arg f "$1" --arg d "$(date +%F)" '{as_of: $d, prs: [], failure: $f}'
+  else
+    jq -cS --arg f "$1" '.failure = $f' "$last"
+  fi
+  exit 0
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf '{"as_of":"%s","failure":"jq is not installed","prs":[]}\n' "$(date +%F)"
+  exit 0
+fi
+command -v gh >/dev/null 2>&1 || failed "gh is not installed"
+
+query='query {
+  viewer {
+    pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        number title url isDraft mergeable reviewDecision
+        repository { nameWithOwner }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+  }
+}'
+if ! raw=$(gh api graphql -f query="$query" 2>/dev/null); then
+  gh auth status >/dev/null 2>&1 || failed "gh is not logged in (gh auth login)"
+  failed "GitHub could not be reached"
+fi
+
+printf '%s' "$raw" | jq -cS --arg d "$(date +%F)" --slurpfile was "$last" '
+  def key: "\(.repo)#\(.number)";
+  (($was[0].prs // []) | map({key: key, value: .mergeable}) | from_entries) as $known
+  | {as_of: $d, prs: ([.data.viewer.pullRequests.nodes[] | {
+      repo: .repository.nameWithOwner,
+      number, title, url,
+      draft: .isDraft,
+      review: .reviewDecision,
+      ci: (.commits.nodes[0].commit.statusCheckRollup.state // null),
+      mergeable
+    } | .mergeable = (if .mergeable == "UNKNOWN" then ($known[key] // "UNKNOWN") else .mergeable end)
+    ] | sort_by(.repo, .number))}
+' || failed "GitHub sent something this probe cannot read"

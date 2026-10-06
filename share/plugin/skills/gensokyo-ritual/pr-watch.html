@@ -1,0 +1,168 @@
+<title>PR Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* A review queue: one column of PR rows, grouped by what each needs from you, worst first. */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #dfe3ea; --fg: #1b2230; --mute: #5d6779;
+  --accent: #3b5bdb; --bad: #c92a2a; --bad-bg: #fdecec; --warn: #a15c00; --warn-bg: #fff3df;
+  --good: #2b8a3e; --good-bg: #e8f6ec; --idle-bg: #eef0f4;
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151b; --panel: #191d25; --line: #2b313d; --fg: #e4e8ef; --mute: #98a2b3;
+  --accent: #8ea6ff; --bad: #ff8787; --bad-bg: #3a1d20; --warn: #ffc069; --warn-bg: #3a2c15;
+  --good: #69db7c; --good-bg: #17301e; --idle-bg: #232833; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #191d25; --line: #2b313d; --fg: #e4e8ef; --mute: #98a2b3;
+  --accent: #8ea6ff; --bad: #ff8787; --bad-bg: #3a1d20; --warn: #ffc069; --warn-bg: #3a2c15;
+  --good: #69db7c; --good-bg: #17301e; --idle-bg: #232833; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--sans); }
+main { max-width: 52rem; margin: 0 auto; padding: 1.5rem 16px 3rem; display: grid; gap: 1.25rem; }
+header { display: grid; gap: .35rem; }
+h1 { font-size: 1.35rem; font-weight: 600; margin: 0; text-wrap: balance; }
+.meta { color: var(--mute); font-size: .85rem; display: flex; flex-wrap: wrap; gap: .25rem .9rem; }
+.tally { font-variant-numeric: tabular-nums; }
+.alert { border: 1px solid var(--bad); background: var(--bad-bg); color: var(--fg);
+  border-radius: 6px; padding: .6rem .8rem; font-size: .9rem; }
+.alert b { color: var(--bad); }
+section { display: grid; gap: .5rem; }
+h2 { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--mute);
+  margin: 0; font-weight: 600; display: flex; gap: .5rem; align-items: baseline; }
+h2 .n { font-family: var(--mono); letter-spacing: 0; font-weight: 500; }
+ul { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden; }
+li { display: grid; grid-template-columns: 1fr auto; gap: .2rem 1rem; padding: .65rem .85rem;
+  border-top: 1px solid var(--line); }
+li:first-child { border-top: 0; }
+li > * { min-width: 0; }
+.ref { font: 500 .8rem var(--mono); color: var(--mute); }
+.ref a { color: var(--accent); text-decoration: none; }
+.ref a:hover, .ref a:focus-visible { text-decoration: underline; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.title { overflow-wrap: anywhere; }
+.chips { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-wrap: wrap; gap: .3rem;
+  justify-content: flex-end; align-content: center; max-width: 16rem; }
+.chip { font: 500 .72rem var(--mono); padding: .12rem .45rem; border-radius: 4px;
+  background: var(--idle-bg); color: var(--mute); white-space: nowrap; }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.good { background: var(--good-bg); color: var(--good); }
+.empty { color: var(--mute); background: var(--panel); border: 1px dashed var(--line);
+  border-radius: 8px; padding: 1.25rem; }
+.empty b { color: var(--fg); font-weight: 600; }
+@media (max-width: 34rem) {
+  li { grid-template-columns: 1fr; }
+  .chips { grid-column: 1; grid-row: auto; justify-content: flex-start; max-width: none; }
+}
+</style>
+
+<main>
+  <header>
+    <h1>PR Watch</h1>
+    <div class="meta"><span id="asof">Waiting for the watcher</span><span id="tally" class="tally"></span></div>
+  </header>
+  <div id="alert" class="alert" hidden></div>
+  <div id="board">
+    <p class="empty"><b>Nothing here yet.</b> The watcher fills this page in on its first
+      check of your open pull requests, and every time one changes after that.</p>
+  </div>
+</main>
+
+<script>
+(() => {
+  // Worst first: what needs you, then what you can merge, then what waits on others.
+  const GROUPS = [
+    ["needs", "Needs you"], ["ready", "Ready to merge"], ["waiting", "Waiting on others"], ["draft", "Drafts"],
+  ];
+  const CI = { FAILURE: ["checks failing", "bad"], ERROR: ["checks erroring", "bad"],
+    PENDING: ["checks running", "warn"], EXPECTED: ["checks expected", "warn"], SUCCESS: ["checks pass", "good"] };
+  const REVIEW = { CHANGES_REQUESTED: ["changes requested", "bad"], APPROVED: ["approved", "good"],
+    REVIEW_REQUIRED: ["review required", ""] };
+  const MERGE = { CONFLICTING: ["conflicts", "bad"], UNKNOWN: ["mergeable?", ""] };
+  // A value the db holds is looked up only as a key of these tables' own.
+  const pick = (table, k) => (typeof k === "string" && Object.hasOwn(table, k) ? table[k] : null);
+
+  function group(p) {
+    if (p.draft) return "draft";
+    if (p.ci === "FAILURE" || p.ci === "ERROR" || p.review === "CHANGES_REQUESTED" || p.mergeable === "CONFLICTING") return "needs";
+    if (p.review === "APPROVED" && (p.ci === "SUCCESS" || p.ci == null) && p.mergeable === "MERGEABLE") return "ready";
+    return "waiting";
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function chip([text, tone]) { return el("span", "chip " + (tone || ""), text); }
+
+  function row(p) {
+    const li = el("li");
+    const ref = el("div", "ref");
+    const name = `${p.repo}#${p.number}`;
+    // The page links only to GitHub, whatever a doc says.
+    if (typeof p.url === "string" && p.url.startsWith("https://github.com/")) {
+      const a = el("a", null, name); a.href = p.url; a.target = "_blank"; a.rel = "noopener";
+      ref.append(a);
+    } else ref.textContent = name;
+    const chips = el("div", "chips");
+    const ci = pick(CI, p.ci), review = pick(REVIEW, p.review), merge = pick(MERGE, p.mergeable);
+    if (ci) chips.append(chip(ci)); else if (!p.draft) chips.append(chip(["no checks", ""]));
+    if (review) chips.append(chip(review));
+    if (merge) chips.append(chip(merge));
+    li.append(ref, chips, el("div", "title", String(p.title ?? "")));
+    return li;
+  }
+
+  function today() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function draw(doc) {
+    const board = document.getElementById("board");
+    const asof = document.getElementById("asof"), tally = document.getElementById("tally");
+    const alert = document.getElementById("alert");
+    if (!doc) return;
+    const prs = (Array.isArray(doc.prs) ? doc.prs : []).filter(p => p && typeof p === "object");
+    const at = typeof doc.as_of === "string" ? doc.as_of : "";
+    asof.textContent = at ? `As of ${at}` + (at < today() ? ", not checked since" : "") : "";
+    alert.hidden = !doc.failure;
+    alert.replaceChildren();
+    if (doc.failure) alert.append(el("b", null, "The last check failed: "), String(doc.failure),
+      el("span", null, doc.failure && prs.length ? ". The list below is from the check before." : "."));
+    const by = Object.fromEntries(GROUPS.map(([k]) => [k, []]));
+    for (const p of prs) by[group(p)].push(p);
+    tally.textContent = GROUPS.filter(([k]) => by[k].length).map(([k, t]) => `${t} ${by[k].length}`).join(" · ");
+    board.replaceChildren();
+    if (!prs.length) {
+      board.append(el("p", "empty", doc.failure ? "No pull requests to show." : "You have no open pull requests."));
+      return;
+    }
+    const wrap = el("div"); wrap.style.display = "grid"; wrap.style.gap = "1.25rem";
+    for (const [k, title] of GROUPS) {
+      if (!by[k].length) continue;
+      const s = el("section");
+      const h = el("h2", null, title); h.append(el("span", "n", String(by[k].length)));
+      const ul = el("ul"); by[k].forEach(p => ul.append(row(p)));
+      s.append(h, ul); wrap.append(s);
+    }
+    board.append(wrap);
+  }
+
+  (async () => {
+    const db = await window.claude?.use?.("db");
+    if (!db) {
+      document.getElementById("asof").textContent = "Open this page signed in to claude.ai to see your pull requests";
+      return;
+    }
+    db.doc("board/prs").onSnapshot(s => draw(s.exists ? s.data() : null), e => {
+      document.getElementById("asof").textContent = `The list could not be loaded (${e.code})`;
+    });
+  })();
+})();
+</script>

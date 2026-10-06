@@ -102,6 +102,13 @@ pub struct Add {
     /// Written paused
     #[arg(long)]
     disabled: bool,
+    /// A probe from probes/ and its arguments: each fire runs it first, and fires only when
+    /// its output has changed
+    #[arg(long, value_name = "PROBE")]
+    when: Option<String>,
+    /// Its runs' finished turns neither ring nor turn gold
+    #[arg(long)]
+    quiet: bool,
 }
 
 pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
@@ -227,6 +234,7 @@ fn add(o: Add) -> Result<(), String> {
     (a.description, a.model, a.effort, a.mode) = (o.description, o.model, o.effort, o.mode);
     (a.mcp_config, a.target, a.keep, a.overlap) = (o.mcp_config, o.target, o.keep, o.overlap);
     (a.catch_up, a.headless, a.disabled) = (o.catch_up, o.headless, o.disabled);
+    (a.when, a.quiet) = (o.when, o.quiet);
     a.allowed_tools = o.allowed_tools.iter().flat_map(|v| crate::frontmatter::items(v)).collect();
     let share = share();
     let (_, report) = ritual::add(

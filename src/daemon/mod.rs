@@ -9,6 +9,7 @@ pub mod launch;
 mod lead;
 mod log;
 mod notify;
+mod probe;
 pub mod pty;
 pub mod registry;
 mod resident;

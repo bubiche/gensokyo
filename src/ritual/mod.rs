@@ -43,12 +43,15 @@ pub struct Ritual {
     pub mode: Option<String>,
     pub allowed_tools: Vec<String>,
     pub mcp_config: Option<String>,
+    /// A probe: a program whose changed output is what fires the ritual. As written.
+    pub when: Option<String>,
     // The words as written; `problem` says when one means nothing.
     pub keep: String,
     pub overlap: String,
     pub headless: String,
     pub catch_up: String,
     pub enabled: String,
+    pub quiet: String,
     pub prompt: String,
     pub unknown: Vec<String>,
 }
@@ -109,6 +112,11 @@ impl Ritual {
 
     pub fn catch_up(&self) -> bool {
         yes(&self.catch_up)
+    }
+
+    /// Its runs' finished turns neither ring nor turn gold.
+    pub fn quiet(&self) -> bool {
+        yes(&self.quiet)
     }
 
     /// How long a finished run stays; None for `forever`.
@@ -185,6 +193,8 @@ const KEYS: &[&str] = &[
     "enabled",
     "allowed_tools",
     "allowedTools",
+    "when",
+    "quiet",
 ];
 
 /// The frontmatter (`frontmatter::read`) and the prompt under it. A file with no fence is all
@@ -205,11 +215,13 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
         mode: None,
         allowed_tools: Vec::new(),
         mcp_config: None,
+        when: None,
         keep: "2h".into(),
         overlap: "skip".into(),
         headless: "false".into(),
         catch_up: "true".into(),
         enabled: "true".into(),
+        quiet: "false".into(),
         prompt: front.body,
         // A typo as far as a reader can tell: a `schedul:` line never fires.
         unknown: front.unknown,
@@ -233,6 +245,8 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "catch_up" => r.catch_up = v,
             "enabled" => r.enabled = v,
             "allowed_tools" | "allowedTools" => r.allowed_tools = f.list(),
+            "when" => r.when = some(v),
+            "quiet" => r.quiet = v,
             _ => {}
         }
     }
@@ -290,6 +304,48 @@ impl Trust {
             v.and_then(|v| v.get("hasTrustDialogAccepted")) == Some(&Value::Bool(true))
         })
     }
+}
+
+/// Where a probe may live: the user's `probes/` in the config dir, then the shipped ones. A probe
+/// runs outside Claude's sandbox and permissions, and a resident can write a ritual, so a
+/// ritual can name a program only from these, whoever wrote it.
+pub fn probe_dirs() -> Vec<PathBuf> {
+    let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
+    let mut d = vec![paths::config_dir().join("probes")];
+    d.extend(share.map(|s| s.join("probes")));
+    d
+}
+
+/// A `when:` as the argv to run: its first word a program in `probe_dirs`, by name; the rest its
+/// arguments, split on spaces with no shell. None for a ritual with no probe.
+pub fn probe(r: &Ritual) -> Result<Option<Vec<String>>, String> {
+    let Some(w) = &r.when else { return Ok(None) };
+    let mut words = w.split_whitespace().map(String::from);
+    let prog = words.next().unwrap_or_default();
+    let dirs = probe_dirs();
+    let places = || {
+        let short: Vec<String> = dirs.iter().map(|d| paths::short(&d.to_string_lossy())).collect();
+        short.join(" or ")
+    };
+    if !name_ok(&prog) {
+        return Err(format!(
+            "when: {prog} is not a probe's name (a program in {}, named without a path: a probe \
+             runs outside Claude's permissions, so it may only come from there)",
+            places()
+        ));
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let found = dirs.iter().map(|d| d.join(&prog)).find(|p| p.is_file());
+    let Some(found) = found else {
+        return Err(format!("when: there is no probe called {prog} in {}", places()));
+    };
+    if std::fs::metadata(&found).is_ok_and(|m| m.permissions().mode() & 0o111 == 0) {
+        return Err(format!(
+            "when: {} is not executable (chmod +x it)",
+            paths::short(&found.to_string_lossy())
+        ));
+    }
+    Ok(Some(std::iter::once(found.to_string_lossy().into_owned()).chain(words).collect()))
 }
 
 /// What is wrong with a ritual, as a sentence for the user, or nothing. A ritual with one bad
@@ -386,11 +442,26 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
     if keep_len(&r.keep).is_err() {
         return p(format!("keep: {} is not a length (30m, 2h, 1d, forever)", r.keep));
     }
-    for (k, w) in [("enabled", &r.enabled), ("headless", &r.headless), ("catch_up", &r.catch_up)] {
+    let words = [
+        ("enabled", &r.enabled),
+        ("headless", &r.headless),
+        ("catch_up", &r.catch_up),
+        ("quiet", &r.quiet),
+    ];
+    for (k, w) in words {
         if !bool_word(w) {
             return p(format!("{k}: {w} is neither true nor false"));
         }
     }
+    // A session kept between fires, or a named resident, has the user's own turns in it too.
+    if r.quiet() && (r.headless() || r.target() != Target::New) {
+        return p(format!(
+            "quiet: true is about the fresh resident each fire of target new starts, and {} is \
+             not one",
+            if r.headless() { "a headless run".to_string() } else { r.target.clone() }
+        ));
+    }
+    probe(r)?;
     // The list is variadic on claude's command line, so an item there reads as a flag.
     if let Some(t) = r.allowed_tools.iter().find(|t| t.starts_with('-')) {
         return p(format!("allowed_tools: {t} starts with -, which claude would read as a flag"));

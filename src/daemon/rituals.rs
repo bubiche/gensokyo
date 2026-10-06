@@ -67,8 +67,10 @@ pub(super) struct Rites {
     trust: Option<(SystemTime, Rc<Trust>)>,
     /// Fires waiting for their resident to be idle (`deliver: idle`), by ritual and resident:
     /// the newest one's number. An older one that finds it is not the newest gives up.
-    waiting: HashMap<(String, String), Waiter>,
+    pub(super) waiting: HashMap<(String, String), Waiter>,
     held: u64,
+    /// What a branch ritual's probe printed that was left out, said once per daemon.
+    warned: HashSet<(String, String)>,
     /// The listing last sent to watchers.
     listing: Vec<RitualInfo>,
     /// When the clock last ticked. Here rather than in the clock: one started again after a
@@ -254,6 +256,10 @@ fn probed(
         log(
             json!({"ev": "ritual", "slug": slug, "probe": said.failed.as_deref().unwrap_or("new")}),
         );
+        if r.target() == Target::Branch {
+            drop(hold);
+            return nudge(&shrine, &r, &d, &said, &label);
+        }
         // The probe took its time: a run may have started meanwhile. The change waits for the
         // next fire, since nothing was marked fired.
         if r.target() == Target::New && !alongside && running(&shrine.borrow(), &slug) {
@@ -287,18 +293,21 @@ async fn probe_and_read(
     d: &Dir,
     by_hand: bool,
 ) -> Option<(Ritual, super::probe::Said)> {
-    let cwd = {
+    let (cwd, branch) = {
         let sh = shrine.borrow();
         let r = load(&sh).0.into_iter().find(|r| r.slug == slug);
         if sh.quitting {
             return None;
         }
-        r?.cwd.unwrap_or_else(crate::paths::home)
+        let r = r?;
+        (r.cwd.clone().unwrap_or_else(crate::paths::home), r.target() == Target::Branch)
     };
     let set = |pid| _ = shrine.borrow_mut().rites.probing.insert(slug.into(), pid);
     let said = super::probe::run(argv, &cwd, d, set).await;
     set(0);
-    if shrine.borrow().quitting || (!by_hand && super::probe::same(d, &said)) {
+    // A branch ritual measures each branch against what it sent, so unchanged output still
+    // reaches a resident that has just moved onto a branch.
+    if shrine.borrow().quitting || (!by_hand && !branch && super::probe::same(d, &said)) {
         return None;
     }
     let r = load(&shrine.borrow()).0.into_iter().find(|r| r.slug == slug)?;
@@ -392,6 +401,9 @@ fn fire(
             fresh(shrine, r, d, r.keep_secs())?;
             format!("{} is running in {cwd}", r.slug)
         }
+        Target::Branch => {
+            return Err("a branch ritual sends through its probe, which it has not run".into());
+        }
         // Typed in later, by a task of its own: the journal says `sent` or `not sent` then.
         t => {
             let to = match &t {
@@ -403,6 +415,7 @@ fn fire(
             tokio::task::spawn_local(async move {
                 match t {
                     Target::Resident(who) => send(&shrine, &r, &who, &label, key).await,
+                    Target::Branch => {}
                     _ => persistent(&shrine, &r, &label, key).await,
                 }
             });
@@ -473,7 +486,7 @@ async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Fired>
         let why = format!("could not recall the session this ritual keeps ({id}): {e}");
         return undelivered(shrine, r, &why);
     }
-    type_prompt(shrine, r, &id, label, key).await;
+    type_prompt(shrine, r, &id, label, key.map_or(Sent::Nothing, Sent::Probe)).await;
 }
 
 /// A resident the user manages, by name: the prompt alone. Typed in as a spell card is, so a
@@ -491,7 +504,9 @@ async fn send(shrine: &Shared, r: &Ritual, who: &str, label: &str, key: Option<F
             r,
             &format!("{who} has left, and a departed screen has no prompt to type into"),
         ),
-        Some((id, true)) => type_prompt(shrine, r, &id, label, key).await,
+        Some((id, true)) => {
+            type_prompt(shrine, r, &id, label, key.map_or(Sent::Nothing, Sent::Probe)).await
+        }
     }
 }
 
@@ -513,15 +528,16 @@ fn undelivered(shrine: &Shared, r: &Ritual, why: &str) {
 /// resident to be idle: no turn running, no dialog, nothing half typed, and `IDLE_HOLD` since
 /// its last hook. Focus plays no part. A newer fire for the same resident replaces a waiting one,
 /// and the probe goes on meanwhile, so what is typed is the newest.
-async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Option<Fired>) {
+async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: Sent) {
     let (t, start, idle) = (Instant::now(), now(), r.deliver_idle());
     let hold = env_ms("GENSOKYO_IDLE_HOLD_MS", IDLE_HOLD).as_millis() as i64;
     let d = Dir::of(&r.slug);
     // Waiting, the probe's next fire may run: it replaces this one if it says something new.
-    let (key, _hold) = match key {
-        Some(f) if idle => (Some(f.key), None),
-        Some(f) => (Some(f.key), Some(f._hold)),
-        None => (None, None),
+    let (key, _hold, nudge) = match sent {
+        Sent::Probe(f) if idle => (Some(f.key), None, None),
+        Sent::Probe(f) => (Some(f.key), Some(f._hold), None),
+        Sent::Branch(n) => (None, None, Some(n)),
+        Sent::Nothing => (None, None, None),
     };
     // Already sent as this fire began: a fire by hand, which sends what is there regardless.
     let sent_before = key.as_deref().is_some_and(|k| super::probe::same_key(&d, k));
@@ -602,19 +618,61 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, key: Op
     gone(shrine);
     // A fire replaced by this one may have been typed while this one waited for the turn it
     // started to end: what it said is not said twice.
-    if !sent_before && key.as_deref().is_some_and(|k| super::probe::same_key(&d, k)) {
+    let already = match &nudge {
+        Some(n) => !super::branch::still(shrine, &d, id, n),
+        None => !sent_before && key.as_deref().is_some_and(|k| super::probe::same_key(&d, k)),
+    };
+    if already {
         return log(json!({"ev": "ritual", "slug": r.slug, "already": label}));
     }
-    let text = ritual::prompt_text(r, &d.memory());
+    let text =
+        nudge.as_ref().map_or_else(|| ritual::prompt_text(r, &d.memory()), |n| n.text.clone());
     match deliver(shrine, id, &handle, &text, "prompt").await {
         Ok(()) => {
             if let Some(k) = &key {
                 super::probe::commit(&d, k);
             }
+            if let Some(n) = &nudge {
+                super::branch::record(&d, n);
+            }
             d.note(now(), "sent", &format!("sent to {name} ({label})"));
             shrine.borrow_mut().rites.undelivered.remove(&r.slug);
         }
         Err(why) => undelivered(shrine, r, &format!("{name} {why}")),
+    }
+}
+
+/// What a typed prompt carries, to be recorded once it is in.
+enum Sent {
+    Nothing,
+    /// A probe's output, committed so the next fire is measured against it.
+    Probe(Fired),
+    /// A branch's news, from `target: branch`; the prompt is its own.
+    Branch(super::branch::Nudge),
+}
+
+/// A branch ritual's fire: each branch's news to the resident working on it, typed in as any
+/// prompt for a resident is. A failed probe, or output of the wrong shape, is said once.
+fn nudge(shrine: &Shared, r: &Ritual, d: &Dir, said: &super::probe::Said, label: &str) {
+    if let Some(how) = &said.failed {
+        return complain(shrine, r, d, now(), &format!("its probe failed ({how})"));
+    }
+    let out = said.key.strip_prefix(b"ok\n".as_slice()).unwrap_or(&said.key);
+    let (sends, bad) = match super::branch::route(shrine, r, d, out) {
+        Ok(x) => x,
+        Err(e) => return complain(shrine, r, d, now(), &e),
+    };
+    shrine.borrow_mut().rites.complained.remove(&r.slug);
+    if let Some(b) =
+        bad.filter(|b| shrine.borrow_mut().rites.warned.insert((r.slug.clone(), b.clone())))
+    {
+        d.note(now(), "left-out", &b);
+    }
+    for (id, n) in sends {
+        let (shrine, r, label) = (shrine.clone(), r.clone(), format!("{label}, {}", n.key));
+        tokio::task::spawn_local(async move {
+            type_prompt(&shrine, &r, &id, &label, Sent::Branch(n)).await;
+        });
     }
 }
 

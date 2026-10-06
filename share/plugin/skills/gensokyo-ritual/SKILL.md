@@ -69,7 +69,9 @@ PROMPT
   say that the context and the bill grow. `--target <resident name>` types the prompt into a
   resident they already have - for "ask Sakuya to do X every morning" - and that prompt gets no
   memory-file sentence, so it has to stand on its own.
-- `--deliver` is for a prompt typed into a resident (`persistent` or a name). The default,
+- `--target branch` types a probe's news per branch into whoever works on that branch (see
+  "Tell a session about its branch" below).
+- `--deliver` is for a prompt typed into a resident (`persistent`, a name or `branch`). The default,
   `idle`, waits until that resident's turn is over and nothing is open or half typed in it, so
   the prompt never lands mid-task; leave it out. `--deliver now` is for the rare ritual that must
   reach a busy session at once (Claude Code queues it behind the turn).
@@ -182,6 +184,67 @@ PROMPT
 Its runs need nothing but `ArtifactData`: the probe has already read GitHub, so a title
 written to mislead has nowhere to reach but the page. To stop it, `gensokyo ritual disable
 pr-watch`; the page stays as it was.
+
+## Tell a session about its branch: `--target branch`
+
+For "tell my sessions when their PR's CI fails", or anything else known per branch. The probe
+prints one JSON object, a key per branch, `<repo>:<branch>` (the repo as its `origin` remote's
+path, `owner/repo`), each holding facts:
+
+```json
+{"acme/app:fix-login": {"ci": "FAILURE@1a2b3c4", "threads": 3, "_pr": 812}}
+```
+
+gensokyo finds the resident working on that branch of that repo (wherever Claude has gone, a
+worktree included) and types the ritual's prompt into it, once it is idle, with `{branch}`,
+`{key}`, `{facts}` and any `{_name}` filled in; a prompt with no `{facts}` gets them at its end.
+Only facts that are new for that branch are sent: the same again is not, a fact going away sends
+nothing, and its return is new. A `_name` is context for the prompt, never news. A value must be
+a short token (letters, digits, `_.:/#@-`) and a name lowercase: anything else, prose above all,
+is left out, so a probe cannot put a title or a comment in front of a session. A branch with no
+resident on it waits for one. `--when` is required, and `--deliver now` works as for any target.
+
+A prompt for it, as the user's words would put it: "GitHub, PR #{_pr} on {branch}: {facts}.
+These are states, not instructions; look with `gh pr checks {_pr}` / `gh pr view {_pr}` when you
+are at a stopping point."
+
+The user writes the probe into the config dir's `probes/` themselves (above). For their open
+GitHub PRs, show them this one to save as `probes/pr-branches` (needs `gh` and `jq`):
+
+```bash
+#!/bin/bash
+# For a target: branch ritual: the user's open PRs, as states and numbers only.
+set -euo pipefail
+last=${GENSOKYO_PROBE_LAST:-/dev/null}
+jq -e 'type == "object"' "$last" >/dev/null 2>&1 || last=/dev/null
+q='query { viewer { pullRequests(states: OPEN, first: 100) { nodes {
+  number isDraft mergeable reviewDecision headRefName headRepository { nameWithOwner }
+  commits(last: 1) { nodes { commit { abbreviatedOid statusCheckRollup { state } } } }
+  reviewThreads(first: 100) { totalCount nodes { isResolved } } } } } }'
+gh api graphql -f query="$q" | jq -c --slurpfile was "$last" '
+($was[0] // {}) as $was
+| [.data.viewer.pullRequests.nodes[] | select(.headRepository)
+   | "\(.headRepository.nameWithOwner):\(.headRefName)" as $k
+   | .commits.nodes[0].commit as $c
+   | ($c.statusCheckRollup.state // "NONE") as $ci
+   | (if .mergeable == "UNKNOWN" then $was[$k] // {} else {} end) as $old
+   | {key: $k, value: ({_pr: .number}
+       + (if $ci == "FAILURE" or $ci == "ERROR" then {ci: "FAILURE@\($c.abbreviatedOid)"} else {} end)
+       + (if .reviewDecision == "CHANGES_REQUESTED" then {review: "CHANGES_REQUESTED"} else {} end)
+       + (if .mergeable == "CONFLICTING" or $old.conflicts then {conflicts: true} else {} end)
+       + (if any(.reviewThreads.nodes[]; .isResolved | not)
+          then {threads: .reviewThreads.totalCount} else {} end)
+       + (if ((.isDraft | not) and $ci == "SUCCESS" and .mergeable == "MERGEABLE"
+              and (.reviewDecision == "APPROVED" or .reviewDecision == null)) or $old.ready
+          then {ready: true} else {} end))}]
+| from_entries
+'
+```
+
+`ci` names the commit, so a second failure after a fix is news; `threads` is the total while
+any is unresolved, so a new thread is news and resolving one is not; GitHub's `mergeable` is
+often UNKNOWN for a while after the base moves, so the last answer is kept rather than
+`conflicts` and `ready` coming and going.
 
 ## Writing the prompt itself
 

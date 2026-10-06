@@ -214,6 +214,47 @@ pub fn git_branch(dir: &Path) -> Option<String> {
     })
 }
 
+/// The repository `dir` is in, as its `origin` remote names it: the path after the host,
+/// without `.git` (`owner/repo`, `group/sub/repo`). Read from the common git dir's `config`
+/// without running git: a worktree's `.git` file leads to its gitdir, whose `commondir` leads
+/// to the repository's own.
+pub fn git_repo(dir: &Path) -> Option<String> {
+    let top = dir.ancestors().find(|d| d.join(".git").exists())?;
+    let dot = top.join(".git");
+    let git = match std::fs::read_to_string(&dot) {
+        Ok(f) => top.join(f.strip_prefix("gitdir:")?.trim()),
+        Err(_) => dot,
+    };
+    let common = match std::fs::read_to_string(git.join("commondir")) {
+        Ok(c) => git.join(c.trim()),
+        Err(_) => git,
+    };
+    let config = std::fs::read_to_string(common.join("config")).ok()?;
+    let mut origin = false;
+    let url = config.lines().map(str::trim).find_map(|l| {
+        if l.starts_with('[') {
+            origin = l.replace(' ', "") == "[remote\"origin\"]";
+            return None;
+        }
+        let (k, v) = l.split_once('=')?;
+        (origin && k.trim() == "url").then(|| v.trim().to_string())
+    })?;
+    repo_path(&url)
+}
+
+/// `git@host:path(.git)`, `ssh://git@host[:port]/path(.git)` or `https://host/path(.git)`: the
+/// path. A local path or anything odd is none.
+pub fn repo_path(url: &str) -> Option<String> {
+    let path = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?.1,
+        None => url.split_once(':').filter(|(h, _)| h.contains('@') || !h.contains('/'))?.1,
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_start_matches('/');
+    let ok = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
+    (!path.is_empty() && path.len() <= 200 && path.chars().all(ok)).then(|| path.to_string())
+}
+
 /// The first value at `pointer` along Claude Code's settings chain for `cwd`: the project's
 /// `settings.local.json`, its `settings.json`, then the user's.
 pub fn setting(cwd: &Path, pointer: &str) -> Option<Value> {

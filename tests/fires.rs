@@ -1116,3 +1116,82 @@ fn a_held_probe_fire_types_the_newest_once_and_a_fire_by_hand_still_sends() {
     assert_eq!(d.verb("run", "watch")["t"], "done");
     wait(|| typed() == 2, "the fire by hand typed in");
 }
+
+#[test]
+fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
+    let d = Daemon::start("branch", T0 + 5, &[], &[]);
+    // A repo on main whose origin is acme/app, and a worktree of it on nebel95/fix.
+    let (repo, wt) = (d.dir.join("app"), d.dir.join("app/.claude/worktrees/fix"));
+    std::fs::create_dir_all(repo.join(".git/worktrees/fix")).unwrap();
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let config =
+        "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n";
+    std::fs::write(repo.join(".git/config"), config).unwrap();
+    let fix = repo.join(".git/worktrees/fix");
+    std::fs::write(fix.join("HEAD"), "ref: refs/heads/nebel95/fix\n").unwrap();
+    std::fs::write(fix.join("commondir"), "../..\n").unwrap();
+    std::fs::write(wt.join(".git"), format!("gitdir: {}\n", fix.display())).unwrap();
+
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": repo, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    let probes = d.dir.join("conf/probes");
+    std::fs::create_dir_all(&probes).unwrap();
+    std::fs::write(probes.join("feed"), "#!/bin/sh\necho >> calls\ncat feed\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(probes.join("feed"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let feed = |v: Value| std::fs::write(d.dir.join("feed"), v.to_string()).unwrap();
+    feed(json!({"acme/app:main": {"ci": "FAILURE@abc1234", "_pr": 7}}));
+    let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: branch\n---\n\
+        News on {branch} (PR {_pr}{_none}): {facts}\n";
+    d.ritual("watch", text);
+    let typed = || d.stub(&id, "input").matches("News on").count();
+    wait(|| typed() == 1, "the first news");
+    assert!(d.stub(&id, "input").contains("News on main (PR 7): ci: FAILURE@abc1234"));
+
+    // The same again is no news; the fact going away sends nothing; its return does.
+    d.minute(1);
+    feed(json!({"acme/app:main": {"_pr": 7}}));
+    d.minute(2);
+    assert_eq!(typed(), 1);
+    feed(json!({"acme/app:main": {"ci": "FAILURE@abc1234", "_pr": 7}}));
+    d.minute(3);
+    wait(|| typed() == 2, "the failure back");
+
+    // Sakuya moves into the worktree: main's news has nobody, fix's reaches it. A key and a
+    // fact that are not tokens are left out, and said once.
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": wt});
+    let (mut w, mut lines) = d.connect();
+    let list = json!({"t": "list", "id": 2});
+    writeln!(w, "{}\n{list}", json!({"t": "hook", "resident": id, "hook": hook})).unwrap();
+    assert_eq!(next(&mut lines)["residents"][0]["branch"], "nebel95/fix");
+    feed(json!({
+        "acme/app:main": {"ci": "FAILURE@def5678"},
+        "acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED", "Title": "Fix it", "note": "two words"},
+        "not a key": {"ci": "x"},
+    }));
+    d.minute(4);
+    wait(|| typed() == 3, "the worktree's news");
+    let input = d.stub(&id, "input");
+    assert!(
+        input.contains("News on nebel95/fix (PR ): review: CHANGES_REQUESTED\x1b[201~"),
+        "{input}"
+    );
+    assert!(!input.contains("def5678") && !input.contains("two words"), "{input}");
+    assert_eq!(d.evs("watch", "left-out").len(), 1, "{:?}", d.evs("watch", "left-out"));
+
+    // Held mid-turn, then the news clears before the turn ends: nothing is typed.
+    d.busy(&id, true);
+    feed(json!({"acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED", "conflicts": true}}));
+    d.minute(5);
+    wait(|| d.evs("watch", "held").len() == 1, "held");
+    feed(json!({"acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED"}}));
+    d.minute(6);
+    d.busy(&id, false);
+    d.settle();
+    d.settle();
+    assert_eq!(typed(), 3, "cleared news typed");
+}

@@ -417,3 +417,20 @@ fn a_draft_is_kept_from_the_keys_to_the_next_prompt_and_never_typed_into_a_dialo
     a.registry(Some(Registry::Idle), 6);
     assert_eq!(a.blocked(), None, "answered, and nothing left in the line");
 }
+
+#[test]
+fn a_remote_url_names_its_repo_by_the_path_after_the_host() {
+    let cases = [
+        ("git@github.com:acme/app.git", Some("acme/app")),
+        ("git@github.com:acme/app", Some("acme/app")),
+        ("https://github.com/acme/app.git", Some("acme/app")),
+        ("https://user@gitlab.com/group/sub/app/", Some("group/sub/app")),
+        ("ssh://git@host.example:2222/acme/app.git", Some("acme/app")),
+        ("/srv/git/app.git", None),
+        ("../remote.git", None),
+        ("git@github.com:acme/app name.git", None),
+    ];
+    for (url, want) in cases {
+        assert_eq!(tele::repo_path(url).as_deref(), want, "{url}");
+    }
+}

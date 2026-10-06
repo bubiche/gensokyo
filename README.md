@@ -201,6 +201,7 @@ and "what have I got scheduled?" work the same way.
 - **`target`**: `new` (the default) is a fresh session per fire. `persistent` keeps one session
   for the ritual: the first fire starts it and every later fire is typed into it, recalling it
   first if it has left. `target: <name>` types the prompt into a resident you run yourself.
+  `target: branch` (with `when`) types into whichever resident works on a branch, below.
   A fire that cannot be delivered says so in the journal and as a notification.
 - **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire
   until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
@@ -232,11 +233,21 @@ and "what have I got scheduled?" work the same way.
   starts nothing and goes in no journal. A probe that fails (a non-zero exit, the limit, over
   256 KB of output) starts one run, and its recovery another. The run reads the output from
   `probe.out` in the ritual's directory, and why it failed from `probe.err`; neither goes into
-  the prompt. The probe finds its own last output through `GENSOKYO_PROBE_LAST`. A probe runs
-  outside Claude's permissions, so it must be an executable in the config dir's `probes/` or the
-  shipped `share/probes/`, named without a path (`when: gh-prs`, or `when: "my-probe --flag"`
-  with arguments), and not a link out of there. That only holds while no resident can write
+  the prompt (but see `target: branch`). The probe finds its own last output through
+  `GENSOKYO_PROBE_LAST`. A probe runs outside Claude's permissions, so it must be an executable
+  in the config dir's `probes/` or the shipped `share/probes/`, named without a path (`when:
+  gh-prs`, or `when: "my-probe --flag"` with arguments), and not a link out of there. That only holds while no resident can write
   those directories: keep them outside every resident's `cwd` if it runs with edits accepted.
+- **`target: branch`**: its probe prints one JSON object, `{"<repo>:<branch>": {facts}}`, the
+  repo as the path of `origin`'s URL (`owner/repo`), and each branch's facts go to the resident
+  working on that branch of that repo, a worktree or a `cd` included (`list --json` `here`).
+  The prompt is the ritual's body with `{branch}`, `{key}`, `{facts}` (`ci: FAILURE@1a2b3c4,
+  threads: 3`) and any `{_name}` filled in. Only what is new for that branch is sent: the same
+  facts again are not, a fact going away sends nothing, and its return does. A fact named
+  `_name` is context, never news. This is the one place a probe's output reaches a prompt, so a
+  value must be a short token (letters, digits, `_.:/#@-`, at most 200) and a name lowercase;
+  anything else is left out and journaled once. Nothing ships for it; the ritual skill has a
+  GitHub-PR probe to copy.
 - **`quiet: true`** (with `target: new`): its runs' finished turns neither ring nor turn gold.
   Their permission prompts still do.
 

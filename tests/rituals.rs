@@ -291,6 +291,7 @@ fn every_problem_is_named() {
         ("target: persistent\noverlap: queue\n", "is only about a target of new"),
         ("target: Sakuya\ndeliver: later\n", "deliver: later is not when to type"),
         ("deliver: now\n", "a run of target new starts with its prompt"),
+        ("target: branch\n", "target: branch sends what a probe prints"),
         ("keep: 2 hours\n", "keep: 2 hours is not a length"),
         ("keep: 1234567890d\n", "is not a length"),
         ("enabled: ture\n", "enabled: ture is neither true nor false"),

@@ -65,6 +65,8 @@ pub enum Target {
     Persistent,
     /// A resident the user manages.
     Resident(String),
+    /// Whichever resident works on the branch each key of its probe's output names.
+    Branch,
 }
 
 fn yes(w: &str) -> bool {
@@ -134,6 +136,7 @@ impl Ritual {
         match self.target.as_str() {
             "new" => Target::New,
             "persistent" => Target::Persistent,
+            "branch" => Target::Branch,
             name => Target::Resident(name.into()),
         }
     }
@@ -412,6 +415,13 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             r.target
         ));
     }
+    if r.target() == Target::Branch && r.when.is_none() {
+        return p(
+            "target: branch sends what a probe prints about each branch, so it needs when: (a \
+             probe that prints {\"<repo>:<branch>\": {facts}})"
+                .into(),
+        );
+    }
     if r.headless() && r.target() != Target::New {
         return p(format!(
             "headless: true is a claude -p of its own, which is always a fresh session, so it \
@@ -507,7 +517,7 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
 /// named gets the prompt alone: it was summoned by hand, and the file is outside its reach.
 pub fn prompt_text(r: &Ritual, memory: &Path) -> String {
     match r.target() {
-        Target::Resident(_) => r.prompt.clone(),
+        Target::Resident(_) | Target::Branch => r.prompt.clone(),
         _ => format!(
             "{}\n\nYour notes from previous runs are at `{}`. Read them first; update them before \
              you finish.",

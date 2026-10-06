@@ -155,4 +155,8 @@ fn a_ritual_runs_in_its_worktree_in_the_same_subdirectory() {
     let branch =
         git(&work.join(".claude/worktrees/nightly"), &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(branch, "nightly");
+    // The exclude line went to the repository's own .git, not one beside the subdirectory.
+    assert!(!work.join("app/.git").exists());
+    let exclude = std::fs::read_to_string(work.join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains("/.claude/worktrees/"), "{exclude}");
 }

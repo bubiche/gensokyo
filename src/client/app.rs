@@ -532,7 +532,11 @@ impl App {
                     self.say(Say::Notice, format!("{} {text}", state.glyph()));
                 }
             }
-            Reply::Summoned { id, resident, .. } => {
+            Reply::Summoned { id, resident, note } => {
+                // How its worktree came to be: reused, or from a base that could not be fetched.
+                if let Some(n) = note {
+                    self.say(Say::Notice, n);
+                }
                 // Only the modal waiting on it: one opened since is another summon.
                 if self.summoning.take_if(|s| *s == id).is_some()
                     && matches!(&self.m.modal, Some(Modal::Summon(s)) if s.waiting)

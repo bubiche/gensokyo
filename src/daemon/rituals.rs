@@ -275,7 +275,7 @@ fn probed(
             None => ", its probe said something new",
             Some(_) => ", its probe failed",
         };
-        let key = Some(Fired { key: said.key, _hold: hold });
+        let key = Some(Fired { key: said.key, _hold: Some(hold) });
         match fire(&shrine, &run, &d, &format!("{label}{why}"), alongside, now, key) {
             Ok(_) => _ = shrine.borrow_mut().rites.complained.remove(&slug),
             Err(e) => complain(&shrine, &r, &d, now, &e),
@@ -325,10 +325,11 @@ async fn probe_and_read(
 }
 
 /// What a probe said that set a fire off. While it is held, the ritual's next fire is not
-/// probed: measured against a change still on its way, that one would send it again.
+/// probed: measured against a change still on its way, that one would send it again. A fire
+/// that waits for an idle resident holds nothing: a newer one takes its place instead.
 struct Fired {
     key: Vec<u8>,
-    _hold: Hold,
+    _hold: Option<Hold>,
 }
 
 /// A ritual's place in `probing`, given up when the fire it led to is delivered or not.
@@ -417,6 +418,12 @@ fn fire(
                 _ => "the session it keeps".into(),
             };
             let said = format!("{}'s prompt is on its way to {to}", r.slug);
+            // Held for an idle resident, the probe runs on meanwhile: from now, not from when
+            // the task below gets its turn, or the next minute's probe may find it still held.
+            let key = match key {
+                Some(Fired { key, .. }) if r.deliver_idle() => Some(Fired { key, _hold: None }),
+                k => k,
+            };
             let (shrine, r, label) = (shrine.clone(), r.clone(), label.to_string());
             tokio::task::spawn_local(async move {
                 match t {
@@ -463,7 +470,7 @@ fn in_worktree(
         }
         // The repository's top may be above the trusted cwd, and a run at the trust dialog
         // would be alive and stuck.
-        if !trust(&shrine).trusted(std::path::Path::new(&made.path)) {
+        if !run.headless() && !trust(&shrine).trusted(std::path::Path::new(&made.path)) {
             let why = format!(
                 "worktree: nothing has answered Claude Code's trust prompt for {} (open Claude \
                  Code there once and accept)",
@@ -587,7 +594,7 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
     // Waiting, the probe's next fire may run: it replaces this one if it says something new.
     let (key, _hold, nudge) = match sent {
         Sent::Probe(f) if idle => (Some(f.key), None, None),
-        Sent::Probe(f) => (Some(f.key), Some(f._hold), None),
+        Sent::Probe(f) => (Some(f.key), f._hold, None),
         Sent::Branch(n) => (None, None, Some(n)),
         Sent::Nothing => (None, None, None),
     };

@@ -569,5 +569,11 @@ fn in_a_git_repository_summon_asks_for_a_worktree_and_enter_works_right_there() 
     host(&mut a, format!("{}\r\rfix-login\r", repo.display()).as_bytes());
     let out = sent(&mut a);
     assert_eq!(out[0]["worktree"], serde_json::json!({"slug": "fix-login"}), "{}", out[0]);
+    let (id, note) = (out[0]["id"].as_u64().unwrap(), "reused ~/x/.claude/worktrees/fix-login");
+    daemon(
+        &mut a,
+        Reply::Summoned { id, resident: resident(3, "Sakuya"), note: Some(note.into()) },
+    );
+    assert_eq!(said(&a), Some(note), "the note is the user's to see");
     std::fs::remove_dir_all(&repo).unwrap();
 }

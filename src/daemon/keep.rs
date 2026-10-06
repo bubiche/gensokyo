@@ -32,12 +32,28 @@ pub(super) fn reap(shrine: &Shared, now: i64) {
         }
     }
     for (id, launched) in due {
-        let shrine = shrine.clone();
-        tokio::task::spawn_local(async move {
-            take(&shrine, &id, launched).await;
-            shrine.borrow_mut().rites.reaping.remove(&id);
-        });
+        let s = shrine.clone();
+        spawn(shrine, id.clone(), async move { take(&s, &id, launched).await });
     }
+}
+
+/// One due to go, taken in a task of its own; `reaping` keeps the ticks meanwhile off it.
+fn spawn(shrine: &Shared, id: String, f: impl Future<Output = ()> + 'static) {
+    let shrine = shrine.clone();
+    tokio::task::spawn_local(async move {
+        f.await;
+        shrine.borrow_mut().rites.reaping.remove(&id);
+    });
+}
+
+/// Out of the shrine and into recall, once the exit it was asked for (if it was) is recorded.
+async fn retire(shrine: &Shared, id: &str) -> bool {
+    let t = Instant::now();
+    let departed = || shrine.borrow().entries.iter().any(|e| e.rec.id == id && e.handle.is_none());
+    while !departed() && t.elapsed() < Duration::from_secs(2) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    shrine::close(shrine, id).await.is_ok()
 }
 
 fn sh_views(v: &HashMap<u64, shrine::View>) -> impl Fn(&str) -> bool + '_ {
@@ -98,13 +114,7 @@ async fn take(shrine: &Shared, id: &str, launched: i64) {
             return;
         }
     }
-    // Out of the shrine, and into recall, once its exit has been recorded.
-    let t = Instant::now();
-    let departed = || shrine.borrow().entries.iter().any(|e| e.rec.id == id && e.handle.is_none());
-    while !departed() && t.elapsed() < Duration::from_secs(2) {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    if shrine::close(shrine, id).await.is_err() {
+    if !retire(shrine, id).await {
         return;
     }
     let how = if live.is_some() { "since the run finished" } else { "after it left" };
@@ -134,11 +144,8 @@ pub(super) fn orphans(shrine: &Shared, now: i64) {
         }
     }
     for id in due {
-        let shrine = shrine.clone();
-        tokio::task::spawn_local(async move {
-            orphan(&shrine, &id).await;
-            shrine.borrow_mut().rites.reaping.remove(&id);
-        });
+        let s = shrine.clone();
+        spawn(shrine, id.clone(), async move { orphan(&s, &id).await });
     }
 }
 
@@ -172,13 +179,8 @@ async fn orphan(shrine: &Shared, id: &str) {
         }
         return;
     }
-    let t = Instant::now();
-    let departed = || shrine.borrow().entries.iter().any(|e| e.rec.id == id && e.handle.is_none());
-    while !departed() && t.elapsed() < Duration::from_secs(2) {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
     let who = shrine.borrow().entries.iter().find(|e| e.rec.id == id).map(|e| e.rec.name.clone());
-    if shrine::close(shrine, id).await.is_ok() {
+    if retire(shrine, id).await {
         log(json!({"ev": "orphan", "id": id, "closed": who}));
     }
 }

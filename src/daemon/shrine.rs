@@ -379,11 +379,9 @@ pub(super) fn recall(
             return Err(format!("{} is still here", sh.entries[i].rec.name));
         }
         Some(i) => (sh.entries[i].rec.clone(), Some(i)),
+        // The departed record a lead's rights were checked on.
         None => {
-            let mut gone = sh.store.load_departed();
-            gone.retain(|r| r.name.eq_ignore_ascii_case(who) || r.id == who);
-            let r = gone.into_iter().max_by_key(|r| r.departed);
-            let r = r.ok_or_else(|| format!("no resident {who}"))?;
+            let r = super::lead::record(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
             if taken(&sh, &r.name) {
                 return Err(format!("{} is already here", r.name));
             }

@@ -76,11 +76,12 @@ pub(super) fn record(sh: &Shrine, who: &str) -> Option<Record> {
 
 /// Whether `lead` is here, with a wait open that names `id` and counts its turns.
 fn waited(sh: &Shrine, lead: &str, id: &str) -> bool {
-    !gone(sh, lead) && sh.waits.iter().any(|w| {
-        w.caller.as_deref() == Some(lead)
-            && w.until.is_none_or(|u| u == Until::Done)
-            && w.ids.iter().any(|i| i == id)
-    })
+    !gone(sh, lead)
+        && sh.waits.iter().any(|w| {
+            w.caller.as_deref() == Some(lead)
+                && w.until.is_none_or(|u| u == Until::Done)
+                && w.ids.iter().any(|i| i == id)
+        })
 }
 
 /// What a wait counts from: turns, needs, and whether its departure is known.

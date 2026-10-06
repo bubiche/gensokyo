@@ -92,7 +92,7 @@ const WAIT_MOST: u64 = 10 * 365 * 86400;
 /// Holds until the residents named have news since `caller` was last told (a lead about its own
 /// helpers) or since the wait began (anyone else): a turn ended, a dialog opened, or departed.
 /// With `any`, one of them; else each. A departure is news once; after that the one departed
-/// is left out, and a wait on nobody else ends at once, not met. Gives whether that came before
+/// is left out, and a wait on nobody else is refused. Gives whether that came before
 /// the timeout, and a report on every one named. When it came, what a lead is told of is
 /// collected: the next wait looks past it, and its gold is cleared.
 pub(super) async fn wait(
@@ -116,6 +116,10 @@ pub(super) async fn wait(
     if start.is_empty() {
         return Err("wait for whom? (a name or an id)".into());
     }
+    // Waited on again, they would end it at once, and the wait after that too.
+    if start.iter().all(|(id, base)| base.2 && gone(&shrine.borrow(), id)) {
+        return Err("all of them have left, and you were told so: nobody to wait on".into());
+    }
     let ids: Vec<String> = start.iter().map(|(id, _)| id.clone()).collect();
     let me = Rc::new(Waiting { caller: caller.map(String::from), ids, until: w.until });
     shrine.borrow_mut().waits.push(me.clone());
@@ -131,9 +135,6 @@ pub(super) async fn wait(
             let open = start.iter().filter(|(id, base)| !(base.2 && gone(&sh, id)));
             open.map(|(id, base)| news(&sh, id, *base, w.until)).collect()
         };
-        if news.is_empty() {
-            break false;
-        }
         if if w.any { news.contains(&true) } else { !news.contains(&false) } {
             break true;
         }

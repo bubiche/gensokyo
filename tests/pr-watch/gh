@@ -1,8 +1,11 @@
 #!/bin/sh
 # A stand-in for gh: `api graphql` prints $STUB_GH_ANSWER, or fails with STUB_GH_DOWN set;
-# `auth status` fails with STUB_GH_LOGGED_OUT set.
+# `auth token` fails with STUB_GH_LOGGED_OUT set, and `auth status` with either, since it asks
+# GitHub.
 case "$1 $2" in
-  "api graphql") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] && exec cat "$STUB_GH_ANSWER"; exit 1 ;;
-  "auth status") [ -z "${STUB_GH_LOGGED_OUT:-}" ] ;;
+  "api graphql") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] && exec cat "$STUB_GH_ANSWER"
+    echo "error connecting to api.github.com" >&2; exit 1 ;;
+  "auth token") [ -z "${STUB_GH_LOGGED_OUT:-}" ] && echo gho_stub ;;
+  "auth status") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] ;;
   *) echo "stub gh: $*" >&2; exit 2 ;;
 esac

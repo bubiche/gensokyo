@@ -1,6 +1,7 @@
 //! The PR watcher's probe, `share/probes/gh-prs`, against a stand-in `gh` that answers with
 //! recorded GraphQL replies (`tests/pr-watch/`): the same PRs must print the same bytes, a real
-//! change must not, and a failure prints the last list with a sentence.
+//! change must not, GitHub out of reach prints the last list as it was, and a failure the user
+//! must fix prints it with a sentence.
 
 mod common;
 
@@ -78,20 +79,20 @@ fn a_failure_prints_the_last_list_with_a_sentence_and_the_same_one_twice() {
     let dir = common::fresh("gh-prs-fail");
     let a = probe("a", None, &[]);
     let last = saved(&dir, "a.out", &a);
-    let down = probe("a", Some(&last), &[("STUB_GH_DOWN", "1")]);
-    let v: Value = serde_json::from_str(&down).unwrap();
-    assert_eq!(v["failure"], "GitHub could not be reached");
+    // Offline: the last list byte for byte, so nothing fires, and not taken for logged out.
+    assert_eq!(probe("a", Some(&last), &[("STUB_GH_DOWN", "1")]), a);
+
+    let out = probe("a", Some(&last), &[("STUB_GH_LOGGED_OUT", "1")]);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["failure"], "gh is not logged in (gh auth login)");
     let mut was: Value = serde_json::from_str(&a).unwrap();
     was["failure"] = v["failure"].clone();
     assert_eq!(v, was, "the last list, kept as it was");
     // Failing the same way prints the same bytes, so it fires once.
-    let again = saved(&dir, "down.out", &down);
-    assert_eq!(probe("a", Some(&again), &[("STUB_GH_DOWN", "1")]), down);
-    // Back up: the failure goes.
+    let again = saved(&dir, "out.out", &out);
+    assert_eq!(probe("a", Some(&again), &[("STUB_GH_LOGGED_OUT", "1")]), out);
+    // Logged in again: the failure goes.
     assert_eq!(probe("a", Some(&again), &[]), a);
-
-    let out = probe("a", Some(&last), &[("STUB_GH_LOGGED_OUT", "1")]);
-    assert!(out.contains("\"failure\":\"gh is not logged in (gh auth login)\""), "{out}");
     // Nothing to fall back on: no PRs, and the reason.
     let v: Value = serde_json::from_str(&probe("a", None, &[("STUB_GH_DOWN", "1")])).unwrap();
     assert_eq!((&v["prs"], &v["failure"]), (&json!([]), &json!("GitHub could not be reached")));

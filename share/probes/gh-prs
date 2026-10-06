@@ -7,8 +7,10 @@
 # (UNKNOWN) keeps the value it had last time ($GENSOKYO_PROBE_LAST). Titles are the one piece
 # of GitHub's text in it; no comment or review body ever is.
 #
-# A failure it can name prints the last list with a `failure` sentence and exits 0, so the
-# page says so once and repeats nothing while it lasts. Needs gh (logged in) and jq.
+# GitHub out of reach prints the last list as it was, so a dropped connection starts no run and
+# the page's date says how old it is. A failure the user must fix prints the last list with a
+# `failure` sentence and exits 0, so the page says so once and repeats nothing while it lasts.
+# gh's own complaints go to stderr. Needs gh (logged in) and jq.
 set -u
 last=${GENSOKYO_PROBE_LAST:-}
 [ -n "$last" ] && jq -e .prs "$last" >/dev/null 2>&1 || last=/dev/null
@@ -39,8 +41,10 @@ query='query {
     }
   }
 }'
-if ! raw=$(gh api graphql -f query="$query" 2>/dev/null); then
-  gh auth status >/dev/null 2>&1 || failed "gh is not logged in (gh auth login)"
+if ! raw=$(gh api graphql -f query="$query"); then
+  # `gh auth status` asks GitHub, and offline would say logged out; this looks only here.
+  gh auth token >/dev/null 2>&1 || failed "gh is not logged in (gh auth login)"
+  [ "$last" = /dev/null ] || { cat "$last"; exit 0; }
   failed "GitHub could not be reached"
 fi
 

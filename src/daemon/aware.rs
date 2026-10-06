@@ -318,6 +318,16 @@ impl Aware {
         }
     }
 
+    /// It left mid-turn, at work or at a dialog, as its hooks tell it: the turn ends here, with
+    /// no answer. Not the registry's word: a snapshot that lags a Stop would make up a turn.
+    pub fn left(&mut self) {
+        if self.running || matches!(self.pending, Some(Pending::Awaits | Pending::Asked)) {
+            self.running = false;
+            self.set(None, None);
+            self.end(Ended::Interrupted);
+        }
+    }
+
     /// What happened since the last call.
     pub fn take(&mut self) -> News {
         std::mem::take(&mut self.news)

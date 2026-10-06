@@ -468,7 +468,12 @@ fn depart(r: &mut Record, x: Option<resident::Exit>) {
 async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     let exit = handle.exited().await;
     let mut sh = shrine.borrow_mut();
-    let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id) else { return };
+    let Some(i) = sh.entries.iter().position(|e| e.rec.id == id) else { return };
+    // A turn it left in the middle of has ended all the same: its lead hears so, not of the
+    // turn before. Hooks after this find no handle and are dropped.
+    sh.entries[i].aware.left();
+    super::ingest::tally(&mut sh, i, None);
+    let e = &mut sh.entries[i];
     e.handle = None;
     depart(&mut e.rec, Some(exit));
     let rec = e.rec.clone();
@@ -603,8 +608,12 @@ pub(super) async fn leave_all(shrine: &Shared) {
     }
     let mut sh = shrine.borrow_mut();
     // A turn the leaving cut short has ended all the same, with no answer: a lead waiting on it
-    // hears so once both are back. Counted last, so a Stop that came meanwhile counts instead.
+    // hears so once both are back. Counted last, so a Stop that came meanwhile counts instead;
+    // one that has left was counted as it went.
     for i in 0..sh.entries.len() {
+        if sh.entries[i].handle.is_none() {
+            continue;
+        }
         sh.entries[i].aware.cut();
         super::ingest::tally(&mut sh, i, None);
     }

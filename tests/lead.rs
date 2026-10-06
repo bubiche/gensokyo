@@ -415,3 +415,29 @@ fn a_wait_that_ends_without_collecting_leaves_its_news_and_its_bells() {
     let (code, _) = waited(inside(&d, &lead, &["wait", "Sanae", "--any", "--timeout", "1s"]));
     assert_eq!(code, 3, "told already");
 }
+
+#[test]
+fn a_helper_closed_mid_turn_reports_that_turn_cut_short_not_the_one_before() {
+    let d = daemon("left", &[("STUB_IDLE", "600")]);
+    let lead = summon(&d, "Reimu");
+    let m = helper(&d, &lead, "Marisa");
+    assert_eq!(waited(inside(&d, &lead, &["wait", "Marisa", "--timeout", "5s"])).0, 0, "brief");
+    input(&d, "Marisa", "/hang");
+    status(&d, &m, "busy");
+    wait(|| me(&d, "Marisa")["state"] == "busy", "at work");
+    assert!(inside(&d, &lead, &["close", "Marisa"]).status.success());
+    let (code, l) =
+        waited(inside(&d, &lead, &["wait", "Marisa", "--until", "done", "--timeout", "5s"]));
+    assert_eq!(
+        (code, &l[0]["turns"], &l[0]["ended"], &l[0]["answer"]),
+        (0, &json!(2), &json!("interrupted"), &Value::Null),
+        "{l:?}"
+    );
+    let o = inside(&d, &lead, &["read", "Marisa"]);
+    assert!(out(&o).contains("turn 2 (interrupted)"), "{}", out(&o));
+    // A restart does not count it a second time.
+    let o = d.command(&["restart"]).stdin(Stdio::null()).output().unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    wait(|| me(&d, "Reimu")["pid"].is_number(), "the lead back");
+    assert_eq!(me(&d, "Marisa")["turns"], 2);
+}

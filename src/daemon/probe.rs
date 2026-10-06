@@ -86,11 +86,17 @@ pub(super) async fn run(argv: &[String], cwd: &str, d: &Dir, pid: impl FnOnce(i3
         .process_group(0);
     let failed =
         |how: String| Said { key: format!("failed: {how}\n").into_bytes(), failed: Some(how) };
+    // Never started, or stopped before it was done: what stderr it had is lost, and the run is
+    // pointed at this file all the same.
+    let cut = |how: String| {
+        let _ = write_atomic(&err(d), format!("gensokyo: {how}\n").as_bytes());
+        failed(how)
+    };
     // No stderr from an earlier run is left to be read as this one's.
     let _ = write_atomic(&err(d), b"");
     let mut child = match super::pty::locked(|| cmd.spawn()) {
         Ok(c) => c,
-        Err(e) => return failed(format!("it could not start: {e}")),
+        Err(e) => return cut(format!("it could not start: {e}")),
     };
     let group = child.id().map_or(0, |p| p as i32);
     pid(group);
@@ -107,7 +113,7 @@ pub(super) async fn run(argv: &[String], cwd: &str, d: &Dir, pid: impl FnOnce(i3
         Err(_) => {
             kill(group);
             let secs = limit().as_secs().max(1);
-            return failed(format!("it was still running after {secs}s, and was stopped"));
+            return cut(format!("it was still running after {secs}s, and was stopped"));
         }
     };
     let _ = write_atomic(&err(d), &e);

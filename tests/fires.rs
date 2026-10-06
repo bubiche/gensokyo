@@ -790,6 +790,8 @@ fn a_failing_probe_fires_once_then_again_when_it_works_and_a_slow_one_is_killed_
     wait(|| d.runs() == 4, "the timeout's fire");
     let id = d.list()[3]["id"].clone();
     assert!(d.stub(&id, "args").contains("still running after 3s, and was stopped"));
+    let err = std::fs::read_to_string(d.dir.join("rituals/watch/probe.err")).unwrap();
+    assert_eq!(err, "gensokyo: it was still running after 3s, and was stopped\n");
     let kid: i32 = std::fs::read_to_string(d.dir.join("kid")).unwrap().trim().parse().unwrap();
     wait(|| !alive(kid), "the probe's child killed with it");
     // Timing out again: once the second slow probe has been stopped, nothing more.

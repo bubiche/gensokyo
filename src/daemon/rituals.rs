@@ -258,7 +258,7 @@ fn probed(
         );
         if r.target() == Target::Branch {
             drop(hold);
-            return nudge(&shrine, &r, &d, &said, &label);
+            return nudge(&shrine, &r, &d, &said, &label, by_hand);
         }
         // The probe took its time: a run may have started meanwhile. The change waits for the
         // next fire, since nothing was marked fired.
@@ -653,12 +653,19 @@ enum Sent {
 
 /// A branch ritual's fire: each branch's news to the resident working on it, typed in as any
 /// prompt for a resident is. A failed probe, or output of the wrong shape, is said once.
-fn nudge(shrine: &Shared, r: &Ritual, d: &Dir, said: &super::probe::Said, label: &str) {
+fn nudge(
+    shrine: &Shared,
+    r: &Ritual,
+    d: &Dir,
+    said: &super::probe::Said,
+    label: &str,
+    by_hand: bool,
+) {
     if let Some(how) = &said.failed {
         return complain(shrine, r, d, now(), &format!("its probe failed ({how})"));
     }
     let out = said.key.strip_prefix(b"ok\n".as_slice()).unwrap_or(&said.key);
-    let (sends, bad) = match super::branch::route(shrine, r, d, out) {
+    let (sends, bad) = match super::branch::route(shrine, r, d, out, by_hand) {
         Ok(x) => x,
         Err(e) => return complain(shrine, r, d, now(), &e),
     };
@@ -667,6 +674,10 @@ fn nudge(shrine: &Shared, r: &Ritual, d: &Dir, said: &super::probe::Said, label:
         bad.filter(|b| shrine.borrow_mut().rites.warned.insert((r.slug.clone(), b.clone())))
     {
         d.note(now(), "left-out", &b);
+    }
+    if by_hand && sends.is_empty() {
+        let why = "no resident works on a branch its probe named with facts";
+        return undelivered(shrine, r, why);
     }
     for (id, n) in sends {
         let (shrine, r, label) = (shrine.clone(), r.clone(), format!("{label}, {}", n.key));

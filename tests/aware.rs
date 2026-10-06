@@ -434,3 +434,14 @@ fn a_remote_url_names_its_repo_by_the_path_after_the_host() {
         assert_eq!(tele::repo_path(url).as_deref(), want, "{url}");
     }
 }
+
+#[test]
+fn a_branch_is_cut_to_show_and_whole_to_match() {
+    let dir = std::env::temp_dir().join(format!("gsk-head-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    let long = format!("someone/{}", "a-long-branch-name-".repeat(5));
+    std::fs::write(dir.join(".git/HEAD"), format!("ref: refs/heads/{long}\n")).unwrap();
+    assert_eq!(tele::git_head(&dir).as_deref(), Some(long.as_str()));
+    assert_eq!(tele::git_branch(&dir).map(|b| b.chars().count()), Some(60));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

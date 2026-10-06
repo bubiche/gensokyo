@@ -1194,4 +1194,31 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     d.settle();
     d.settle();
     assert_eq!(typed(), 3, "cleared news typed");
+
+    // Held, and Sakuya leaves the branch before it is free: dropped, unrecorded. Back on it, the
+    // next fire brings the news.
+    let go = |dir: &std::path::Path| {
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": dir});
+        let (mut w, mut lines) = d.connect();
+        let list = json!({"t": "list", "id": 2});
+        writeln!(w, "{}\n{list}", json!({"t": "hook", "resident": id, "hook": hook})).unwrap();
+        next(&mut lines)["residents"][0]["branch"].clone()
+    };
+    d.busy(&id, true);
+    feed(json!({"acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED", "conflicts": true}}));
+    d.minute(7);
+    wait(|| d.evs("watch", "held").len() == 2, "held again");
+    assert_eq!(go(&repo), "main");
+    d.settle();
+    d.settle();
+    assert_eq!(typed(), 3, "typed after it left the branch");
+    assert_eq!(go(&wt), "nebel95/fix");
+    d.minute(8);
+    wait(|| typed() == 4, "the news once back");
+    assert!(d.stub(&id, "input").contains("conflicts: true"));
+
+    // By hand, nothing new: sent all the same.
+    assert_eq!(d.verb("run", "watch")["t"], "done");
+    wait(|| typed() == 5, "the fire by hand");
 }

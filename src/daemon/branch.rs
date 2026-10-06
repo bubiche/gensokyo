@@ -22,6 +22,8 @@ pub(super) struct Nudge {
     branch: String,
     /// Its facts as they are now: what is recorded as sent once it is typed.
     facts: Facts,
+    /// From a fire by hand, which sends what is there whether or not it is news.
+    by_hand: bool,
     pub(super) text: String,
 }
 
@@ -87,7 +89,7 @@ fn facts(v: &Value, bad: &mut Option<String>) -> Option<(Facts, Facts)> {
 /// Where a resident works now, and that place's repo and branch.
 fn place(dir: &str) -> Option<(String, String)> {
     let p = Path::new(dir);
-    Some((tele::git_repo(p)?, tele::git_branch(p)?))
+    Some((tele::git_repo(p)?, tele::git_head(p)?))
 }
 
 /// What a fire of branch ritual `r` sends, by resident id. Records what went away, and drops a
@@ -98,6 +100,7 @@ pub(super) fn route(
     r: &Ritual,
     d: &Dir,
     out: &[u8],
+    by_hand: bool,
 ) -> Result<Routed, String> {
     let Ok(Value::Object(all)) = serde_json::from_slice::<Value>(out) else {
         return Err(
@@ -142,8 +145,11 @@ pub(super) fn route(
             split(&key).map(|(r, b)| (r.to_string(), b.to_string())).unwrap_or_default();
         let here = places.iter().filter(|p| p.1 == repo && p.2 == branch);
         let Some(who) = here.max_by_key(|p| (p.3, p.4)).map(|p| p.0.clone()) else { continue };
-        let fresh: Vec<&String> =
-            f.keys().filter(|n| was.get(&key).and_then(|w| w.get(*n)) != f.get(*n)).collect();
+        let new = |n: &&String| by_hand || was.get(&key).and_then(|w| w.get(*n)) != f.get(*n);
+        let fresh: Vec<&String> = f.keys().filter(new).collect();
+        if fresh.is_empty() && by_hand {
+            continue;
+        }
         if fresh.is_empty() {
             // Its news went away before it could be told: a held fire for it gives up.
             sh.rites.waiting.remove(&(r.slug.clone(), who));
@@ -152,7 +158,7 @@ pub(super) fn route(
         let mut line: Vec<String> = fresh.iter().map(|n| format!("{n}: {}", f[*n])).collect();
         line.extend(f.iter().filter(|(n, _)| !fresh.contains(n)).map(|(n, v)| format!("{n}: {v}")));
         let text = fill(&r.prompt, &key, &branch, &line.join(", "), &context);
-        out.push((who, Nudge { key, repo, branch, facts: f, text }));
+        out.push((who, Nudge { key, repo, branch, facts: f, by_hand, text }));
     }
     Ok((out, bad))
 }
@@ -185,7 +191,8 @@ pub(super) fn still(shrine: &Shared, d: &Dir, id: &str, n: &Nudge) -> bool {
     let dir = e.here.as_ref().map_or(e.rec.cwd.clone(), |(_, d)| d.clone());
     let on = place(&dir).is_some_and(|(r, b)| r == n.repo && b == n.branch);
     let was = sent(d);
-    on && n.facts.iter().any(|(k, v)| was.get(&n.key).and_then(|w| w.get(k)) != Some(v))
+    on && (n.by_hand
+        || n.facts.iter().any(|(k, v)| was.get(&n.key).and_then(|w| w.get(k)) != Some(v)))
 }
 
 /// Typed in: these facts are what was sent.

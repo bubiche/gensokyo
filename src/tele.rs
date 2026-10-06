@@ -198,8 +198,14 @@ pub fn clean(s: &str, max: usize) -> String {
 }
 
 /// The checked-out branch of the repository holding `dir` (a detached HEAD gives its short
-/// hash), read from `HEAD` without running git. Worktrees' `.git` files are followed.
+/// hash), read from `HEAD` without running git, and cut to fit where it is shown. Worktrees'
+/// `.git` files are followed.
 pub fn git_branch(dir: &Path) -> Option<String> {
+    git_head(dir).map(|b| clean(&b, 60))
+}
+
+/// The same, whole: what a branch is matched by.
+pub fn git_head(dir: &Path) -> Option<String> {
     let top = dir.ancestors().find(|d| d.join(".git").exists())?;
     let dot = top.join(".git");
     let git = match std::fs::read_to_string(&dot) {
@@ -209,7 +215,7 @@ pub fn git_branch(dir: &Path) -> Option<String> {
     let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
     let head = head.trim();
     Some(match head.strip_prefix("ref: refs/heads/") {
-        Some(b) => clean(b, 60),
+        Some(b) => clean(b, usize::MAX),
         None => clean(head, 7),
     })
 }

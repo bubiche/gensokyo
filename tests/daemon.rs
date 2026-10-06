@@ -1114,7 +1114,8 @@ fn a_card_reaches_everyone_free_and_names_whoever_holds_a_dialog() {
         reimu()
     );
     assert!(!d.stub(&b["id"], "input").contains("You are"));
-    assert_eq!(d.list()[0]["state"], "resting");
+    // The card went in as her prompt, and its turn ended.
+    wait(|| d.list()[0]["state"] == "awaits", "the card's turn");
     let log: Vec<Value> = d.log().into_iter().filter(|l| l["ev"] == "cast").collect();
     assert_eq!((&log[0]["card"], &log[0]["sent"]), (&json!("roll-call"), &json!(["Reimu"])));
 
@@ -1208,6 +1209,8 @@ fn with_a_pasted_past(d: &Daemon) -> (Value, Client, Screen) {
     let paste = format!("\x1b[200~{}\x1b[201~\r", lines.join("\r"));
     c.send(json!({"t": "input", "who": r["id"], "bytes": paste.as_bytes()}));
     s.wait_for(&mut c, "> line59");
+    // Drawn before its hook says it went in: until then it is a draft, and no card goes in.
+    wait(|| d.list().iter().any(|x| x["id"] == r["id"] && x["blocked"].is_null()), "sent");
     (r, c, s)
 }
 
@@ -1244,6 +1247,9 @@ fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
     let (r, mut c, mut s) = with_a_pasted_past(&d);
     c.send(json!({"t": "input", "who": r["id"], "bytes": b"/mute\r"}));
     s.wait_for(&mut c, "muted");
+    // `/mute` fires no hook, so it still reads as typed text: Ctrl-C, as the user would.
+    c.send(json!({"t": "input", "who": r["id"], "bytes": b"\x03"}));
+    wait(|| d.list().iter().any(|x| x["id"] == r["id"] && x["blocked"].is_null()), "cleared");
     let done = cast_while_scrolling(&d, &r);
     assert!(done["error"].as_str().unwrap_or("").contains("never showed"), "{done}");
     // Muted, it would sit out the quit's /exit.

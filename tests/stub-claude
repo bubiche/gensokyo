@@ -19,9 +19,13 @@
 #                             /clear starts a new session id (the files below keep the first)
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
 # SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
-# prompt (the one on the command line too), a permission Notification on /perm,
-# AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer. With STUB_HOLD=1 the
-# command line's prompt gets no Stop until /finish: a run still going.
+# prompt (the one on the command line too), a permission Notification on /perm (the registry
+# says `waiting` until /esc, which dismisses it and ends the turn with no Stop, as Esc or a
+# denial does), AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer.
+# /fail is a prompt whose turn ends in StopFailure (an API error); /hang one with no Stop at
+# all, whose idle_prompt Notification comes $STUB_IDLE seconds later (default 2); /flood <n>
+# one whose answer is <n> bytes. With STUB_HOLD=1 the command line's prompt gets no Stop until
+# /finish: a run still going.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -269,7 +273,17 @@ $more"
     /mouse) printf '%s[?1000h%s[?1006h' "$esc" "$esc"; echo "mouse on" ;;
     /clear) rm -f "$STUB_STATE/$session.json"; session=$(uuidgen | tr 'A-Z' 'a-z')
             write_entry "$session" "$name" '"idle"'; fire SessionStart ', "source": "clear"'; echo "cleared" ;;
-    /perm) fire Notification ', "notification_type": "permission_prompt", "message": "Claude needs your permission"'; echo "asked permission" ;;
+    /perm) printf 'waiting\n' > "$STUB_STATE/$session.status"
+           fire Notification ', "notification_type": "permission_prompt", "message": "Claude needs your permission"'; echo "asked permission" ;;
+    /esc) printf 'idle\n' > "$STUB_STATE/$session.status"; echo "dismissed" ;;
+    /fail) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/fail"'; echo "> /fail"; submitted "$line"
+           fire StopFailure ', "error": "rate_limit", "error_details": "429"'; echo "API Error: rate limited" ;;
+    /hang) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/hang"'; echo "> /hang"; submitted "$line"
+           ( sleep "${STUB_IDLE:-2}"; fire Notification ', "notification_type": "idle_prompt", "message": "Claude is waiting for your input"' ) & ;;
+    /flood\ *) n=${line#/flood }
+               fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/flood"'; echo "> $line"; submitted "$line"
+               fire Stop ", \"permission_mode\": \"default\", \"last_assistant_message\": \"flood $n\\n$(head -c "$n" /dev/zero | tr '\0' x)\""
+               echo "flooded $n" ;;
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
     /finish) fire Stop ', "permission_mode": "default", "last_assistant_message": "finished"'; echo "finished" ;;

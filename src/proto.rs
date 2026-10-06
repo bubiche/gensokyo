@@ -1,13 +1,13 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
 //! `watch`, `view`, `unview`, `input`, `resize`, `focus`, `hook` and `statusline` are answered
-//! only when they fail. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
+//! only when they fail; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
 use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 6;
+pub const PROTO: u32 = 7;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -89,6 +89,15 @@ pub enum Request {
     },
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
+    /// Held until the residents named have news: a turn ended, a dialog or question opened, or
+    /// they departed. Answered with `waited`, whether that came or the timeout did.
+    Wait(Wait),
+    /// A resident's last answer, kept past its departure; with `screen`, its live screen as text.
+    Read {
+        who: String,
+        #[serde(default)]
+        screen: bool,
+    },
     /// The client's host terminal gained or lost focus. Until it first says, it has not.
     Focus {
         on: bool,
@@ -126,6 +135,66 @@ pub struct Hook {
     pub tool: Option<String>,
     /// One line: the question asked, the notification's message, or the reply's first line.
     pub text: Option<String>,
+    /// The reply itself, on `Stop` and `StopFailure`: what `read` gives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+}
+
+/// How a turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ended {
+    /// With a `Stop`, and its answer.
+    Stop,
+    /// On an API error (`StopFailure`).
+    Failed,
+    /// At a dialog (Esc, a denial) or cut short by a restart: no answer.
+    Interrupted,
+    /// With no `Stop` and no dialog: Claude Code's idle notice stood in for it, so its answer
+    /// is not known.
+    Unreported,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Wait {
+    /// Residents by name, slot or id, read once as the wait begins.
+    pub who: Vec<String>,
+    /// Back when any one of them has news, rather than each.
+    #[serde(default)]
+    pub any: bool,
+    /// Only this kind of news counts; every kind when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<Until>,
+    /// Seconds.
+    pub timeout: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Until {
+    /// A turn ended.
+    Done,
+    /// A dialog or a question opened.
+    Needs,
+    /// It departed.
+    Gone,
+}
+
+/// One resident as `wait` reports it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Report {
+    pub id: String,
+    pub name: String,
+    pub state: State,
+    /// Its turns ended and dialogs opened, ever; and whether either is news to this wait.
+    pub turns: u64,
+    pub needs: u64,
+    pub news: bool,
+    /// How its last turn ended, and that turn's answer, first line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended: Option<Ended>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
 }
 
 /// A resident's last status line report. Every field is missing until Claude Code sends it.
@@ -322,6 +391,12 @@ pub enum Reply {
         id: u64,
         error: String,
     },
+    /// A `wait`'s end: `met` false when its timeout came first.
+    Waited {
+        id: u64,
+        met: bool,
+        residents: Vec<Report>,
+    },
     /// Event: the shrine changed.
     Residents {
         residents: Vec<Resident>,
@@ -395,4 +470,12 @@ pub struct Resident {
     /// Done with the last prompt it was given, and nothing waits on the user.
     #[serde(default)]
     pub finished: bool,
+    /// The resident that summoned it, by id: its lead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Turns ended and dialogs or questions opened, over its life.
+    #[serde(default)]
+    pub turns: u64,
+    #[serde(default)]
+    pub needs: u64,
 }

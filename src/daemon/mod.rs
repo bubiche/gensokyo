@@ -6,6 +6,7 @@ mod headless;
 mod ingest;
 mod keep;
 pub mod launch;
+mod lead;
 mod log;
 mod notify;
 pub mod pty;

@@ -482,7 +482,7 @@ impl App {
             return;
         };
         match r {
-            Reply::Welcome { .. } => {}
+            Reply::Welcome { .. } | Reply::Waited { .. } => {}
             Reply::Rituals { rituals, .. } => self.rituals(rituals),
             Reply::Notice { text } => {
                 let text = crate::tele::clean(&text, 200);

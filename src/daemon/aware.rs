@@ -6,7 +6,7 @@
 //! raised (a permission prompt, a finished turn), then resting. The registry counts only when
 //! its snapshot began after the newest hook: one taken before a `Stop` knows nothing of it.
 
-use crate::proto::{Hook, State};
+use crate::proto::{Ended, Hook, State};
 use crate::tele;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +47,16 @@ pub struct Aware {
     /// The user has typed into its input line since its last prompt. A card or a ritual's
     /// prompt pasted now would go in with it, as one prompt (seen on 2.1.289).
     drafting: bool,
+    news: News,
+}
+
+/// What happened since `take` last asked: turns ended, how the last of them did, and dialogs
+/// or questions opened.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct News {
+    pub ends: u32,
+    pub ended: Option<Ended>,
+    pub opened: u32,
 }
 
 /// What a resident's input line has in it: something the user typed and has not sent.
@@ -146,6 +156,14 @@ impl Aware {
             ("Stop", _) => {
                 self.set(Some(Pending::Stopped), text);
                 self.running = false;
+                self.end(Ended::Stop);
+            }
+            // An API error ended the turn, in place of a Stop.
+            ("StopFailure", _) => {
+                let why = text.as_deref().unwrap_or("an API error");
+                self.set(Some(Pending::Stopped), Some(format!("stopped on {why}")));
+                self.running = false;
+                self.end(Ended::Failed);
             }
             // The turn holds until the dialog is answered. A question's own dialog brings a
             // permission_prompt too, some seconds in (2.1.283): it stays a question.
@@ -156,6 +174,7 @@ impl Aware {
                 if self.pending != Some(Pending::Asked) {
                     self.set(Some(Pending::Awaits), text);
                     self.shown = k == "permission_prompt";
+                    self.news.opened += 1;
                 }
                 self.running = false;
             }
@@ -164,12 +183,14 @@ impl Aware {
             ("Notification", Some("idle_prompt")) => {
                 if self.pending.is_none() && self.running {
                     self.set(Some(Pending::Stopped), None);
+                    self.end(Ended::Unreported);
                 }
                 self.running = false;
             }
             ("PreToolUse", _) if ask => {
                 self.set(Some(Pending::Asked), text);
                 self.shown = true;
+                self.news.opened += 1;
             }
             ("PostToolUse", _) if ask => {
                 if self.pending == Some(Pending::Asked) {
@@ -203,7 +224,8 @@ impl Aware {
             (Some(Registry::Idle), Some(Pending::Awaits | Pending::Asked))
                 if after && self.shown =>
             {
-                self.set(None, None)
+                self.set(None, None);
+                self.end(Ended::Interrupted);
             }
             _ => {}
         }
@@ -228,6 +250,18 @@ impl Aware {
             }
             _ => None,
         }
+    }
+
+    /// Neither at work, nor at a dialog or question it opened, nor holding a draft: resting, or
+    /// done. One the registry has yet to list counts.
+    pub fn idle(&self) -> bool {
+        !self.open() && !self.drafting && self.state() != State::Busy
+    }
+
+    /// A dialog the hooks or the registry show.
+    fn open(&self) -> bool {
+        matches!(self.pending, Some(Pending::Awaits | Pending::Asked))
+            || matches!(self.registry, Some((Registry::Waiting, _)))
     }
 
     /// In the last registry snapshot: other sessions can message it.
@@ -261,11 +295,37 @@ impl Aware {
     /// dialog the hooks or the registry show is open, which is what the keys went to. One still
     /// starting up counts as the input line: keys at a trust dialog are safer called a draft.
     pub fn typed(&mut self, draft: bool) {
-        let open = matches!(self.pending, Some(Pending::Awaits | Pending::Asked))
-            || matches!(self.registry, Some((Registry::Waiting, _)));
-        if !open {
+        if !self.open() {
             self.drafting = draft;
         }
+    }
+
+    /// A finished turn seen on its lead's behalf (`seen`) that nobody collected after all:
+    /// waiting on the user again.
+    pub fn unseen(&mut self) {
+        if self.pending.is_none() && !self.running {
+            self.pending = Some(Pending::Stopped);
+        }
+    }
+
+    /// Its turn cut short from outside (everyone leaving), at work or at a dialog: it ends here,
+    /// with no answer.
+    pub fn cut(&mut self) {
+        if self.state() == State::Busy || self.open() {
+            self.running = false;
+            self.set(None, None);
+            self.end(Ended::Interrupted);
+        }
+    }
+
+    /// What happened since the last call.
+    pub fn take(&mut self) -> News {
+        std::mem::take(&mut self.news)
+    }
+
+    fn end(&mut self, how: Ended) {
+        self.news.ends += 1;
+        self.news.ended = Some(how);
     }
 
     /// Typed to by gensokyo (a spell card, a ritual): whatever it waited to be told, it was.

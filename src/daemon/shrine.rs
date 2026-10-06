@@ -39,11 +39,24 @@ pub(super) struct Entry {
     pub(super) tele: Option<Telemetry>,
     /// A ritual run: since when it has been finished or departed, on the ritual clock.
     pub(super) idle_since: Option<i64>,
+    /// A helper whose lead has gone: since when it has also been finished or departed.
+    pub(super) orphan_since: Option<i64>,
+    /// A helper's finished turn kept quiet while its lead was busy, rung once the lead's turn
+    /// ends without collecting it.
+    pub(super) held: bool,
 }
 
 impl Entry {
     fn new(rec: Record, handle: Rc<Handle>) -> Entry {
-        Entry { rec, handle: Some(handle), aware: Aware::default(), tele: None, idle_since: None }
+        Entry {
+            rec,
+            handle: Some(handle),
+            aware: Aware::default(),
+            tele: None,
+            idle_since: None,
+            orphan_since: None,
+            held: false,
+        }
     }
 }
 
@@ -68,6 +81,8 @@ pub(super) struct Shrine {
     /// Someone typed into a resident since the registry was last asked: what they typed may
     /// have changed what only the registry sees (a permission granted, a `/rename`).
     pub(super) typed: bool,
+    /// Every `wait` held now.
+    pub(super) waits: Vec<Rc<super::lead::Waiting>>,
 }
 
 impl Shrine {
@@ -101,6 +116,9 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         telemetry: None,
         blocked: None,
         finished: false,
+        owner: r.owner.clone(),
+        turns: r.turns,
+        needs: r.needs,
     }
 }
 
@@ -176,6 +194,35 @@ fn launch(
 /// The longest first prompt: it goes on claude's command line.
 const PROMPT_MOST: usize = 64 * 1024;
 
+/// How many live helpers one lead may have: config `HELPERS`.
+fn helpers_most() -> usize {
+    crate::paths::config("HELPERS").and_then(|v| v.trim().parse().ok()).unwrap_or(5)
+}
+
+/// Whether resident `lead` may have one more live helper.
+fn room(sh: &Shrine, lead: &str) -> Result<(), String> {
+    let n = sh
+        .entries
+        .iter()
+        .filter(|e| e.handle.is_some() && e.rec.owner.as_deref() == Some(lead))
+        .count();
+    let most = helpers_most();
+    match n < most {
+        true => Ok(()),
+        false => Err(format!(
+            "you have {n} helpers here, the most you may (config HELPERS={most}): close one first"
+        )),
+    }
+}
+
+/// A lead's name, wherever its record is.
+fn lead_name(sh: &Shrine, id: &str) -> Option<String> {
+    match sh.entries.iter().find(|e| e.rec.id == id) {
+        Some(e) => Some(e.rec.name.clone()),
+        None => sh.store.load_departed_id(id).map(|r| r.name),
+    }
+}
+
 /// `caller` is the resident asking, if one is. Nobody watches what a resident summons, so a
 /// directory Claude Code was never trusted in is refused: the new one would sit at the trust
 /// prompt, looking as if it were resting. The user's own summon shows them that prompt.
@@ -194,6 +241,20 @@ pub(super) fn summon(
     if let Some(t) = allowed_tools.iter().find(|t| t.starts_with('-')) {
         return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
     }
+    // A resident's summon is a helper of its own.
+    if let Some(c) = caller {
+        let sh = shrine.borrow();
+        let me = sh.entries.iter().find(|e| e.rec.id == c && e.handle.is_some());
+        let me = me.ok_or("GENSOKYO_RESIDENT names no resident here, so nobody would lead it")?;
+        if let Some(lead) = &me.rec.owner {
+            let lead = lead_name(&sh, lead).unwrap_or_else(|| "your lead".into());
+            return Err(format!(
+                "a helper does not summon residents ({lead} leads you): use subagents (the \
+                 Agent tool) to split your work"
+            ));
+        }
+        room(&sh, c)?;
+    }
     let dir = Path::new(&cwd);
     if caller.is_some() && dir.is_dir() && !super::rituals::trust(shrine).trusted(dir) {
         return Err(format!(
@@ -208,7 +269,11 @@ pub(super) fn summon(
         extra.push("--allowedTools".into());
         extra.extend(allowed_tools);
     }
-    start(shrine, Start { cwd, name, model, effort, mode, prompt, extra, ..Start::default() })
+    let owner = caller.map(String::from);
+    start(
+        shrine,
+        Start { cwd, name, model, effort, mode, prompt, extra, owner, ..Start::default() },
+    )
 }
 
 /// What a resident is started with: a summon's fields, and a ritual run's own.
@@ -224,6 +289,8 @@ pub(super) struct Start {
     pub(super) ritual: Option<String>,
     pub(super) keep: Option<u64>,
     pub(super) extra: Vec<String>,
+    /// Its lead, by id.
+    pub(super) owner: Option<String>,
 }
 
 pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String> {
@@ -246,6 +313,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     };
     let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
     let id = store::uuid();
+    let lead = s.owner.as_deref().and_then(|o| lead_name(&sh, o));
     let opts = launch::Options {
         id: &id,
         session: &id,
@@ -256,6 +324,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         prompt: s.prompt.as_deref(),
         resume: false,
         extra: &s.extra,
+        lead: lead.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -271,15 +340,19 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         ritual: s.ritual,
         keep: s.keep,
         extra: s.extra,
+        owner: s.owner,
+        turns: 0,
+        needs: 0,
+        told: (0, 0),
+        told_gone: false,
         launched: store::now(),
         departed: None,
         exit: None,
         signal: None,
     };
     let _ = sh.store.save(&rec);
-    log(
-        json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid, "ritual": rec.ritual}),
-    );
+    log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid,
+               "ritual": rec.ritual, "owner": rec.owner}));
     let r = info(&rec, Some(handle.pid));
     sh.entries.push(Entry::new(rec, handle));
     touch(&sh);
@@ -287,8 +360,13 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
 }
 
 /// A departed resident back in the shrine: one of this run's, or the newest in `departed/`
-/// by that name or id. Its session resumes with the flags it was summoned with.
-pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, String> {
+/// by that name or id. Its session resumes with the flags it was summoned with. `caller`, a
+/// lead recalling its helper, may not go over its count.
+pub(super) fn recall(
+    shrine: &Shared,
+    who: &str,
+    caller: Option<&str>,
+) -> Result<proto::Resident, String> {
     let mut sh = shrine.borrow_mut();
     if sh.quitting {
         return Err("the daemon is stopping".into());
@@ -309,10 +387,14 @@ pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, Stri
             (r, None)
         }
     };
+    if let Some(c) = caller {
+        room(&sh, c)?;
+    }
     let cwd = PathBuf::from(&rec.cwd);
     if !cwd.is_dir() {
         return Err(format!("{} is gone", rec.cwd));
     }
+    let lead = rec.owner.as_deref().and_then(|o| lead_name(&sh, o));
     let flag = |f: &str| flag(&rec.argv, f);
     let (model, effort, mode) = (flag("--model"), flag("--effort"), flag("--permission-mode"));
     // The session its hooks last named, which /clear moves on. One that never got a prompt has
@@ -328,12 +410,13 @@ pub(super) fn recall(shrine: &Shared, who: &str) -> Result<proto::Resident, Stri
         prompt: None,
         resume,
         extra: &rec.extra,
+        lead: lead.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let free =
         |n: u8| sh.entries.iter().enumerate().all(|(i, e)| Some(i) == at || e.rec.slot != Some(n));
     rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
-    (rec.program, rec.argv) = (program, argv);
+    (rec.program, rec.argv, rec.told_gone) = (program, argv, false);
     (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
     let _ = sh.store.restore(&rec);
     log(
@@ -391,6 +474,7 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     for v in sh.views.values_mut().filter(|v| v.0.as_deref() == Some(id.as_str())) {
         v.0 = None;
     }
+    super::lead::release(&mut sh, &id);
     touch(&sh);
     log(
         json!({"ev": "departed", "id": id, "name": rec.name, "exit": exit.code, "signal": exit.signal}),
@@ -514,6 +598,12 @@ pub(super) async fn leave_all(shrine: &Shared) {
         let _ = s.await;
     }
     let mut sh = shrine.borrow_mut();
+    // A turn the leaving cut short has ended all the same, with no answer: a lead waiting on it
+    // hears so once both are back. Counted last, so a Stop that came meanwhile counts instead.
+    for i in 0..sh.entries.len() {
+        sh.entries[i].aware.cut();
+        super::ingest::tally(&mut sh, i, None);
+    }
     for mut e in std::mem::take(&mut sh.entries) {
         if let Some(h) = &e.handle {
             depart(&mut e.rec, h.exit());

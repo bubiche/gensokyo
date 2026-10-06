@@ -1,5 +1,5 @@
 //! `keep`: a ritual run that has sat finished longer than its keep is asked to leave, and its
-//! record retired, so the session is still in recall.
+//! record retired, so the session is still in recall. So is a helper whose lead has gone.
 
 use super::log::log;
 use super::resident::Handle;
@@ -110,4 +110,75 @@ async fn take(shrine: &Shared, id: &str, launched: i64) {
     let how = if live.is_some() { "since the run finished" } else { "after it left" };
     Dir::of(&slug).note(now(), "closed", &format!("closed {name}, idle {keep_s} {how} (keep)"));
     log(json!({"ev": "ritual", "slug": slug, "closed": name}));
+}
+
+/// How long a helper whose lead has departed sits idle before it is closed, in seconds.
+const ORPHAN: i64 = 2 * 3600;
+
+/// Helpers whose lead has departed, however it went, and which have been idle (finished,
+/// resting or departed themselves) for `ORPHAN` since: closed, so they are still in recall. The
+/// lead's recall stops the clock, as does work.
+pub(super) fn orphans(shrine: &Shared, now: i64) {
+    let mut due = Vec::new();
+    {
+        let mut sh = shrine.borrow_mut();
+        for i in 0..sh.entries.len() {
+            let e = &sh.entries[i];
+            let left = e.rec.owner.as_ref().is_some_and(|l| !live(&sh, l)) && idle(e);
+            let e = &mut sh.entries[i];
+            e.orphan_since = left.then(|| e.orphan_since.unwrap_or(now));
+            let id = e.rec.id.clone();
+            if orphaned(&sh, &id, now) && sh.rites.reaping.insert(id.clone()) {
+                due.push(id);
+            }
+        }
+    }
+    for id in due {
+        let shrine = shrine.clone();
+        tokio::task::spawn_local(async move {
+            orphan(&shrine, &id).await;
+            shrine.borrow_mut().rites.reaping.remove(&id);
+        });
+    }
+}
+
+fn live(sh: &shrine::Shrine, id: &str) -> bool {
+    sh.entries.iter().any(|e| e.rec.id == id && e.handle.is_some())
+}
+
+fn idle(e: &shrine::Entry) -> bool {
+    e.handle.is_none() || e.aware.idle()
+}
+
+/// Still a helper left behind `ORPHAN` ago, idle, and on nobody's focused screen. Asked again
+/// before every /exit: its lead may be back, or the user at it.
+fn orphaned(sh: &shrine::Shrine, id: &str, now: i64) -> bool {
+    let Some(e) = sh.entries.iter().find(|e| e.rec.id == id) else { return false };
+    let lead_gone = e.rec.owner.as_ref().is_some_and(|l| !live(sh, l));
+    let due = e.orphan_since.is_some_and(|since| now - since >= ORPHAN);
+    !sh.quitting && lead_gone && due && idle(e) && !sh_views(&sh.views)(id)
+}
+
+/// One orphan asked to /exit, then out of the shrine once its exit is recorded. One that will
+/// not go starts its clock again, rather than being asked every tick.
+async fn orphan(shrine: &Shared, id: &str) {
+    if !orphaned(&shrine.borrow(), id, now()) {
+        return;
+    }
+    if live(&shrine.borrow(), id) && shrine::close(shrine, id).await.is_err() {
+        let mut sh = shrine.borrow_mut();
+        if let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id) {
+            e.orphan_since = Some(now());
+        }
+        return;
+    }
+    let t = Instant::now();
+    let departed = || shrine.borrow().entries.iter().any(|e| e.rec.id == id && e.handle.is_none());
+    while !departed() && t.elapsed() < Duration::from_secs(2) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let who = shrine.borrow().entries.iter().find(|e| e.rec.id == id).map(|e| e.rec.name.clone());
+    if shrine::close(shrine, id).await.is_ok() {
+        log(json!({"ev": "orphan", "id": id, "closed": who}));
+    }
 }

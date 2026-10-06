@@ -13,8 +13,16 @@ pub(super) fn after(sh: &mut Shrine, i: usize, before: State) {
     if watched {
         sh.entries[i].aware.seen();
     }
+    let mut now = sh.entries[i].aware.state();
+    if now.needs_you() && now != before && super::lead::hush(sh, i) {
+        now = sh.entries[i].aware.state();
+    }
+    // A lead done being busy: what it held of its helpers and did not collect rings now.
+    if before == State::Busy && now != State::Busy {
+        let lead = sh.entries[i].rec.id.clone();
+        super::lead::release(sh, &lead);
+    }
     let e = &sh.entries[i];
-    let now = e.aware.state();
     if now.needs_you() && now != before {
         log(json!({"ev": "notify", "id": e.rec.id, "state": now, "watched": watched}));
         let (who, name, text) = (e.rec.id.clone(), e.rec.name.clone(), e.aware.notice(&e.rec.name));

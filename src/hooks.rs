@@ -22,9 +22,13 @@ const SPOOL_LATER_MAX: u64 = 256 * 1024;
 /// How long a spool renamed aside waits before the poll reads it, in ms.
 pub const SPOOL_SETTLE: i64 = 1000;
 
+/// The longest answer kept, in bytes.
+pub const ANSWER_MOST: usize = 64 * 1024;
+
 fn stdin() -> Vec<u8> {
     let mut b = Vec::new();
-    let _ = std::io::stdin().take(1 << 20).read_to_end(&mut b);
+    // Whole: a payload cut short is no JSON, and a Stop lost with it is a turn never counted.
+    let _ = std::io::stdin().take(64 << 20).read_to_end(&mut b);
     b
 }
 
@@ -46,23 +50,42 @@ pub fn hook_main() {
 
 /// What the shrine keeps of a hook payload (2.1.260: `hook_event_name`, `session_id`, and per
 /// event `notification_type` + `message`, `source`, `permission_mode` on UserPromptSubmit and
-/// Stop, `tool_name` + `tool_input`, `last_assistant_message`). Never the prompt.
+/// Stop, `tool_name` + `tool_input`, `last_assistant_message`; `error` on StopFailure, 2.1.290).
+/// Never the prompt.
 pub fn reduce(j: &Value, at: i64) -> Hook {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str);
-    let text = ["/tool_input/questions/0/question", "/message", "/last_assistant_message"]
-        .iter()
-        .find_map(|p| s(p))
-        .map(|t| tele::clean(t, 80))
-        .filter(|t| !t.is_empty());
+    let event = s("/hook_event_name").unwrap_or_default();
+    let answer = ["Stop", "StopFailure"]
+        .contains(&event)
+        .then(|| s("/last_assistant_message"))
+        .flatten()
+        .map(|a| match cap(a, ANSWER_MOST) {
+            c if c.len() < a.len() => format!("{c}\n[cut at {} KB]", ANSWER_MOST / 1024),
+            c => c.to_string(),
+        });
+    let paths =
+        ["/error", "/tool_input/questions/0/question", "/message", "/last_assistant_message"];
+    let text =
+        paths.iter().find_map(|p| s(p)).map(|t| tele::clean(t, 80)).filter(|t| !t.is_empty());
     Hook {
-        event: s("/hook_event_name").unwrap_or_default().into(),
+        event: event.into(),
         session: s("/session_id").map(String::from),
         at,
         kind: s("/notification_type").or(s("/source")).map(String::from),
         mode: s("/permission_mode").map(String::from),
         tool: s("/tool_name").map(String::from),
         text,
+        answer,
     }
+}
+
+/// At most `n` bytes of `s`, cut at a character.
+pub fn cap(s: &str, n: usize) -> &str {
+    let mut end = s.len().min(n);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// hello, then the request, then the hello's answer, within `DELIVER`. A daemon that refused

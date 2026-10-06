@@ -71,6 +71,11 @@ fn bool_word(w: &str) -> bool {
     yes(w) || ["false", "no", "off", "0"].contains(&w.to_ascii_lowercase().as_str())
 }
 
+/// A length such as `90s`, `30m` or `2h`, in seconds.
+pub fn seconds(w: &str) -> Option<u64> {
+    keep_len(w).ok().flatten()
+}
+
 /// `30m`, `2h`, `1d`: Ok(None) for a keep that never runs out, Err for no length at all.
 fn keep_len(w: &str) -> Result<Option<u64>, ()> {
     if ["forever", "until_banished"].contains(&w) {

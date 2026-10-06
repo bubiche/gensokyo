@@ -117,13 +117,20 @@ fn aim(
 ) -> Result<(Vec<Target>, Vec<String>), String> {
     let live = |i: usize| sh.entries[i].handle.as_ref().filter(|h| h.exit().is_none());
     let me = |i: usize| caller == Some(sh.entries[i].rec.id.as_str());
+    // A resident's group cast leaves out itself and the helpers other leads have briefed.
+    let other = |i: usize| {
+        let owner = sh.entries[i].rec.owner.as_deref();
+        me(i) || caller.is_some_and(|c| owner.is_some_and(|o| o != c))
+    };
     let mut ids: Vec<usize> = Vec::new();
     let mut notes = Vec::new();
     let group = c.targets.iter().any(|t| ["all", "awaiting", "idle"].contains(&t.as_str()));
     for t in &c.targets {
         let hits: Vec<usize> = match t.as_str() {
             "all" | "awaiting" | "idle" => (0..sh.entries.len())
-                .filter(|&i| !me(i) && live(i).is_some() && sh.entries[i].aware.blocked().is_none())
+                .filter(|&i| {
+                    !other(i) && live(i).is_some() && sh.entries[i].aware.blocked().is_none()
+                })
                 .filter(|&i| {
                     let st = sh.entries[i].aware.state();
                     match t.as_str() {
@@ -143,7 +150,7 @@ fn aim(
     }
     if group {
         for (i, e) in sh.entries.iter().enumerate() {
-            if let (Some(_), Some(why), false) = (live(i), e.aware.blocked(), me(i)) {
+            if let (Some(_), Some(why), false) = (live(i), e.aware.blocked(), other(i)) {
                 notes.push(format!("{} {why}; left out", e.rec.name));
             }
         }

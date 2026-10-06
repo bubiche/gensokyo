@@ -94,6 +94,20 @@ fn shrine() -> Model {
     }
 }
 
+/// Reimu leads two helpers, summoned after Marisa and Cirno; Chen's lead is gone.
+fn helpers() -> Model {
+    let mut m = shrine();
+    let helper = |n, name, lead: &str| Resident {
+        owner: Some(lead.into()),
+        ..resident(n, name, "dev/gensokyo", None)
+    };
+    m.residents.push(helper(4, "Youmu", "id-Reimu"));
+    m.residents.push(helper(5, "Hieda-no-Akyuu-the-Ninth", "id-Reimu"));
+    m.residents.push(helper(6, "Chen", "id-Ran"));
+    m.residents[3].state = State::Busy;
+    m
+}
+
 fn summon(stage: Stage) -> Modal {
     Modal::Summon(Summon {
         stage,
@@ -186,6 +200,7 @@ fn screens() -> Vec<(&'static str, Model)> {
         shrine().residents.into_iter().filter(|r| r.departed.is_some()).collect();
     vec![
         ("residents", shrine()),
+        ("helpers", helpers()),
         ("aware", aware()),
         (
             "aware-focused-gold",
@@ -374,6 +389,15 @@ fn every_sidebar_button_and_line_resolves() {
     assert_eq!(g, Rect::new(26, 1, 93, 38));
     assert_eq!(map.at(g.x, g.y), Some((g, Hit::Grid)));
     assert_eq!(map.at(g.right() - 1, g.bottom() - 1), Some((g, Hit::Grid)));
+}
+
+#[test]
+fn a_helper_line_resolves_to_the_helper_beneath_its_lead() {
+    let map = hits(&helpers(), AREA);
+    // Drawn Reimu, Youmu, Hieda, Marisa, Cirno, Chen: rows 1 to 6.
+    for (row, i) in [0, 3, 4, 1, 2, 5].into_iter().enumerate() {
+        assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
+    }
 }
 
 #[test]

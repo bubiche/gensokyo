@@ -39,6 +39,21 @@ pub struct Record {
     /// A ritual run's own flags (`--add-dir`, `--allowedTools` …), kept for a recall.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<String>,
+    /// The resident that summoned this one, its lead, by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Turns ended and dialogs or questions opened, over its life: what `wait` counts. Kept
+    /// here so they survive a recall and a restart.
+    #[serde(default)]
+    pub turns: u64,
+    #[serde(default)]
+    pub needs: u64,
+    /// The `turns` and `needs` its lead has been told of, by a `wait` or a `read`, and whether
+    /// that it had departed.
+    #[serde(default)]
+    pub told: (u64, u64),
+    #[serde(default)]
+    pub told_gone: bool,
     pub launched: i64,
     pub departed: Option<i64>,
     pub exit: Option<i32>,
@@ -63,6 +78,11 @@ impl Store {
 
     pub fn departed(&self) -> PathBuf {
         self.root.join("departed")
+    }
+
+    /// Where resident `id`'s last answer is kept.
+    pub fn answer(&self, id: &str) -> PathBuf {
+        self.root.join("answers").join(format!("{id}.json"))
     }
 
     fn gone(&self) -> RefMut<'_, HashMap<String, Record>> {

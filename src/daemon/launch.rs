@@ -23,6 +23,8 @@ pub struct Options<'a> {
     pub resume: bool,
     /// A ritual's own flags. They may end in a variadic list, so a flag always follows them.
     pub extra: &'a [String],
+    /// A helper's lead, by name.
+    pub lead: Option<&'a str>,
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -74,7 +76,8 @@ pub fn settings(p: &Paths, id: &str, cwd: &Path) -> String {
     json!({
         "hooks": {
             "SessionStart": hook, "SessionEnd": hook, "UserPromptSubmit": hook,
-            "Stop": hook, "Notification": hook, "PreToolUse": ask, "PostToolUse": ask,
+            "Stop": hook, "StopFailure": hook, "Notification": hook, "PreToolUse": ask,
+            "PostToolUse": ask,
         },
         "statusLine": status,
         "sandbox": {"network": {"allowUnixSockets": [p.socket]}},
@@ -88,7 +91,7 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     a.extend(DISALLOWED.map(OsString::from));
     a.extend(["--settings".into(), settings(p, o.id, cwd).into()]);
     a.extend(["--plugin-dir".into(), p.share.join("plugin").into_os_string()]);
-    a.extend(["--append-system-prompt".into(), system_paragraph(o.name).into()]);
+    a.extend(["--append-system-prompt".into(), system_paragraph(o.name, o.lead).into()]);
     for (flag, v) in [("--model", o.model), ("--effort", o.effort), ("--permission-mode", o.mode)] {
         if let Some(v) = v {
             a.extend([flag.into(), v.into()]);
@@ -109,8 +112,20 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
 
 /// One paragraph appended to the system prompt. A resident's context is the user's budget, so it
 /// says only what no button can: its name, that the others can be written to (through the skill,
-/// which is not reached for unless named here), and where a standing schedule goes.
-pub fn system_paragraph(name: &str) -> String {
+/// which is not reached for unless named here), where a standing schedule goes, and how to lead
+/// helpers; a helper hears who its lead is instead.
+pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
+    let role = match lead {
+        None => "To hand work to residents you summon, brief, wait on and close yourself \
+                 (helpers), use the `gensokyo-lead` skill."
+            .to_string(),
+        Some(lead) => format!(
+            "You are a helper: the resident {lead} summoned you and gave you your task. When it \
+             is done, your last message is your report to {lead}, who reads it as it stands, so \
+             make it complete; leave no background task running. You cannot summon residents: \
+             use subagents (the Agent tool) to split your own work."
+        ),
+    };
     format!(
         "You are running inside gensokyo, a cockpit that runs several Claude Code sessions \
          (residents) side by side on this machine; your resident name is {name}. The other \
@@ -120,7 +135,7 @@ pub fn system_paragraph(name: &str) -> String {
          schedule, and to answer any question about what is scheduled or to change one, use the \
          `gensokyo-ritual` skill and never the built-in `schedule` skill, CronCreate or scheduled \
          tasks; a schedule here is read on this machine's own clock, so never convert a time you \
-         are given to UTC."
+         are given to UTC. {role}"
     )
 }
 

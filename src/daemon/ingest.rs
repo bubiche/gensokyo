@@ -1,12 +1,13 @@
 //! What residents report from inside: their hooks, which may come late through the spool,
 //! and their status line.
 
+use super::aware::News;
 use super::log::log;
 use super::notify::after;
 use super::shrine::{Shared, Shrine, touch};
 use super::store::{self, Record};
 use crate::hooks;
-use crate::proto::{Hook, Telemetry};
+use crate::proto::{Ended, Hook, Telemetry};
 use serde_json::json;
 
 /// One hook from inside a resident. A SessionStart moves its record on to the new session,
@@ -29,8 +30,27 @@ pub(super) fn hook(shrine: &Shared, resident: &str, h: Hook) {
         log(
             json!({"ev": "hook", "id": resident, "event": h.event, "kind": h.kind, "state": state}),
         );
+        tally(sh, i, h.answer.as_deref());
         after(sh, i, before);
     }
+}
+
+/// Turns ended and dialogs opened go into the record, and an ended turn's answer into its file,
+/// before anyone waiting hears of either.
+pub(super) fn tally(sh: &mut Shrine, i: usize, answer: Option<&str>) {
+    let news = sh.entries[i].aware.take();
+    if news == News::default() {
+        return;
+    }
+    let r = &mut sh.entries[i].rec;
+    r.turns += u64::from(news.ends);
+    r.needs += u64::from(news.opened);
+    let r = r.clone();
+    if let Some(how) = news.ended {
+        let text = answer.filter(|_| matches!(how, Ended::Stop | Ended::Failed));
+        super::lead::keep_answer(&sh.store, &r, how, text);
+    }
+    let _ = sh.store.save(&r);
 }
 
 fn rotate(sh: &mut Shrine, at: Option<usize>, resident: &str, session: &str, when: i64) {

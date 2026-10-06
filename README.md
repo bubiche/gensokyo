@@ -117,6 +117,8 @@ gensokyo resume [Marisa]                # the departed; with a name, slot or id,
 gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
 gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar
 gensokyo broadcast status-report all    # cast a spell card
+gensokyo wait Marisa Sanae --any        # until one has news: a turn ended, a dialog, gone
+gensokyo read Marisa [--screen]         # its last answer, kept after it leaves; or its screen
 gensokyo ritual                         # what is scheduled (the section below)
 gensokyo quit                           # everyone /exit, then the daemon stops
 gensokyo restart                        # a new daemon, the same residents
@@ -124,10 +126,18 @@ gensokyo help <command>                 # every command has its own
 ```
 
 Run from inside a resident, by its skills, these have a resident's rights rather than yours. It
-can list, summon, cast and keep rituals as its skill does, but not `quit`, and not close, banish or recall a resident. It can't
-type into, show or resize any screen either: the screens and keyboards are yours. A card it casts
-at `all` leaves it out. Its `new` refuses a directory Claude Code was never trusted in, because
-nobody would be there to answer the trust dialog.
+can list, summon, cast and keep rituals as its skill does, but not `quit`. It can't type into,
+show or resize any screen either: the screens and keyboards are yours. A card it casts at `all`
+leaves it out, and the helpers of other residents. Its `new` refuses a directory Claude Code was
+never trusted in, because nobody would be there to answer the trust dialog.
+
+A resident it summons is its **helper**, and it the helper's **lead**; the sidebar draws helpers
+under their lead with `└`. Only the lead and you may close, banish, recall, `wait` on or `read` a
+helper. A lead has at most 5 live helpers (`HELPERS=` in the config), and a helper can't summon,
+though it keeps Claude Code's own subagents. `wait` counts turns, so one that ended before it
+began still counts; from a lead it tells what is new since the lead was last told, and exits 0
+on news, 3 on its timeout (`--timeout`, 30m) and 4 when the daemon went away. A helper whose lead
+has left for good is closed after two hours idle; a lead recalled before then keeps it.
 
 ## When a resident needs you
 
@@ -137,6 +147,9 @@ doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a
 have not seen, `✧` a question it asked. A resident that needs you is gold. When it is not the
 one on screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
 (OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
+A helper's finished turn is quiet while its lead waits on it or is busy, since the lead will
+read it; it rings once the lead's turn ends without having done so. Its permission prompts and
+questions always ring: only you can answer them.
 
 The status line reports feed the rest: each sidebar line shows the model and context used, the
 title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
@@ -272,10 +285,13 @@ shut through a fire makes it up at the next tick after it wakes.
 Almost nothing, on purpose: a resident's context window is your budget. Each is launched,
 without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
 `--append-system-prompt`: the name it lives under, that the first message of an exchange with
-another session is the `gensokyo-peers` skill's to write, and that standing schedules are
-gensokyo's, not Claude Code's own. The two skills carry what a click cannot: `gensokyo-peers`
-writes an opening message that says who is asking, what is wanted, the round cap and the reply
-address; `gensokyo-ritual` turns "every weekday at 9:05" into a ritual file. Only a skill's
+another session is the `gensokyo-peers` skill's to write, that standing schedules are
+gensokyo's, not Claude Code's own, and that helpers are the `gensokyo-lead` skill's. A helper
+hears instead who its lead is, and that its last message is its report. The three skills carry
+what a click cannot: `gensokyo-peers` writes an opening message that says who is asking, what is
+wanted, the round cap and the reply address; `gensokyo-ritual` turns "every weekday at 9:05" into
+a ritual file; `gensokyo-lead` briefs helpers, waits on them in the background and reads their
+reports. Only a skill's
 description sits in a resident's context; the rest is read when it is used.
 
 ## Files
@@ -283,7 +299,7 @@ description sits in a resident's context; the rest is read when it is used.
 - `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `rituals/`.
   `GENSOKYO_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gensokyo`.
 - `~/.local/state/gensokyo/`: `residents/` and `departed/` (one JSON record each),
-  `daemon.log`, `run/` (the socket and locks) and each ritual's notes and journal.
+  `answers/` (each resident's last answer), `daemon.log`, `run/` (the socket and locks) and each ritual's notes and journal.
   `GENSOKYO_STATE_DIR` moves it.
 
 ## Developing

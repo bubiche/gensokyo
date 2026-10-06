@@ -183,6 +183,7 @@ fn tick(shrine: &Shared, now: i64, catch: bool) {
         }
     }
     super::keep::reap(shrine, now);
+    super::keep::orphans(shrine, now);
     push(shrine, &rs, &bad);
 }
 
@@ -294,6 +295,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
         ritual: Some(r.slug.clone()),
         keep,
         extra,
+        owner: None,
     };
     start(shrine, s).map(|res| res.id)
 }
@@ -321,7 +323,7 @@ async fn persistent(shrine: &Shared, r: &Ritual, label: &str) {
         return;
     };
     let here = shrine.borrow().entries.iter().any(|e| e.rec.id == id && e.handle.is_some());
-    if !here && let Err(e) = recall(shrine, &id) {
+    if !here && let Err(e) = recall(shrine, &id, None) {
         let why = format!("could not recall the session this ritual keeps ({id}): {e}");
         return undelivered(shrine, r, &why);
     }

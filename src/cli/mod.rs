@@ -9,7 +9,7 @@ mod rituals;
 pub use conn::{Error, connect_or_start, peer_pid, refusal, request};
 
 use crate::paths;
-use crate::proto::{Cast, Reply, Request, Summon};
+use crate::proto::{Cast, Reply, Request, Summon, Until, Wait};
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
@@ -53,6 +53,33 @@ enum Cmd {
     Close {
         /// A name, a slot or an id
         who: String,
+    },
+    /// Hold until residents have news (a turn ended, a dialog opened, or gone), then one JSON line each
+    ///
+    /// From inside a resident, about its own helpers: news since it was last told of them, by a
+    /// wait that was met or a read. A departure ends any wait. Exit 0 once the news came, 3 on
+    /// the timeout, 4 when the daemon went away (a restart: wait again).
+    Wait {
+        /// Names, slots or ids
+        #[arg(required = true)]
+        who: Vec<String>,
+        /// Back when any one of them has news, rather than each
+        #[arg(long)]
+        any: bool,
+        /// Only this kind of news counts
+        #[arg(long, value_enum)]
+        until: Option<Until>,
+        /// The longest to wait: 90s, 30m, 2h
+        #[arg(long, default_value = "30m")]
+        timeout: String,
+    },
+    /// What a resident answered last, kept after it departs; --screen for its screen as text
+    Read {
+        /// A name, a slot or an id
+        who: String,
+        /// Its screen now, instead
+        #[arg(long)]
+        screen: bool,
     },
     /// Cast a spell card at residents; with no card, list the cards
     #[command(visible_alias = "cast")]
@@ -151,6 +178,8 @@ pub fn main(args: &[String]) -> ExitCode {
         Cmd::Banish { who } => say(request(Request::Banish { who }, false)),
         Cmd::Close { who } => say(request(Request::Close { who }, false)),
         Cmd::Broadcast { card, targets, with } => broadcast(card, targets, with),
+        Cmd::Wait { who, any, until, timeout } => return wait(who, any, until, &timeout),
+        Cmd::Read { who, screen } => say(request(Request::Read { who, screen }, false)),
         Cmd::Ritual { cmd } => rituals::main(cmd),
         Cmd::Quit => match request(Request::Quit, false) {
             Err(Error::NotRunning) => Ok(()),
@@ -217,6 +246,36 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         println!("usage {}", usage.join("   "));
     }
     Ok(())
+}
+
+/// Exit 0 when the news came, 3 on the timeout, 4 when the daemon went away, 1 on an error.
+/// Whatever the exit, a line with `news` has something to read: only a met wait collects it.
+fn wait(who: Vec<String>, any: bool, until: Option<Until>, timeout: &str) -> ExitCode {
+    let Some(timeout) = crate::ritual::seconds(timeout) else {
+        eprintln!("gensokyo: --timeout {timeout} is not a length (90s, 30m, 2h)");
+        return ExitCode::from(2);
+    };
+    match request(Request::Wait(Wait { who, any, until, timeout }), false) {
+        Ok(Reply::Waited { met, residents, .. }) => {
+            for r in &residents {
+                println!("{}", serde_json::to_string(r).unwrap_or_default());
+            }
+            ExitCode::from(if met { 0 } else { 3 })
+        }
+        // Hung up on: the daemon went away (a restart). One not there at all is an error.
+        Err(e @ Error::Io(_)) => {
+            eprintln!("gensokyo: {e}");
+            ExitCode::from(4)
+        }
+        Ok(other) => {
+            eprintln!("gensokyo: unexpected reply {other:?}");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("gensokyo: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn resume(who: &str) -> Result<(), String> {

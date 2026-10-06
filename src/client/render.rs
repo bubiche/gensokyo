@@ -359,8 +359,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             buf.set_stringn(inner.x, y + i as u16, l, w, style);
         }
     }
-    for (i, r) in m.residents.iter().enumerate() {
-        let y = inner.y + i as u16;
+    for (row, (i, helper)) in drawn(&m.residents).into_iter().enumerate() {
+        let r = &m.residents[i];
+        let y = inner.y + row as u16;
         if y + 1 >= bottom {
             break;
         }
@@ -387,12 +388,34 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 t.model.as_deref().map(tele::model_short).unwrap_or_default()
             )
         });
-        let left = format!("{slot} {} {}", r.state.glyph(), r.name);
+        let tee = if helper { "└" } else { "" };
+        let left = format!("{slot} {tee}{} {}", r.state.glyph(), r.name);
         let rw = (width(&right) as usize).min(w);
         buf.set_stringn(inner.x, y, left, w - rw, style);
         buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
         hits.push(line, Hit::Resident(i));
     }
+}
+
+/// The sidebar's order: each resident, and below it the helpers it leads. A helper whose lead
+/// is not in the list stands on its own. Each is its index into `residents`, and whether it is
+/// drawn as a helper.
+fn drawn(residents: &[Resident]) -> Vec<(usize, bool)> {
+    let lead = |r: &Resident| {
+        let o = r.owner.as_deref()?;
+        residents.iter().position(|l| l.id == o && l.id != r.id && lead_free(residents, l))
+    };
+    let (all, mut v) = (0..residents.len(), Vec::new());
+    for i in all.clone().filter(|&i| lead(&residents[i]).is_none()) {
+        v.push((i, false));
+        v.extend(all.clone().filter(|&j| lead(&residents[j]) == Some(i)).map(|j| (j, true)));
+    }
+    v
+}
+
+/// Not drawn under anyone: its lead, if it names one, is not in the list.
+fn lead_free(residents: &[Resident], r: &Resident) -> bool {
+    r.owner.as_deref().is_none_or(|o| residents.iter().all(|l| l.id != o || l.id == r.id))
 }
 
 fn grid(fr: &Frame, g: Rect, buf: &mut Buffer) {

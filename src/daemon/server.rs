@@ -4,12 +4,13 @@
 
 use super::cards;
 use super::ingest::{hook, replay, statusline};
+use super::lead;
 use super::log::log;
 use super::notify::looked;
 use super::registry::poll;
 use super::rituals;
 use super::shrine::{
-    SIZE, Shared, Shrine, View, banish, close, find, leave_all, list, live, recall, summon,
+    SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
 };
 use super::store::{self, Store};
 use super::stream::{self, send, send_written, view, writer};
@@ -38,7 +39,7 @@ pub fn main() -> std::process::ExitCode {
     // SAFETY: one thread still; the runtime starts below.
     unsafe { std::env::set_var("GENSOKYO_STATE_DIR", &root) };
     let run = root.join("run");
-    for d in [&run, &root.join("residents"), &root.join("departed")] {
+    for d in [&run, &root.join("residents"), &root.join("departed"), &root.join("answers")] {
         if let Err(e) = std::fs::create_dir_all(d) {
             eprintln!("gensokyo daemon: {}: {e}", d.display());
             return std::process::ExitCode::FAILURE;
@@ -121,6 +122,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         rites: Default::default(),
         refused: HashSet::new(),
         typed: false,
+        waits: Vec::new(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -172,7 +174,7 @@ fn comeback(shrine: &Shared) {
     let Ok(ids) = std::fs::read_to_string(&path) else { return };
     let _ = std::fs::remove_file(&path);
     for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        match recall(shrine, id) {
+        match recall(shrine, id, None) {
             Ok(r) => log(json!({"ev": "comeback", "id": id, "name": r.name})),
             Err(e) => log(json!({"ev": "comeback", "id": id, "error": e})),
         }
@@ -243,6 +245,8 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
     // The resident this connection runs inside, as its hello said: it has a resident's rights.
     let mut caller: Option<String> = None;
     let (mut watching, mut viewing): (Option<AbortHandle>, Option<AbortHandle>) = (None, None);
+    // Its `wait`s, which end with it.
+    let mut waits: Vec<AbortHandle> = Vec::new();
     let mut viewed = false;
     while let Ok(Some(line)) = lines.next_line().await {
         let Envelope { id, req } = match serde_json::from_str::<Envelope>(&line) {
@@ -291,8 +295,27 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                     .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
             ),
             Request::Recall { who } => Some(
-                recall(&shrine, &who)
+                recall(&shrine, &who, caller.as_deref())
                     .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+            ),
+            Request::Wait(w) => {
+                let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
+                let task = tokio::task::spawn_local(async move {
+                    let r = lead::wait(&shrine, w, caller.as_deref()).await;
+                    let r = r.map_or_else(fail, |(met, residents)| Reply::Waited {
+                        id,
+                        met,
+                        residents,
+                    });
+                    send(&out, &r).await;
+                });
+                waits.retain(|w| !w.is_finished());
+                waits.push(task.abort_handle());
+                None
+            }
+            Request::Read { who, screen } => Some(
+                lead::read(&shrine, &who, screen, caller.as_deref())
+                    .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
             Request::Rituals => Some(rituals::listing(&shrine, id)),
             Request::Ritual { verb, name } => Some(
@@ -385,7 +408,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             send(&out, &r).await;
         }
     }
-    for t in [watching, viewing].into_iter().flatten() {
+    for t in [watching, viewing].into_iter().flatten().chain(waits) {
         t.abort();
     }
     shrine.borrow_mut().views.remove(&me);
@@ -453,16 +476,20 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
              size them (SendMessage reaches another resident)"
                 .into(),
         ),
-        Request::Close { who } | Request::Banish { who } | Request::Recall { who } => {
-            mine(&shrine.borrow(), caller, who).err()
-        }
+        Request::Close { who }
+        | Request::Banish { who }
+        | Request::Recall { who }
+        | Request::Read { who, .. } => mine(&shrine.borrow(), caller, who).err(),
+        Request::Wait(w) => w.who.iter().find_map(|who| mine(&shrine.borrow(), caller, who).err()),
         _ => None,
     }
 }
 
-/// Whether resident `caller` may close, banish or recall `who`: only one it leads may be.
+/// Whether resident `caller` may close, banish, recall, read or wait on `who`: only one it leads
+/// may be, here or departed.
 fn mine(sh: &Shrine, caller: &str, who: &str) -> Result<(), String> {
-    match find(sh, who).map(|i| &sh.entries[i].rec) {
+    match lead::record(sh, who) {
+        Some(r) if r.owner.as_deref() == Some(caller) => Ok(()),
         Some(r) if r.id == caller => Err(format!(
             "{} is you: finish your turn instead, and the user closes or banishes you",
             r.name

@@ -408,3 +408,8 @@ same into `dist/`.
 
 `GENSOKYO_CLAUDE` points at another `claude`, `GENSOKYO_CLIENT_LOG` writes the client's own
 trace, and `daemon.log` has one JSON line per event, panics included.
+
+## License
+
+MIT (`LICENSE`). A release also carries Ghostty's license (`LICENSES/ghostty.txt`), whose
+terminal emulator is built into the binary.

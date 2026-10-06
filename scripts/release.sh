@@ -7,7 +7,7 @@
 #   scripts/release.sh --bin PATH        package that binary instead of building one
 #
 # One tarball per architecture, each unpacking into one gensokyo-<version>/ directory:
-#   bin/gensokyo  share/  install.sh  uninstall.sh  README.md  LICENSES/  VERSION
+#   bin/gensokyo  share/  install.sh  uninstall.sh  README.md  LICENSE  LICENSES/  VERSION
 # VERSION in the tree is what marks it as a release install, for `gensokyo update`.
 #
 # Only arm64 is built: an x86_64 build would need the x86_64-apple-darwin Rust target and Zig
@@ -68,7 +68,7 @@ stage="$work/$prefix"
 mkdir -p "$stage/bin" "$stage/LICENSES"
 cp "$bin" "$stage/bin/gensokyo"
 cp -R "$root/share" "$stage/"
-cp "$root/install.sh" "$root/uninstall.sh" "$root/README.md" "$stage/"
+cp "$root/install.sh" "$root/uninstall.sh" "$root/README.md" "$root/LICENSE" "$stage/"
 cp "$license" "$stage/LICENSES/ghostty.txt"
 printf '%s\n' "$version" > "$stage/VERSION"
 chmod 755 "$stage/bin/gensokyo" "$stage/install.sh" "$stage/uninstall.sh"
@@ -86,7 +86,7 @@ rm -f "$out/$name"
 ( cd "$work" && COPYFILE_DISABLE=1 tar -czf "$out/$name" "$prefix" )
 list=$(tar -tzf "$out/$name")
 for want in bin/gensokyo share/names.txt share/plugin/.claude-plugin/plugin.json install.sh \
-            uninstall.sh README.md LICENSES/ghostty.txt VERSION share/probes/gh-prs; do
+            uninstall.sh README.md LICENSE LICENSES/ghostty.txt VERSION share/probes/gh-prs; do
   printf '%s\n' "$list" | grep -q "^$prefix/$want\$" || die "$name is missing $want"
 done
 # A probe that is not executable is refused when a ritual names it.

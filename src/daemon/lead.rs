@@ -124,6 +124,7 @@ pub(super) async fn wait(
     let ids: Vec<String> = start.iter().map(|(id, _)| id.clone()).collect();
     let me = Rc::new(Waiting { caller: caller.map(String::from), ids, until: w.until });
     shrine.borrow_mut().waits.push(me.clone());
+    log(json!({"ev": "wait", "caller": caller, "ids": me.ids}));
     let _guard = Guard(shrine.clone(), me);
     // Subscribed before the first look: a change between the two wakes the loop.
     let mut changed = shrine.borrow().changed.subscribe();

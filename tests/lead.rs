@@ -81,6 +81,15 @@ fn input(d: &Daemon, who: &str, text: &str) {
     assert_eq!(next(&mut lines)["t"], "list");
 }
 
+/// `gensokyo wait <args>` from inside `lead`, in the background, once the daemon holds it.
+fn waiting(d: &Daemon, lead: &Value, args: &[&str]) -> Child {
+    let held = || d.log().iter().filter(|l| l["ev"] == "wait" && l["ids"].is_array()).count();
+    let n = held();
+    let c = spawn(d, lead, args);
+    wait(|| held() > n, "the wait held");
+    c
+}
+
 /// A `wait`'s exit code and lines.
 fn waited(o: Output) -> (i32, Vec<Value>) {
     let lines = out(&o).lines().map(|l| serde_json::from_str(l).unwrap()).collect();
@@ -300,16 +309,13 @@ fn a_helpers_turn_rings_only_when_its_lead_will_not_collect_it() {
     wait(|| me(&d, "Marisa")["state"] == "resting", "collected");
 
     // Its lead waits on it: quiet, and nothing waits on the user afterwards.
-    let bg = spawn(&d, &lead, &["wait", "Marisa", "--timeout", "15s"]);
-    wait(|| d.log().iter().any(|l| l["ev"] == "hook" && l["event"] == "SessionStart"), "up");
-    std::thread::sleep(Duration::from_millis(300));
+    let bg = waiting(&d, &lead, &["wait", "Marisa", "--timeout", "15s"]);
     input(&d, "Marisa", "two");
     let (code, l) = waited(bg.wait_with_output().unwrap());
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: two")));
     assert_eq!(me(&d, "Marisa")["state"], "resting");
     // Its dialogs ring all the same, waited on or not: the lead cannot answer them.
-    let bg = spawn(&d, &lead, &["wait", "Marisa", "--until", "done", "--timeout", "15s"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let bg = waiting(&d, &lead, &["wait", "Marisa", "--until", "done", "--timeout", "15s"]);
     input(&d, "Marisa", "/perm");
     let n = notify(&mut events);
     assert_eq!(
@@ -383,8 +389,7 @@ fn a_wait_that_ends_without_collecting_leaves_its_news_and_its_bells() {
     writeln!(w, "{}", json!({"t": "watch"})).unwrap();
 
     // Waited on for each of two, killed after one finished: that one rings.
-    let mut bg = spawn(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "1m"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut bg = waiting(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "1m"]);
     input(&d, "Marisa", "one");
     wait(|| d.log().iter().any(|l| l["ev"] == "quiet"), "quiet while waited on");
     bg.kill().unwrap();
@@ -399,8 +404,7 @@ fn a_wait_that_ends_without_collecting_leaves_its_news_and_its_bells() {
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: one")));
 
     // A wait for dialogs does not keep a finished turn quiet.
-    let bg = spawn(&d, &lead, &["wait", "Marisa", "--until", "needs", "--timeout", "15s"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let bg = waiting(&d, &lead, &["wait", "Marisa", "--until", "needs", "--timeout", "15s"]);
     input(&d, "Marisa", "two");
     let n = notify(&mut events);
     assert_eq!(n["text"], "Marisa is done: echo: two");
@@ -416,8 +420,7 @@ fn a_wait_that_ends_without_collecting_leaves_its_news_and_its_bells() {
     assert_eq!(o.status.code(), Some(1), "told already");
     assert!(err(&o).contains("nobody to wait on"), "{}", err(&o));
     // Waited on with one still working, it is left out: the other's turn is enough.
-    let bg = spawn(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "1m"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let bg = waiting(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "1m"]);
     input(&d, "Marisa", "three");
     let (code, l) = waited(bg.wait_with_output().unwrap());
     assert_eq!((code, &l[0]["news"], &l[1]["news"]), (0, &json!(true), &json!(false)), "{l:?}");
@@ -458,8 +461,7 @@ fn a_wait_ends_with_its_lead_and_leaves_its_helpers_turns_to_ring() {
     let (mut w, mut events) = d.connect();
     writeln!(w, "{}", json!({"t": "watch"})).unwrap();
     // Left running in the background as its lead goes: it ends then, not at its timeout.
-    let bg = spawn(&d, &lead, &["wait", "Marisa", "--timeout", "1m"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let bg = waiting(&d, &lead, &["wait", "Marisa", "--timeout", "1m"]);
     let t = Instant::now();
     d.cli(&["close", "Reimu"]);
     let o = bg.wait_with_output().unwrap();

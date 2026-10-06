@@ -423,10 +423,16 @@ pub(super) async fn banish(shrine: &Shared, who: &str) -> Result<String, String>
     }
 }
 
-/// Ctrl-C (clears a half-typed prompt or interrupts the turn), a pause for that to land, then
-/// `/exit` and Enter. True once the resident has left. Plain bytes rather than encoded keys:
-/// Claude Code takes them in kitty mode too.
+/// Esc (denies a permission dialog, which the Enter below would otherwise answer yes), then
+/// Ctrl-C (clears a half-typed prompt or interrupts the turn), a pause for each to land, then
+/// `/exit` and Enter. True once the resident has left. Esc goes as the resident asked keys to
+/// be sent, so it is not read as Alt with what follows; the rest as plain bytes, which Claude
+/// Code takes in kitty mode too.
 async fn ask_leave(h: &Handle, wait: Duration) -> bool {
+    if let Some(esc) = crate::vt::KeyEvent::from_kitty(27, 0, 1) {
+        h.input(&h.encode(esc)).await;
+        h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;
+    }
     h.input(b"\x03").await;
     h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;
     h.input(b"/exit").await;

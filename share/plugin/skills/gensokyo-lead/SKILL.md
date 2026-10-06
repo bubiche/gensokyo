@@ -58,7 +58,7 @@ gensokyo wait Patchouli Alice --any     # with the Bash tool's run_in_background
 Its exit starts your next turn, so start it and end your turn, or carry on with something else.
 gensokyo remembers what you have been told about each helper: each wait returns what is new since
 your last wait that ended in news, or your last read, so a turn that ended before you waited still
-counts. A helper that departed ends any wait, once. It prints one JSON
+counts. A helper that departed is news once; after that a wait leaves it out. It prints one JSON
 line per helper: `name`, `state`, `news`, `ended` (`stop`, `failed`, `interrupted`,
 `unreported`), and `answer`, the report's first line. Without `--any` it waits for each of them;
 `--until done|needs|gone` narrows what counts.

@@ -57,8 +57,9 @@ enum Cmd {
     /// Hold until residents have news (a turn ended, a dialog opened, or gone), then one JSON line each
     ///
     /// From inside a resident, about its own helpers: news since it was last told of them, by a
-    /// wait that was met or a read. A departure ends any wait. Exit 0 once the news came, 3 on
-    /// the timeout, 4 when the daemon went away (a restart: wait again).
+    /// wait that was met or a read. A departure is news once; a helper it was told of after that
+    /// is left out. Exit 0 once the news came, 3 on the timeout (or with nobody left to wait
+    /// on), 4 when the daemon went away (a restart: wait again).
     Wait {
         /// Names, slots or ids
         #[arg(required = true)]

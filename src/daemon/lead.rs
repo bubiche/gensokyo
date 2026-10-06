@@ -91,7 +91,8 @@ const WAIT_MOST: u64 = 10 * 365 * 86400;
 
 /// Holds until the residents named have news since `caller` was last told (a lead about its own
 /// helpers) or since the wait began (anyone else): a turn ended, a dialog opened, or departed.
-/// With `any`, one of them; else each. A departure ends any wait. Gives whether that came before
+/// With `any`, one of them; else each. A departure is news once; after that the one departed
+/// is left out, and a wait on nobody else ends at once, not met. Gives whether that came before
 /// the timeout, and a report on every one named. When it came, what a lead is told of is
 /// collected: the next wait looks past it, and its gold is cleared.
 pub(super) async fn wait(
@@ -124,10 +125,15 @@ pub(super) async fn wait(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(w.timeout.min(WAIT_MOST));
     let met = loop {
         changed.borrow_and_update();
+        // One whose departure the lead was told of has nothing more to say: it is left out.
         let news: Vec<bool> = {
             let sh = shrine.borrow();
-            start.iter().map(|(id, base)| news(&sh, id, *base, w.until)).collect()
+            let open = start.iter().filter(|(id, base)| !(base.2 && gone(&sh, id)));
+            open.map(|(id, base)| news(&sh, id, *base, w.until)).collect()
         };
+        if news.is_empty() {
+            break false;
+        }
         if if w.any { news.contains(&true) } else { !news.contains(&false) } {
             break true;
         }
@@ -153,11 +159,15 @@ fn news(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> bool {
         || sh.store.load_departed_id(id).map_or((base.0, base.1), |r| (r.turns, r.needs)),
         |e| (e.rec.turns, e.rec.needs),
     );
-    let gone = e.is_none_or(|e| e.handle.is_none());
+    let gone = gone(sh, id);
     let asks = |u: Until| until.is_none_or(|x| x == u);
     (asks(Until::Done) && turns > base.0)
         || (asks(Until::Needs) && needs > base.1)
         || (gone && !base.2)
+}
+
+fn gone(sh: &Shrine, id: &str) -> bool {
+    sh.entries.iter().find(|e| e.rec.id == id).is_none_or(|e| e.handle.is_none())
 }
 
 fn report(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> Report {

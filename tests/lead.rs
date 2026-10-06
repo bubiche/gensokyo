@@ -412,8 +412,16 @@ fn a_wait_that_ends_without_collecting_leaves_its_news_and_its_bells() {
     let (code, l) =
         waited(inside(&d, &lead, &["wait", "Sanae", "--until", "done", "--timeout", "5s"]));
     assert_eq!((code, &l[0]["state"]), (0, &json!("departed")));
-    let (code, _) = waited(inside(&d, &lead, &["wait", "Sanae", "--any", "--timeout", "1s"]));
-    assert_eq!(code, 3, "told already");
+    let t = Instant::now();
+    let (code, _) = waited(inside(&d, &lead, &["wait", "Sanae", "--timeout", "1m"]));
+    assert_eq!(code, 3, "told already: nobody left to wait on");
+    assert!(t.elapsed() < Duration::from_secs(10), "at once, not at the timeout");
+    // Waited on with one still working, it is left out: the other's turn is enough.
+    let bg = spawn(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "1m"]);
+    std::thread::sleep(Duration::from_millis(300));
+    input(&d, "Marisa", "three");
+    let (code, l) = waited(bg.wait_with_output().unwrap());
+    assert_eq!((code, &l[0]["news"], &l[1]["news"]), (0, &json!(true), &json!(false)), "{l:?}");
 }
 
 #[test]

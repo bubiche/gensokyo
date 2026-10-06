@@ -37,6 +37,8 @@ pub(super) struct Entry {
     pub(super) handle: Option<Rc<Handle>>,
     pub(super) aware: Aware,
     pub(super) tele: Option<Telemetry>,
+    /// Where it works now, by its newest hook or status line, and when that came, epoch ms.
+    pub(super) here: Option<(i64, String)>,
     /// A ritual run: since when it has been finished or departed, on the ritual clock.
     pub(super) idle_since: Option<i64>,
     /// A helper whose lead has gone: since when it has also been finished or departed.
@@ -47,12 +49,24 @@ pub(super) struct Entry {
 }
 
 impl Entry {
+    /// `dir`, reported at `at` ms, unless a newer report came first (a hook from the spool
+    /// comes late). Whether `here` changed.
+    pub(super) fn moved(&mut self, at: i64, dir: String) -> bool {
+        if self.here.as_ref().is_some_and(|(t, _)| *t > at) {
+            return false;
+        }
+        let moved = self.here.as_ref().is_none_or(|(_, d)| *d != dir);
+        self.here = Some((at, dir));
+        moved
+    }
+
     fn new(rec: Record, handle: Rc<Handle>) -> Entry {
         Entry {
             rec,
             handle: Some(handle),
             aware: Aware::default(),
             tele: None,
+            here: None,
             idle_since: None,
             orphan_since: None,
             held: false,
@@ -105,6 +119,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         name: r.name.clone(),
         slot: r.slot,
         cwd: r.cwd.clone(),
+        here: None,
         pid,
         departed: r.departed,
         exit: r.exit,
@@ -130,7 +145,8 @@ fn entry_info(e: &Entry) -> proto::Resident {
         (r.blocked, r.finished) = (e.aware.blocked().map(Into::into), e.aware.finished());
     }
     r.mode = e.aware.mode.clone().or(r.mode);
-    r.branch = tele::git_branch(Path::new(&e.rec.cwd));
+    r.here = e.here.as_ref().map(|(_, d)| d.clone()).filter(|d| *d != e.rec.cwd);
+    r.branch = tele::git_branch(Path::new(r.here.as_ref().unwrap_or(&e.rec.cwd)));
     r.telemetry = e.tele.clone();
     r
 }

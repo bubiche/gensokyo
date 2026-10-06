@@ -8,7 +8,8 @@ use std::path::Path;
 
 /// The report, from Claude Code's statusLine JSON (2.1.260: `model.display_name`,
 /// `effort.level`, `context_window.*`, `prompt_cache.hit_ratio`, `cost.*`, and on Pro and Max
-/// `rate_limits.{five_hour,seven_day}`). `advisor` and `at` are not in it.
+/// `rate_limits.{five_hour,seven_day}`; `workspace.current_dir`, which follows a `cd`, 2.1.291).
+/// `advisor` and `at` are not in it.
 pub fn from_statusline(j: &Value) -> Telemetry {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str).map(|v| clean(v, 40));
     let n = |p: &str| j.pointer(p).and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 0.0);
@@ -39,7 +40,18 @@ pub fn from_statusline(j: &Value) -> Telemetry {
         five_hour: limit("/rate_limits/five_hour"),
         seven_day: limit("/rate_limits/seven_day"),
         at: 0,
+        dir: ["/workspace/current_dir", "/cwd"]
+            .iter()
+            .find_map(|p| j.pointer(p).and_then(Value::as_str))
+            .filter(|d| is_dir_path(d))
+            .map(String::from),
     }
+}
+
+/// A directory Claude reports it works in, fit to show and to read a branch from: absolute,
+/// one line, no control characters.
+pub fn is_dir_path(d: &str) -> bool {
+    d.starts_with('/') && d.len() < 4096 && !d.chars().any(char::is_control)
 }
 
 /// gensokyo's own line at the bottom of a resident: the numbers a working session watches.

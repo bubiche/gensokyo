@@ -220,6 +220,8 @@ pub struct Config {
     pub log: Option<File>,
     /// `$GENSOKYO_COPY`, a shell command the selection is piped to; `pbcopy` by default.
     pub copy: String,
+    /// The config's `BRANCH_PREFIX`, left off branches in the sidebar.
+    pub prefix: String,
 }
 
 impl Config {
@@ -237,6 +239,7 @@ impl Config {
             log: std::env::var_os("GENSOKYO_CLIENT_LOG")
                 .and_then(|p| File::options().create(true).append(true).mode(0o600).open(p).ok()),
             copy: std::env::var("GENSOKYO_COPY").unwrap_or_else(|_| "pbcopy".into()),
+            prefix: paths::config("BRANCH_PREFIX").unwrap_or_default(),
         }
     }
 }
@@ -310,6 +313,7 @@ impl App {
                 capture: true,
                 home: c.home,
                 banner: c.banner,
+                prefix: c.prefix,
                 now: now(),
                 ..Model::default()
             },

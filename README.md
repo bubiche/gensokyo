@@ -109,7 +109,10 @@ one on screen in a focused terminal, the shrine rings the bell and posts an iTer
 
 The status line reports feed the rest: each sidebar line shows the model and context used, the
 title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
-and cost, and the sidebar's foot has the account's 5-hour and weekly usage. Inside the resident,
+and cost, and the sidebar's foot has the account's 5-hour and weekly usage. The directory is
+where Claude works now, which follows it into a worktree or a subdirectory, and its branch is on
+a dim line under each resident in the sidebar while they all fit. `BRANCH_PREFIX=you/` in the
+config leaves that prefix off there. Inside the resident,
 gensokyo draws its own one-line status line; `STATUSLINE=user` in the config runs your own
 `statusLine` command instead, with the same input.
 
@@ -329,10 +332,11 @@ gensokyo help <command>                 # every command has its own
 ```
 
 A resident is named by its name, its slot or its id. `list --json` is an array with one object
-per resident: `id`, `name`, `slot`, `cwd`, `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
+per resident: `id`, `name`, `slot`, `cwd` (where it was started), `here` (where it works now,
+when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
 or `departed`), `detail` (what it waits for), `blocked` (why nothing may be typed into it now),
 `finished`, `owner` (its lead's id), `turns` and `needs` (turns ended and dialogs opened, ever),
-`mode`, `branch`, `telemetry`, and for a departed one `departed` (epoch seconds), `exit` and
+`mode`, `branch` (at `here`), `telemetry`, and for a departed one `departed` (epoch seconds), `exit` and
 `signal`. `new --json` prints the new resident the same way.
 
 `wait` holds until each resident named has news (`--any`: one of them), or only the kind

@@ -20,6 +20,9 @@ pub(super) fn hook(shrine: &Shared, resident: &str, h: Hook) {
         rotate(sh, at, resident, s, h.at);
     }
     let Some(i) = at.filter(|&i| sh.entries[i].handle.is_some()) else { return };
+    if h.cwd.clone().is_some_and(|c| sh.entries[i].moved(h.at, c)) {
+        touch(sh);
+    }
     let before = sh.entries[i].aware.state();
     if sh.entries[i].aware.hook(&h) {
         // Typed into: a ritual run's `keep` starts again from its next finish.
@@ -85,9 +88,10 @@ pub(super) fn statusline(shrine: &Shared, resident: &str, mut t: Telemetry) {
     };
     // Claude Code redraws its status line several times a second; watchers hear of a change.
     t.at = store::now();
+    let moved = t.dir.take().is_some_and(|d| e.moved(hooks::now_ms(), d));
     let changed = e.tele.as_ref().is_none_or(|o| Telemetry { at: t.at, ..o.clone() } != t);
     e.tele = Some(t);
-    if changed {
+    if changed || moved {
         touch(&sh);
     }
 }

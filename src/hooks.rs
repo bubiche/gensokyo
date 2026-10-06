@@ -50,8 +50,8 @@ pub fn hook_main() {
 
 /// What the shrine keeps of a hook payload (2.1.260: `hook_event_name`, `session_id`, and per
 /// event `notification_type` + `message`, `source`, `permission_mode` on UserPromptSubmit and
-/// Stop, `tool_name` + `tool_input`, `last_assistant_message`; `error` on StopFailure, 2.1.290).
-/// Never the prompt.
+/// Stop, `tool_name` + `tool_input`, `last_assistant_message`; `error` on StopFailure, 2.1.290;
+/// `cwd`, which follows a `cd`, 2.1.291). Never the prompt.
 pub fn reduce(j: &Value, at: i64) -> Hook {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str);
     let event = s("/hook_event_name").unwrap_or_default();
@@ -76,6 +76,7 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
         tool: s("/tool_name").map(String::from),
         text,
         answer,
+        cwd: s("/cwd").filter(|c| tele::is_dir_path(c)).map(String::from),
     }
 }
 

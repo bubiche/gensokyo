@@ -1,0 +1,28 @@
+---
+source: tests/render.rs
+expression: t.backend()
+---
+"┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensokyo ⎇ nebel95/padlet-ai-summary┐"
+"│1 ○ Reimu              ││line 00                                              │"
+"│    ⎇ padlet-ai-summar…││line 01     ~                                        │"
+"│4 └● Youmu             ││line 02     ~~                                       │"
+"│     ⎇ fix-ci          ││line 03     ~~~                                      │"
+"│5 └○ Hieda-no-Akyuu-the││line 04     ~~~~                                     │"
+"│     ⎇ a1b2c3d         ││line 05     ~~~~~                                    │"
+"│2 ○ Marisa             ││line 06     ~~~~~~                                   │"
+"│    ⎇ main             ││line 07     ~~~~~~~                                  │"
+"│3 · Cirno              ││line 08     ~~~~~~~~                                 │"
+"│6 ○ Chen               ││line 09     ~~~~~~~~~                                │"
+"│                       ││line 10     ~~~~~~~~~~                               │"
+"│                       ││line 11     ~~~~~~~~~~~                              │"
+"│                       ││line 12     ~~~~~~~~~~~~                             │"
+"│                       ││line 13     ~~~~~~~~~~~~~                            │"
+"│                       ││line 14     ~~~~~~~~~~~~~~                           │"
+"│                       ││line 15     ~~~~~~~~~~~~~~~                          │"
+"│                       ││line 16     ~~~~~~~~~~~~~~~~                         │"
+"│[summon n] [cast c]    ││line 17     ~~~~~~~~~~~~~~~~~                        │"
+"│[banish b] [recall r]  ││line 18     ~~~~~~~~~~~~~~~~~~                       │"
+"│[timetable t] [quit q] ││line 19     ~~~~~~~~~~~~~~~~~~~                      │"
+"│[?]                    ││line 20                                              │"
+"│[mouse: shrine m]      ││line 21     ~                                        │"
+"└──── ^] then a key ────┘└─────────────────────────────────────────────────────┘"

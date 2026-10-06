@@ -19,6 +19,7 @@ fn app() -> App {
         desktop: true,
         log: None,
         copy: "true".into(),
+        prefix: String::new(),
     })
 }
 

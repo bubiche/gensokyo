@@ -138,6 +138,9 @@ pub struct Hook {
     /// The reply itself, on `Stop` and `StopFailure`: what `read` gives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// Where Claude works when the hook ran: it follows a `cd`, the launch dir does not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// How a turn ended.
@@ -221,6 +224,9 @@ pub struct Telemetry {
     pub seven_day: Option<Limit>,
     /// Epoch seconds, set by the daemon when the report came.
     pub at: i64,
+    /// `workspace.current_dir`, which the daemon takes out as the resident's `here`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -445,6 +451,9 @@ pub struct Resident {
     pub name: String,
     pub slot: Option<u8>,
     pub cwd: String,
+    /// Where it works now, when that is not `cwd`: Claude moved into a worktree or a subdir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub here: Option<String>,
     /// The leader's pid while it runs.
     pub pid: Option<i32>,
     /// Epoch seconds.

@@ -59,6 +59,8 @@ pub struct Model {
     pub banner: Vec<String>,
     /// Shown as `~` in paths.
     pub home: String,
+    /// The config's `BRANCH_PREFIX`, left off branches in the sidebar.
+    pub prefix: String,
     /// Epoch seconds, for "5m ago".
     pub now: i64,
     /// This machine's date, `YYYY-MM-DD`: a fire today shows its time alone.
@@ -197,7 +199,8 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
                 true => String::new(),
                 false => format!(" · {f}"),
             };
-            format!(" {slot}{} · {}{branch}{f} ", r.name, tilde(&r.cwd, &m.home))
+            let at = tilde(r.here.as_ref().unwrap_or(&r.cwd), &m.home);
+            format!(" {slot}{} · {at}{branch}{f} ", r.name)
         }
         None => " the shrine is empty ".into(),
     };
@@ -359,9 +362,14 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             buf.set_stringn(inner.x, y + i as u16, l, w, style);
         }
     }
-    for (row, (i, helper)) in drawn(&m.residents).into_iter().enumerate() {
+    let order = drawn(&m.residents);
+    // Each one's branch on a dim row below it, while every row fits.
+    let branches = order.iter().filter(|(i, _)| m.residents[*i].branch.is_some()).count();
+    let room = bottom.saturating_sub(inner.y + 1) as usize;
+    let two = order.len() + branches <= room;
+    let mut y = inner.y;
+    for (i, helper) in order {
         let r = &m.residents[i];
-        let y = inner.y + row as u16;
         if y + 1 >= bottom {
             break;
         }
@@ -389,11 +397,29 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             )
         });
         let tee = if helper { "└" } else { "" };
-        let left = format!("{slot} {tee}{} {}", r.state.glyph(), r.name);
+        let lead = format!("{slot} {tee}{} ", r.state.glyph());
         let rw = (width(&right) as usize).min(w);
-        buf.set_stringn(inner.x, y, left, w - rw, style);
+        buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
         buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
         hits.push(line, Hit::Resident(i));
+        y += 1;
+        let Some(b) = r.branch.as_deref().filter(|_| two) else { continue };
+        let b = b.strip_prefix(m.prefix.as_str()).filter(|b| !b.is_empty()).unwrap_or(b);
+        let pad = width(&lead) as usize;
+        let room = w.saturating_sub(pad + 2);
+        let b: String = match width(b) as usize > room {
+            true => b.chars().take(room.saturating_sub(1)).chain(['…']).collect(),
+            false => b.into(),
+        };
+        let line = Rect { y, height: 1, ..inner };
+        let under = match Some(&r.id) == m.focused.as_ref() && !r.state.needs_you() {
+            true => DIM.bg(Color::Indexed(237)),
+            false => DIM,
+        };
+        buf.set_style(line, under);
+        buf.set_stringn(inner.x + pad as u16, y, format!("⎇ {b}"), w - pad, under);
+        hits.push(line, Hit::Resident(i));
+        y += 1;
     }
 }
 

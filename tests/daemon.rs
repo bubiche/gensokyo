@@ -1279,3 +1279,52 @@ fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
     // Muted, it would sit out the quit's /exit.
     d.req(json!({"t": "banish", "id": 7, "who": r["id"]}));
 }
+
+#[test]
+fn hooks_and_the_status_line_say_where_a_resident_works_and_the_newer_wins() {
+    let d = Daemon::start("here", &[]);
+    // A repo on main, and a worktree of it on nebel95/fix, as git lays them out.
+    let (repo, wt) = (d.dir.join("repo"), d.dir.join("repo/.claude/worktrees/fix"));
+    std::fs::create_dir_all(repo.join(".git/worktrees/fix")).unwrap();
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(repo.join(".git/worktrees/fix/HEAD"), "ref: refs/heads/nebel95/fix\n").unwrap();
+    std::fs::write(
+        wt.join(".git"),
+        format!("gitdir: {}\n", repo.join(".git/worktrees/fix").display()),
+    )
+    .unwrap();
+    let r = d.summon(json!({"name": "Youmu", "cwd": repo}));
+    let id = r["id"].as_str().unwrap().to_string();
+    d.stub(&r["id"], "ready");
+    let me = || d.list().into_iter().find(|r| r["id"] == json!(id)).unwrap();
+    assert_eq!((me()["branch"].clone(), me().get("here").cloned()), (json!("main"), None));
+
+    // Claude went into the worktree: its next hook says so.
+    let env = [("GENSOKYO_RESIDENT", id.as_str())];
+    let hook = json!({"hook_event_name": "Stop", "cwd": wt, "last_assistant_message": "done"});
+    inside(&d, &["_hook"], &env, hook.to_string().as_bytes());
+    wait(|| me()["branch"] == "nebel95/fix", "the branch to follow the hook");
+    assert_eq!(me()["here"], json!(wt));
+    assert_eq!(me()["cwd"], json!(repo), "the launch dir stays, for recall");
+
+    // And back out, by the status line; then a hook from before that, late from the spool,
+    // changes nothing.
+    let line = json!({"workspace": {"current_dir": repo, "project_dir": repo}});
+    inside(&d, &["_statusline", &id], &env, line.to_string().as_bytes());
+    wait(|| me()["branch"] == "main", "the branch to follow the status line");
+    assert_eq!(me().get("here"), None);
+    assert_eq!(me()["telemetry"].get("dir"), None, "taken out as here");
+    // The status line says the same again; a hook from before that but after the move, late
+    // from the spool, changes nothing. One connection keeps them in order.
+    let ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let mid = ms().as_millis() as i64;
+    std::thread::sleep(Duration::from_millis(20));
+    let (mut w, mut lines) = d.connect();
+    let again = json!({"t": "statusline", "resident": id, "telemetry": {"dir": repo}});
+    let stale =
+        json!({"t": "hook", "resident": id, "hook": {"event": "Stop", "at": mid, "cwd": wt}});
+    writeln!(w, "{again}\n{stale}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    let after = next(&mut lines)["residents"].clone();
+    assert_eq!(after[0]["branch"], "main", "{after}");
+}

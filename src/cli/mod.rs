@@ -234,7 +234,7 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
         }
-        let cwd = crate::tele::clean(&r.cwd, usize::MAX);
+        let cwd = crate::tele::clean(r.here.as_ref().unwrap_or(&r.cwd), usize::MAX);
         println!("{slot} {} {:<12} {state:<8} {cwd}  {fields}", r.state.glyph(), r.name);
     }
     let newest = residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);

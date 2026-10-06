@@ -108,6 +108,17 @@ fn helpers() -> Model {
     m
 }
 
+/// The helpers on their branches, `BRANCH_PREFIX` left off: one too long for the sidebar, a
+/// detached HEAD, and a departed one with none known.
+fn branches() -> Model {
+    let mut m = Model { prefix: "nebel95/".into(), ..helpers() };
+    let b = ["nebel95/padlet-ai-summary-for-every-board", "main", "", "nebel95/fix-ci", "a1b2c3d"];
+    for (r, b) in m.residents.iter_mut().zip(b) {
+        r.branch = Some(b.to_string()).filter(|b| !b.is_empty());
+    }
+    m
+}
+
 fn summon(stage: Stage) -> Modal {
     Modal::Summon(Summon {
         stage,
@@ -202,6 +213,7 @@ fn screens() -> Vec<(&'static str, Model)> {
         ("residents", shrine()),
         ("helpers", helpers()),
         ("aware", aware()),
+        ("branches", branches()),
         (
             "aware-focused-gold",
             with(&|m| *m = Model { focused: Some("id-Marisa".into()), ..aware() }),
@@ -398,6 +410,22 @@ fn a_helper_line_resolves_to_the_helper_beneath_its_lead() {
     for (row, i) in [0, 3, 4, 1, 2, 5].into_iter().enumerate() {
         assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
     }
+}
+
+#[test]
+fn a_branch_row_is_its_residents_and_goes_when_the_sidebar_is_short() {
+    let map = hits(&branches(), AREA);
+    // Reimu and its branch, Youmu and its, Hieda with none, Marisa and its, Cirno, Chen.
+    for (row, i) in [0, 0, 3, 3, 4, 4, 1, 1, 2, 5].into_iter().enumerate() {
+        assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
+    }
+    // Ten rows of residents with their branches, six without: at 16 rows high only the six fit.
+    let area = Rect::new(0, 0, 120, 16);
+    let mut buf = Buffer::empty(area);
+    render::render(&branches(), area, &mut buf);
+    let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    assert!((0..16).all(|y| !side(y).contains('⎇')), "{:?}", (0..16).map(side).collect::<Vec<_>>());
+    assert!(side(6).contains("Chen"));
 }
 
 #[test]
@@ -654,8 +682,8 @@ fn whoever_needs_you_is_gold_across_the_sidebar() {
     let gold = |y: u16| {
         (1..render::SIDEBAR_W - 1).all(|x| buf[(x, y)].bg == ratatui::style::Color::Yellow)
     };
-    // Rows 1-4 inside the box: Reimu busy, Marisa awaits, Cirno departed, Sakuya asked.
-    assert_eq!([1, 2, 3, 4].map(gold), [false, true, false, true]);
+    // Inside the box: Reimu busy and its branch, Marisa awaits, Cirno departed, Sakuya asked.
+    assert_eq!([1, 2, 3, 4, 5].map(gold), [false, false, true, false, true]);
 }
 
 #[test]

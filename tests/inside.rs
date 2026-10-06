@@ -77,7 +77,17 @@ fn a_resident_may_not_quit_type_into_or_close_the_others() {
     }
     // An id that names nobody still has a resident's rights, and owns nobody.
     let r = as_resident(&d, "not-a-resident", json!({"t": "quit", "id": 2}));
-    assert_eq!(r["t"], "error", "{r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("quit stops every resident")), "{r}");
+    for req in [
+        json!({"t": "close", "id": 2, "who": "Marisa"}),
+        json!({"t": "banish", "id": 2, "who": "Marisa"}),
+        json!({"t": "read", "id": 2, "who": "Marisa"}),
+        json!({"t": "wait", "id": 2, "who": ["Marisa"], "any": false, "timeout": 1}),
+    ] {
+        let r = as_resident(&d, "not-a-resident", req.clone());
+        let e = r["error"].as_str().unwrap_or_default();
+        assert!(e.contains("Marisa is not one of your helpers"), "{req}: {r}");
+    }
     assert!(alive(&a) && alive(&b));
     assert!(!d.stub(&b["id"], "input").contains("hi"));
     assert_eq!(d.list().len(), 2);

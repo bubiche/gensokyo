@@ -74,9 +74,9 @@ pub(super) fn record(sh: &Shrine, who: &str) -> Option<Record> {
     gone.into_iter().max_by_key(|r| (r.id == who, r.departed))
 }
 
-/// Whether `lead` has a wait open that names `id` and counts its turns.
+/// Whether `lead` is here, with a wait open that names `id` and counts its turns.
 fn waited(sh: &Shrine, lead: &str, id: &str) -> bool {
-    sh.waits.iter().any(|w| {
+    !gone(sh, lead) && sh.waits.iter().any(|w| {
         w.caller.as_deref() == Some(lead)
             && w.until.is_none_or(|u| u == Until::Done)
             && w.ids.iter().any(|i| i == id)
@@ -92,7 +92,8 @@ const WAIT_MOST: u64 = 10 * 365 * 86400;
 /// Holds until the residents named have news since `caller` was last told (a lead about its own
 /// helpers) or since the wait began (anyone else): a turn ended, a dialog opened, or departed.
 /// With `any`, one of them; else each. A departure is news once; after that the one departed
-/// is left out, and a wait on nobody else is refused. Gives whether that came before
+/// is left out, and a wait on nobody else is refused. A lead's wait ends when the lead leaves,
+/// collecting nothing: it would tell nobody. Gives whether that came before
 /// the timeout, and a report on every one named. When it came, what a lead is told of is
 /// collected: the next wait looks past it, and its gold is cleared.
 pub(super) async fn wait(
@@ -132,6 +133,9 @@ pub(super) async fn wait(
         // One whose departure the lead was told of has nothing more to say: it is left out.
         let news: Vec<bool> = {
             let sh = shrine.borrow();
+            if caller.is_some_and(|c| gone(&sh, c)) {
+                return Err("you have left: nobody is told what this wait would find".into());
+            }
             let open = start.iter().filter(|(id, base)| !(base.2 && gone(&sh, id)));
             open.map(|(id, base)| news(&sh, id, *base, w.until)).collect()
         };

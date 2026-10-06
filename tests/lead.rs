@@ -448,3 +448,27 @@ fn a_helper_closed_mid_turn_reports_that_turn_cut_short_not_the_one_before() {
     wait(|| me(&d, "Reimu")["pid"].is_number(), "the lead back");
     assert_eq!(me(&d, "Marisa")["turns"], 2);
 }
+
+#[test]
+fn a_wait_ends_with_its_lead_and_leaves_its_helpers_turns_to_ring() {
+    let d = daemon("leadgone", &[]);
+    let lead = summon(&d, "Reimu");
+    helper(&d, &lead, "Marisa");
+    assert_eq!(waited(inside(&d, &lead, &["wait", "Marisa", "--timeout", "5s"])).0, 0, "brief");
+    let (mut w, mut events) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    // Left running in the background as its lead goes: it ends then, not at its timeout.
+    let bg = spawn(&d, &lead, &["wait", "Marisa", "--timeout", "1m"]);
+    std::thread::sleep(Duration::from_millis(300));
+    let t = Instant::now();
+    d.cli(&["close", "Reimu"]);
+    let o = bg.wait_with_output().unwrap();
+    assert!(t.elapsed() < Duration::from_secs(20), "held to its timeout");
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    assert!(err(&o).contains("you have left"), "{}", err(&o));
+    // Nobody collects the helper's next turn, so the user hears of it.
+    input(&d, "Marisa", "one");
+    let n = watch_for(&mut events, |v| v["t"] == "notify" && v["name"] == "Marisa");
+    assert_eq!(n["text"], "Marisa is done: echo: one");
+    assert_eq!(me(&d, "Marisa")["state"], "awaits");
+}

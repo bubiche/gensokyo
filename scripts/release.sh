@@ -86,9 +86,12 @@ rm -f "$out/$name"
 ( cd "$work" && COPYFILE_DISABLE=1 tar -czf "$out/$name" "$prefix" )
 list=$(tar -tzf "$out/$name")
 for want in bin/gensokyo share/names.txt share/plugin/.claude-plugin/plugin.json install.sh \
-            uninstall.sh README.md LICENSES/ghostty.txt VERSION; do
+            uninstall.sh README.md LICENSES/ghostty.txt VERSION share/probes/gh-prs; do
   printf '%s\n' "$list" | grep -q "^$prefix/$want\$" || die "$name is missing $want"
 done
+# A probe that is not executable is refused when a ritual names it.
+tar -tvzf "$out/$name" | grep " $prefix/share/probes/gh-prs\$" | grep -q '^-rwx' ||
+  die "$name has share/probes/gh-prs without its executable bit"
 [ "$(printf '%s\n' "$list" | grep -c "^$prefix/bin/.")" = 1 ] || die "$name has more than gensokyo in bin/"
 printf '%s\n' "$list" | grep -q '/\._' && die "$name carries AppleDouble files"
 say "$name  $(wc -c < "$out/$name" | tr -d ' ') bytes"

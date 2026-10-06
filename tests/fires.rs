@@ -854,3 +854,42 @@ fn a_quiet_runs_finished_turn_neither_rings_nor_turns_gold_but_its_dialogs_ring(
     let n = watch_for(&mut events, |v| v["t"] == "notify");
     assert_eq!((&n["name"], &n["state"]), (&json!("hush"), &json!("awaits")));
 }
+
+#[test]
+fn a_probe_that_says_too_much_fails_at_once_and_a_chatty_one_still_works() {
+    let base = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\n";
+    let rituals = [
+        ("big", format!("{base}when: big\n---\nGo.\n")),
+        ("chatty", format!("{base}when: chatty\n---\nGo.\n")),
+    ];
+    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    // A probe blocked on a full pipe would only be stopped at this limit, past every wait here.
+    let d = Daemon::new("probe-caps", T0 + 5, &rituals, &[("GENSOKYO_PROBE_LIMIT_MS", "60000")]);
+    let probes = d.dir.join("conf/probes");
+    std::fs::create_dir_all(&probes).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    for (name, script) in [
+        ("big", "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x\n"),
+        ("chatty", "#!/bin/sh\nhead -c 100000 /dev/zero | tr '\\0' x >&2\necho fine\n"),
+    ] {
+        std::fs::write(probes.join(name), script).unwrap();
+        std::fs::set_permissions(probes.join(name), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+    d.cli(&["list"]);
+    wait(|| d.runs() == 2, "both fires");
+    let args = |n: &str| {
+        let r = d.list().into_iter().find(|r| r["name"] == n).unwrap();
+        d.stub(&r["id"], "args")
+    };
+    assert!(args("big").contains("has just failed (it printed over 256 KB)"), "{}", args("big"));
+    assert!(
+        args("chatty").contains("has just run, and what it printed is in"),
+        "{}",
+        args("chatty")
+    );
+    let out = std::fs::read_to_string(d.dir.join("rituals/chatty/probe.out")).unwrap();
+    assert_eq!(out, "fine\n");
+    let err = std::fs::read(d.dir.join("rituals/chatty/probe.err")).unwrap();
+    assert_eq!(err.len(), 64 * 1024, "kept up to its cap");
+}

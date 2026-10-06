@@ -727,8 +727,6 @@ fn a_probe_fires_on_a_change_only_and_names_its_output_without_pasting_it() {
         d.minute(m);
     }
     assert_eq!((d.runs(), d.journal("watch").len()), (1, lines));
-    // Its minutes were taken all the same: a probe that held a fire back left no miss.
-    assert_eq!(d.stamp("watch"), Some(T0 + 180));
 
     std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
     d.minute(4);
@@ -740,6 +738,65 @@ fn a_probe_fires_on_a_change_only_and_names_its_output_without_pasting_it() {
     assert!(r["message"].as_str().unwrap().contains("its probe (feed) runs first"), "{r}");
     wait(|| d.runs() == 3, "the fire by hand");
     assert_eq!(d.evs("watch", "ran").last().unwrap(), "ran (by hand)");
+}
+
+#[test]
+fn a_fire_its_probe_held_back_is_no_miss_for_catch_up() {
+    let d = feeding("probe-catch", "", &[]);
+    let text = "---\nschedule: \"0 * * * *\"\ncwd: \"@cwd\"\nwhen: feed\noverlap: parallel\ncatch_up: true\n---\nKeep up.\n";
+    d.ritual("watch", text);
+    // On the hour, the same as at the first fire: held back, and its minute taken.
+    d.minute(60);
+    assert_eq!(d.evs("watch", "ran").len(), 1);
+    // A change while the daemon is down, which comes back within the hour: nothing was missed,
+    // so nothing is made up, and the change waits for the next fire.
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    d.cli(&["quit"]);
+    let calls = d.calls();
+    d.clock(T0 + 3600 + 600);
+    d.cli(&["list"]);
+    d.settle();
+    d.settle();
+    assert_eq!((d.calls(), d.evs("watch", "ran").len()), (calls, 1), "made up a fire");
+    d.minute(120);
+    wait(|| d.evs("watch", "ran").len() == 2, "the next hour's fire");
+}
+
+#[test]
+fn a_ritual_disabled_or_removed_while_its_probe_runs_does_not_fire() {
+    let d = feeding("probe-gone", "", &[]);
+    // A probe held up by a child of its own, which then lets it finish with a change to say.
+    let held = |minute: i64| {
+        std::fs::write(d.dir.join("slow"), "").unwrap();
+        d.clock(T0 + 60 * minute + 5);
+        wait(|| d.dir.join("kid").exists(), "the probe under way");
+    };
+    let let_go = || {
+        std::fs::remove_file(d.dir.join("slow")).unwrap();
+        let kid = std::fs::read_to_string(d.dir.join("kid")).unwrap();
+        std::fs::remove_file(d.dir.join("kid")).unwrap();
+        unsafe { libc::kill(kid.trim().parse().unwrap(), libc::SIGKILL) };
+    };
+    std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
+    held(1);
+    let r = d.verb("disable", "watch");
+    assert_eq!(r["t"], "done", "{r}");
+    let_go();
+    d.settle();
+    assert_eq!((d.runs(), d.evs("watch", "ran").len()), (1, 1), "fired once disabled");
+
+    // Enabled again, the change it held is still news.
+    d.verb("enable", "watch");
+    d.minute(2);
+    wait(|| d.runs() == 2, "the change's fire");
+
+    // Its file deleted while the probe runs: no fire either.
+    std::fs::write(d.dir.join("feed"), "line-three\n").unwrap();
+    held(3);
+    std::fs::remove_file(d.dir.join("conf/rituals/watch.md")).unwrap();
+    let_go();
+    d.settle();
+    assert_eq!(d.runs(), 2, "fired once removed");
 }
 
 #[test]

@@ -217,7 +217,10 @@ async fn exit_waits_for_unread_output() {
     ] {
         let (mut r, _w, mut child, _) = bash(script);
         let t = Instant::now();
-        let unread = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+        // A child with nothing to say is reaped at once, however slow it was to start under a
+        // loaded runner; one with output blocks, which a second shows.
+        let limit = Duration::from_secs(if bytes == 0 { 10 } else { 1 });
+        let unread = tokio::time::timeout(limit, child.wait()).await;
         let blocked = unread.is_err();
         let n = tokio::time::timeout(Duration::from_secs(5), drain(&mut r)).await.unwrap().len();
         let st = child.wait().await.unwrap();

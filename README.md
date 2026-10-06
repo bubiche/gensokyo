@@ -131,7 +131,9 @@ Run from inside a resident, by its skills, these have a resident's rights rather
 can list, summon, cast and keep rituals as its skill does, but not `quit`. It can't type into,
 show or resize any screen either: the screens and keyboards are yours. A card it casts at `all`
 leaves it out, and the helpers of other residents. Its `new` refuses a directory Claude Code was
-never trusted in, because nobody would be there to answer the trust dialog.
+never trusted in, because nobody would be there to answer the trust dialog. The daemon knows a
+resident by what its environment says, and it runs as you: these rights keep a resident from
+slips, not from setting out to get round them.
 
 A resident it summons is its **helper**, and it the helper's **lead**; the sidebar draws helpers
 under their lead with `└`. Only the lead and you may close, banish, recall, `wait` on or `read` a

@@ -1,8 +1,8 @@
 ---
 # An example, and paused. `gensokyo ritual edit inbox-zero` takes a copy of it for you and
 # opens that; change `cwd` to a directory you work in, then `gensokyo ritual enable inbox-zero`.
-# Run it once by hand first (`gensokyo ritual run inbox-zero`) so that anything it asks
-# permission for is answered while you are sitting there.
+# Run it once by hand first (`gensokyo ritual run inbox-zero`) to see what it asks permission
+# for, and add that to allowed_tools: each run is a fresh session, and answers do not carry over.
 #
 # This one reads your email, so the directory it runs in needs an email MCP server configured
 # for it (Gmail, Front, Microsoft 365 - whichever one you use).

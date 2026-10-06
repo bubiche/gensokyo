@@ -153,7 +153,7 @@ pub fn add(
         ));
     }
     out.push(format!(
-        "  gensokyo ritual run {name}   fires it now, so its prompts can be approved once"
+        "  gensokyo ritual run {name}   fires it now: what it asks permission for goes in allowed_tools"
     ));
     Ok((path, out))
 }

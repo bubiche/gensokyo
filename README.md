@@ -260,7 +260,7 @@ By hand, or to see what is there:
 ```sh
 gensokyo ritual                      # what is scheduled, when each fires next, and why one is not firing
 gensokyo ritual new nightly-checks   # a commented template in $EDITOR; it arrives paused
-gensokyo ritual run nightly-checks   # fire it now: the way to approve its prompts once
+gensokyo ritual run nightly-checks   # fire it now, to see what it stops to ask
 gensokyo ritual log nightly-checks   # its fires, skips and complaints, and the newest headless log
 gensokyo ritual disable slack-morning
 gensokyo ritual remove slack-morning # the file, its notes and its journal, for good
@@ -273,7 +273,9 @@ remove (which asks). The ritual that fires next is always on the sidebar's `⏲`
 Three examples ship paused in `share/rituals/`: `slack-morning`, `nightly-checks` and
 `inbox-zero`. `gensokyo ritual edit slack-morning` makes a copy of yours and opens it; each
 names a directory that is not on your machine, which is the line to change first. Run a new
-ritual by hand once before leaving it to the clock. A directory Claude Code has never been
+ritual by hand once before leaving it to the clock, and add what it asks permission for to its
+`allowed_tools`: each fire is a fresh session, and an answer given to one does not carry over.
+Its own `memory.md` needs no rule; every run may write it. A directory Claude Code has never been
 trusted in is refused with the reason: a run that stops at the trust dialog would sit there,
 and every later fire would skip itself as still going.
 

@@ -1,9 +1,9 @@
 ---
 # An example, and paused. `gensokyo ritual edit nightly-checks` takes a copy of it for you and
 # opens that; change `cwd` and the two commands to your project's own, then `gensokyo ritual
-# enable nightly-checks`. Run it once by hand first (`gensokyo ritual run nightly-checks`) so
-# that anything it asks permission for is answered while you are sitting there - a run at 02:00
-# that stops at a permission prompt waits for you until morning.
+# enable nightly-checks`. Run it once by hand first (`gensokyo ritual run nightly-checks`) to
+# see what it asks permission for, and add that to allowed_tools: each run is a fresh session, and
+# a run at 02:00 that stops at a permission prompt waits for you until morning.
 name: nightly-checks
 description: the tests and the linter overnight, and what broke since last night
 schedule: "0 2 * * *"             # every night at 02:00

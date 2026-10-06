@@ -181,9 +181,7 @@ fn list(json: bool) -> Result<(), String> {
     }
     if !infos.is_empty() {
         println!();
-        println!(
-            "  gensokyo ritual run <name>      fire one now, which is how its prompts get approved once"
-        );
+        println!("  gensokyo ritual run <name>      fire one now, to see what it stops to ask");
         println!("  gensokyo ritual log <name>      what it has done; edit <name> opens the file");
         if UnixStream::connect(paths::socket_path()).is_err() {
             println!("  gensokyo is not running, so nothing fires until it is (run gensokyo)");

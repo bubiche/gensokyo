@@ -462,7 +462,7 @@ pub(super) fn repush(shrine: &Shared) {
     push(shrine, &rs, &bad);
 }
 
-/// Fired now by hand, whatever the schedule says: which is how its prompts get approved once.
+/// Fired now by hand, whatever the schedule says: how the user sees what it stops to ask.
 fn run(shrine: &Shared, r: &Ritual) -> Result<String, String> {
     let (now, tz) = (now(), TimeZone::system());
     if let Some(p) = ritual::problem(r, now, &tz, &trust(shrine)) {

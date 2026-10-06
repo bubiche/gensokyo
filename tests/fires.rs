@@ -140,8 +140,12 @@ fn a_due_fire_starts_one_run_with_its_flags_and_its_notes() {
 
     let args = d.stub(&live[0]["id"], "args");
     let notes = d.dir.join("rituals/rounds");
-    let tools =
-        format!("--add-dir {} --allowedTools Read Bash(ls:*) --session-id", notes.display());
+    let real = std::fs::canonicalize(&notes).unwrap().join("memory.md");
+    let tools = format!(
+        "--add-dir {} --allowedTools Read Bash(ls:*) Edit(/{}) --session-id",
+        notes.display(),
+        real.display()
+    );
     assert!(args.contains(&tools), "{args}");
     assert!(args.contains("--model haiku"), "{args}");
     let memory = notes.join("memory.md");

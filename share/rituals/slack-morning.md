@@ -1,8 +1,8 @@
 ---
 # An example, and paused. `gensokyo ritual edit slack-morning` takes a copy of it for you and
 # opens that; change `cwd` to a directory you work in, then `gensokyo ritual enable
-# slack-morning`. Run it once by hand first (`gensokyo ritual run slack-morning`) so that
-# anything it asks permission for is answered while you are sitting there.
+# slack-morning`. Run it once by hand first (`gensokyo ritual run slack-morning`) to see
+# what it asks permission for, and add that to allowed_tools: each run is a fresh session.
 #
 # This one reads Slack, so the directory it runs in needs a Slack MCP server configured for it.
 name: slack-morning

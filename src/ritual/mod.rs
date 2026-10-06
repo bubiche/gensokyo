@@ -414,7 +414,10 @@ pub fn prompt_text(r: &Ritual, memory: &Path) -> String {
 }
 
 /// The run's own flags. `--add-dir` is always the ritual's directory, so the notes read without
-/// a permission prompt. `--allowedTools` is variadic and last: a flag or `--` must follow.
+/// a permission prompt, and an Edit rule for the notes file, since an added directory makes
+/// reads free and not writes: an unattended run would stop at its own notes. The rule names the
+/// real path (`//` makes it absolute), which is what Claude Code matches. `--allowedTools` is
+/// variadic and last: a flag or `--` must follow.
 pub fn args(r: &Ritual, dir: &Path) -> Vec<String> {
     let mut a = Vec::new();
     let mcp = r.mcp_config.as_deref().map(crate::paths::expand);
@@ -430,10 +433,10 @@ pub fn args(r: &Ritual, dir: &Path) -> Vec<String> {
         }
     }
     a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
-    if !r.allowed_tools.is_empty() {
-        a.push("--allowedTools".into());
-        a.extend(r.allowed_tools.iter().cloned());
-    }
+    let real = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.into());
+    let notes = format!("Edit(/{})", real.join("memory.md").display());
+    a.push("--allowedTools".into());
+    a.extend(r.allowed_tools.iter().cloned().chain([notes]));
     a
 }
 

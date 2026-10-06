@@ -365,9 +365,18 @@ fn prompts_and_flags() {
             "/s/rituals/morning",
             "--allowedTools",
             "Read",
-            "Bash(x:*)"
+            "Bash(x:*)",
+            "Edit(//s/rituals/morning/memory.md)"
         ]
     );
+    // The rule names the real path: the run is told the notes are under it.
+    let link = tmp("args-link");
+    let real = tmp("args-real");
+    std::fs::remove_dir(&link).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let real = std::fs::canonicalize(&real).unwrap();
+    let a = ritual::args(&rit("---\n---\nDo it."), &link);
+    assert_eq!(a.last().unwrap(), &format!("Edit(/{}/memory.md)", real.display()));
     let named = rit("---\ntarget: Sakuya\n---\nDo it.");
     assert_eq!(ritual::prompt_text(&named, notes), "Do it.");
 }

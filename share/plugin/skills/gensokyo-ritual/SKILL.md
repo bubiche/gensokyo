@@ -132,8 +132,11 @@ Tell the user to fire it once by hand while they are sitting there:
 gensokyo ritual run slack-morning     # now, whatever the schedule says; the schedule is untouched
 ```
 
-That is when its permission prompts get answered, and it is much better than finding out at
-09:05 on Monday. The clock picks the new ritual up on its own; nothing needs restarting.
+That shows what it stops to ask, while the user is there to answer, which is much better than
+finding out at 09:05 on Monday. An answer lasts only for that session, and each fire of the
+default target is a fresh one: add whatever it asked for to `allowed_tools` (edit its file),
+or the next fire stops at the same prompt. Its own notes file needs nothing: every run may
+write that. The clock picks the new ritual up on its own; nothing needs restarting.
 
 ## The other things the user will ask for
 

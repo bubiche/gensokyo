@@ -254,6 +254,11 @@ pub(super) async fn deliver(
     if !h.input(&typed(text, h.modes().paste)).await {
         return Err("is not reading its input".into());
     }
+    // Pasted and not sent: the next card or ritual prompt would go in with it.
+    let unsent = || {
+        let mut sh = shrine.borrow_mut();
+        sh.entries.iter_mut().filter(|e| e.rec.id == id).for_each(|e| e.aware.unsent());
+    };
     let until = tokio::time::Instant::from_std(pasted + SHOW_WAIT);
     loop {
         let now = h.live_text();
@@ -266,6 +271,7 @@ pub(super) async fn deliver(
                 return Err(format!("left before the {what} showed"));
             },
             () = tokio::time::sleep_until(until) => {
+                unsent();
                 return Err(format!(
                     "never showed the {what} in its input line; nothing was submitted"
                 ));
@@ -284,6 +290,7 @@ pub(super) async fn deliver(
         }
     };
     if let Some(why) = why {
+        unsent();
         return Err(format!("{why}; the {what} waits in its input line, not submitted"));
     }
     if !h.input(b"\r").await {

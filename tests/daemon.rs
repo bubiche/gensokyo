@@ -1252,6 +1252,9 @@ fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
     wait(|| d.list().iter().any(|x| x["id"] == r["id"] && x["blocked"].is_null()), "cleared");
     let done = cast_while_scrolling(&d, &r);
     assert!(done["error"].as_str().unwrap_or("").contains("never showed"), "{done}");
+    // It may be in the input line all the same: the next card would go in with it.
+    let blocked = d.list().into_iter().find(|x| x["id"] == r["id"]).unwrap()["blocked"].clone();
+    assert_eq!(blocked, "has a prompt half typed into it (Ctrl-C there clears it)");
     // Muted, it would sit out the quit's /exit.
     d.req(json!({"t": "banish", "id": 7, "who": r["id"]}));
 }

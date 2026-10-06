@@ -291,6 +291,12 @@ impl Aware {
         stopped
     }
 
+    /// Something pasted into its input line was not sent: it may be there still, dialog or not,
+    /// until a prompt goes in or Ctrl-C clears it.
+    pub fn unsent(&mut self) {
+        self.drafting = true;
+    }
+
     /// The user typed into it: `typing` says what that did to its input line. Not while a
     /// dialog the hooks or the registry show is open, which is what the keys went to. One still
     /// starting up counts as the input line: keys at a trust dialog are safer called a draft.

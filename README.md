@@ -219,6 +219,9 @@ and "what have I got scheduled?" work the same way.
   background, what it said goes to a log beside the ritual's notes, and a run still going after
   an hour is stopped. Nobody is there to answer a permission prompt, so what it needs goes in
   `allowed_tools`; the log names any tool it was refused.
+- **`worktree`** (with `target: new`): every run works in that worktree of `cwd`'s repository,
+  made the first time as `new --worktree` makes one, and in the same subdirectory as `cwd`. One
+  checkout for all its runs, so not with `overlap: parallel`.
 - **`keep`** (with `target: new`): how long a finished run's resident stays, `2h` by default
   (`30m`, `1d`); idle time, so typing in it starts the count again. `keep: forever` leaves it to
   you.
@@ -308,6 +311,17 @@ residents for the parts, briefs each, waits on them in the background, reads the
 closes them. A resident it summons is its **helper**, and it the helper's **lead**; the sidebar
 draws helpers under their lead with `└`.
 
+**Worktrees.** `gensokyo new <dir> --worktree <name>` summons into
+`<repo>/.claude/worktrees/<name>`, where Claude Code keeps its own, on branch `<name>` (with
+`BRANCH_PREFIX` from the config in front, or `--branch`). An existing worktree of that name is
+reused. A branch only the remote has is checked out tracking it, to review a pull request; a new
+one starts from the remote's default branch, fetched first, or `--base`. Started from a
+subdirectory of the repository, the resident works in the same one inside the worktree. A
+branch checked out elsewhere is refused. The summon dialog asks for a worktree after the name
+when the directory is in a git repository; leaving it empty works right there. gensokyo never
+removes a worktree: `git worktree remove` is yours. It does not use `claude --worktree`, whose
+`/exit` stops at a keep-or-remove question. A lead's skill gives each helper its own this way.
+
 A lead has at most 5 live helpers (`HELPERS=` in the config), and a helper can't summon, though
 it keeps Claude Code's own subagents. A helper's finished turn is quiet while its lead waits on
 it or is busy, since the lead will read it; it rings once the lead's turn ends without having
@@ -338,6 +352,7 @@ and for the residents' own skills:
 gensokyo list [--all] [--json]          # who is here: slot, state, directory, model, context
 gensokyo new ~/dev/x -n Marisa -m haiku # summon; also -e effort, -p permission mode, --prompt,
                                         #   --prompt-file FILE|-, --allowed-tools TOOL, --json
+gensokyo new ~/dev/x --worktree fix     # in a worktree of its own (below); --branch, --base
 gensokyo resume Marisa                  # bring a departed one back (list --all shows them)
 gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
 gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar

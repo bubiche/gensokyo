@@ -129,6 +129,8 @@ fn summon(stage: Stage) -> Modal {
         path: format!("{HOME}/dev/{}", if stage == Stage::Dir { "sc" } else { "scratch_repo" }),
         completions: vec!["scratch_repo/".into(), "scripts/".into()],
         name: "Yuyu".into(),
+        repo: stage != Stage::Dir,
+        worktree: if stage == Stage::Worktree { "fix-login".into() } else { String::new() },
         error: (stage == Stage::Name).then(|| "Yuyu is already here".into()),
         waiting: false,
     })
@@ -236,6 +238,7 @@ fn screens() -> Vec<(&'static str, Model)> {
         ),
         ("summon-dir", with(&|m| m.modal = Some(summon(Stage::Dir)))),
         ("summon-name", with(&|m| m.modal = Some(summon(Stage::Name)))),
+        ("summon-worktree", with(&|m| m.modal = Some(summon(Stage::Worktree)))),
         (
             "banish",
             with(&|m| {
@@ -588,7 +591,12 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
 
 #[test]
 fn a_text_field_has_the_cursor_after_what_is_typed() {
-    for (stage, typed) in [(Stage::Dir, "  /Users/someone/dev/sc"), (Stage::Name, "name: Yuyu")] {
+    let fields = [
+        (Stage::Dir, "  /Users/someone/dev/sc"),
+        (Stage::Name, "name: Yuyu"),
+        (Stage::Worktree, "worktree: fix-login"),
+    ];
+    for (stage, typed) in fields {
         let mut m = shrine();
         m.modal = Some(summon(stage));
         let (t, _) = draw(&m, AREA.width, AREA.height);

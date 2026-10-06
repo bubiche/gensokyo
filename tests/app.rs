@@ -478,7 +478,7 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     assert_eq!(said(&a), None, "the error is the modal's, not the sidebar's");
     host(&mut a, b"\r");
     let id = sent(&mut a)[0]["id"].as_u64().unwrap();
-    daemon(&mut a, Reply::Summoned { id, resident: resident(3, "Sakuya") });
+    daemon(&mut a, Reply::Summoned { id, resident: resident(3, "Sakuya"), note: None });
     assert!(a.m.modal.is_none());
     assert_eq!(a.m.focused.as_deref(), Some("id-Sakuya"));
     // Esc while it waits, and a new summon opened: the old reply leaves the new one alone.
@@ -490,7 +490,7 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     assert!(a.m.modal.is_none());
     host(&mut a, b"\x1dn");
     daemon(&mut a, Reply::Error { id, error: "late".into() });
-    daemon(&mut a, Reply::Summoned { id, resident: resident(4, "Youmu") });
+    daemon(&mut a, Reply::Summoned { id, resident: resident(4, "Youmu"), note: None });
     assert_eq!(summoning(&a), Some((Stage::Dir, false, None)));
 }
 
@@ -539,4 +539,35 @@ fn a_click_on_a_sidebar_line_puts_that_resident_on_screen() {
     assert_eq!(out[0]["who"], "id-Marisa");
     assert_eq!(a.m.focused.as_deref(), Some("id-Marisa"));
     assert!(a.m.screen.is_none(), "Reimu's screen is not Marisa's");
+}
+
+#[test]
+fn in_a_git_repository_summon_asks_for_a_worktree_and_enter_works_right_there() {
+    let repo = std::env::temp_dir().join(format!("gsk-app-repo-{}", std::process::id()));
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let mut a = shrine();
+    let stage = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => Some(s.stage),
+        _ => None,
+    };
+    host(&mut a, b"\x1dn");
+    sent(&mut a);
+    host(&mut a, format!("{}\r", repo.display()).as_bytes());
+    host(&mut a, b"\r");
+    assert_eq!(stage(&a), Some(Stage::Worktree));
+    assert!(sent(&mut a).is_empty(), "the name alone summons nothing in a repository");
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), Some(Stage::Name), "Esc goes back to the name");
+    host(&mut a, b"\r\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["summon"]);
+    assert!(out[0].get("worktree").is_none(), "empty is right here: {}", out[0]);
+
+    host(&mut a, b"\x1b");
+    host(&mut a, b"\x1dn");
+    sent(&mut a);
+    host(&mut a, format!("{}\r\rfix-login\r", repo.display()).as_bytes());
+    let out = sent(&mut a);
+    assert_eq!(out[0]["worktree"], serde_json::json!({"slug": "fix-login"}), "{}", out[0]);
+    std::fs::remove_dir_all(&repo).unwrap();
 }

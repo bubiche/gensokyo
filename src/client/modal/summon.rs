@@ -1,4 +1,5 @@
-//! Summon: a directory (typed with Tab completion, or one of the recent ones), then a name.
+//! Summon: a directory (typed with Tab completion, or one of the recent ones), then a name, and
+//! in a git repository a worktree to work in, which is none unless one is named.
 
 use super::Key;
 use crate::client::app::App;
@@ -19,6 +20,10 @@ pub struct Summon {
     /// Tab completions of `path`. In the name stage `path` is the directory chosen.
     pub completions: Vec<String>,
     pub name: String,
+    /// The directory chosen is in a git repository: the worktree stage follows the name.
+    pub repo: bool,
+    /// A worktree to make, or find, by its name; empty works in the directory itself.
+    pub worktree: String,
     pub error: Option<String>,
     /// Sent, and waiting for the daemon to say it came or why not.
     pub waiting: bool,
@@ -29,6 +34,7 @@ pub enum Stage {
     #[default]
     Dir,
     Name,
+    Worktree,
 }
 
 impl Summon {
@@ -61,6 +67,15 @@ impl Summon {
                 Row::dim(match self.waiting {
                     true => "summoning…",
                     false => "Enter picks a random name when this is empty",
+                }),
+            ],
+            Stage::Worktree => vec![
+                Row::text(&format!("In {}", tilde(&self.path, &m.home))),
+                Row::Field(format!("worktree: {}", self.worktree), PICK),
+                Row::dim(match (self.waiting, self.worktree.trim().is_empty()) {
+                    (true, true) => "summoning…",
+                    (true, false) => "making the worktree…",
+                    (false, _) => "Enter works right here when this is empty",
                 }),
             ],
         };
@@ -108,6 +123,11 @@ impl Summon {
             }
             (Stage::Name, Key::Text(ch)) => self.name.push(ch),
             (Stage::Name, Key::Paste(t)) => self.name.push_str(t.trim()),
+            (Stage::Worktree, Key::Back) => {
+                self.worktree.pop();
+            }
+            (Stage::Worktree, Key::Text(ch)) => self.worktree.push(ch),
+            (Stage::Worktree, Key::Paste(t)) => self.worktree.push_str(t.trim()),
             _ => {}
         }
         false
@@ -139,10 +159,19 @@ impl App {
             self.m.modal = Some(super::Modal::Summon(s));
             return;
         }
-        if s.stage == Stage::Name {
+        if s.stage == Stage::Name && s.repo {
+            (s.stage, s.error) = (Stage::Worktree, None);
+            self.m.modal = Some(super::Modal::Summon(s));
+            return;
+        }
+        if s.stage != Stage::Dir {
             let cwd = expand(&s.path, &home).to_string_lossy().into_owned();
             let name = Some(s.name.trim().to_string()).filter(|n| !n.is_empty());
-            let id = self.send(Request::Summon(proto::Summon { cwd, name, ..Default::default() }));
+            let slug = s.worktree.trim().to_string();
+            let worktree = (s.stage == Stage::Worktree && !slug.is_empty())
+                .then(|| proto::WorktreeAsk { slug, ..Default::default() });
+            let ask = proto::Summon { cwd, name, worktree, ..Default::default() };
+            let id = self.send(Request::Summon(ask));
             (self.summoning, s.waiting, s.error) = (Some(id), true, None);
             self.m.modal = Some(super::Modal::Summon(s));
             return;
@@ -151,6 +180,7 @@ impl App {
         let dir = expand(chosen.as_deref().unwrap_or(&s.path), &home);
         if dir.is_dir() {
             (s.stage, s.path, s.error) = (Stage::Name, tilde(&dir.to_string_lossy(), &home), None);
+            s.repo = dir.ancestors().any(|d| d.join(".git").exists());
             s.completions.clear();
         } else {
             s.error = Some(format!("not a directory: {}", dir.display()));

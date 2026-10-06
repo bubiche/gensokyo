@@ -69,6 +69,9 @@ PROMPT
   say that the context and the bill grow. `--target <resident name>` types the prompt into a
   resident they already have - for "ask Sakuya to do X every morning" - and that prompt gets no
   memory-file sentence, so it has to stand on its own.
+- `--worktree <name>` (default target) makes every run work in that worktree of the cwd's
+  repository, made the first time: for a job that edits code and should not touch the user's
+  checkout. Offer it for "every night, try to fix X on a branch".
 - `--target branch` types a probe's news per branch into whoever works on that branch (see
   "Tell a session about its branch" below).
 - `--deliver` is for a prompt typed into a resident (`persistent`, a name or `branch`). The default,

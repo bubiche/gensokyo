@@ -45,6 +45,8 @@ pub struct Ritual {
     pub mcp_config: Option<String>,
     /// A probe: a program whose changed output is what fires the ritual. As written.
     pub when: Option<String>,
+    /// A worktree of `cwd`'s repository every run works in, by its name.
+    pub worktree: Option<String>,
     // The words as written; `problem` says when one means nothing.
     pub keep: String,
     pub overlap: String,
@@ -205,6 +207,7 @@ const KEYS: &[&str] = &[
     "allowedTools",
     "when",
     "quiet",
+    "worktree",
 ];
 
 /// The frontmatter (`frontmatter::read`) and the prompt under it. A file with no fence is all
@@ -226,6 +229,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
         allowed_tools: Vec::new(),
         mcp_config: None,
         when: None,
+        worktree: None,
         keep: "2h".into(),
         overlap: "skip".into(),
         deliver: "idle".into(),
@@ -258,6 +262,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "enabled" => r.enabled = v,
             "allowed_tools" | "allowedTools" => r.allowed_tools = f.list(),
             "when" => r.when = some(v),
+            "worktree" => r.worktree = some(v),
             "quiet" => r.quiet = v,
             _ => {}
         }
@@ -451,6 +456,27 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
                 "cwd: nothing has answered Claude Code's trust prompt for {} (open Claude Code \
                  there once and accept; until then it does not fire)",
                 crate::paths::short(cwd)
+            ));
+        }
+    }
+    if let Some(w) = &r.worktree {
+        if r.target() != Target::New {
+            return p(format!(
+                "worktree: {w} is for a run of its own (target: new), which starts in it; a \
+                 resident that is already there works where it is"
+            ));
+        }
+        if !name_ok(w) {
+            return p(format!("worktree: {w} is not a worktree's name ({NAME_RULE})"));
+        }
+        if r.overlap == "parallel" {
+            return p("worktree: with overlap: parallel, two runs would edit one checkout".into());
+        }
+        let cwd = Path::new(r.cwd.as_deref().unwrap_or_default());
+        if !cwd.ancestors().any(|d| d.join(".git").exists()) {
+            return p(format!(
+                "worktree: {w} needs a git repository, and cwd {} is in none",
+                crate::paths::short(&cwd.to_string_lossy())
             ));
         }
     }

@@ -247,15 +247,67 @@ pub(super) fn summon(
     s: Summon,
     caller: Option<&str>,
 ) -> Result<proto::Resident, String> {
-    let Summon { cwd, name, model, effort, mode, prompt, allowed_tools } = s;
-    if prompt.as_ref().is_some_and(|p| p.len() > PROMPT_MOST) {
+    may_summon(shrine, &s, caller, Path::new(&s.cwd))?;
+    let Summon { cwd, name, model, effort, mode, prompt, allowed_tools, .. } = s;
+    let mut extra = Vec::new();
+    if !allowed_tools.is_empty() {
+        // Variadic: `launch::argv` puts a flag after it.
+        extra.push("--allowedTools".into());
+        extra.extend(allowed_tools);
+    }
+    let owner = caller.map(String::from);
+    start(
+        shrine,
+        Start { cwd, name, model, effort, mode, prompt, extra, owner, ..Start::default() },
+    )
+}
+
+/// A summon into a worktree: the worktree found or made, then the summon there, and what the
+/// user should hear of how it was made.
+pub(super) async fn summon_in(
+    shrine: &Shared,
+    mut s: Summon,
+    caller: Option<&str>,
+) -> Result<(proto::Resident, Option<String>), String> {
+    let ask = s.worktree.take().ok_or("no worktree asked for")?;
+    let prefix = crate::paths::config("BRANCH_PREFIX").unwrap_or_default();
+    let made = super::worktree::make(Path::new(&s.cwd), &ask, &prefix).await?;
+    log(json!({"ev": "worktree", "path": made.path, "note": made.note}));
+    s.cwd = made.path;
+    summon(shrine, s, caller).map(|r| (r, made.note))
+}
+
+/// Whether this summon would be refused, in `dir`: asked before a worktree is made for it too,
+/// so a refusal leaves no checkout behind.
+pub(super) fn may_summon(
+    shrine: &Shared,
+    s: &Summon,
+    caller: Option<&str>,
+    dir: &Path,
+) -> Result<(), String> {
+    if s.prompt.as_ref().is_some_and(|p| p.len() > PROMPT_MOST) {
         return Err(format!(
             "a first prompt is at most {} KB: put the rest in a file and name it",
             PROMPT_MOST / 1024
         ));
     }
-    if let Some(t) = allowed_tools.iter().find(|t| t.starts_with('-')) {
+    if let Some(t) = s.allowed_tools.iter().find(|t| t.starts_with('-')) {
         return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
+    }
+    {
+        let sh = shrine.borrow();
+        if sh.quitting {
+            return Err("the daemon is stopping".into());
+        }
+        match &s.name {
+            Some(n) if !valid_name(n) => {
+                return Err(
+                    "a name starts with a letter and uses letters, digits, _ . - only".into()
+                );
+            }
+            Some(n) if taken(&sh, n) => return Err(format!("{n} is already here")),
+            _ => {}
+        }
     }
     // A resident's summon is a helper of its own.
     if let Some(c) = caller {
@@ -271,25 +323,14 @@ pub(super) fn summon(
         }
         room(&sh, c)?;
     }
-    let dir = Path::new(&cwd);
     if caller.is_some() && dir.is_dir() && !super::rituals::trust(shrine).trusted(dir) {
         return Err(format!(
             "nothing has answered Claude Code's trust prompt for {} (the user opens Claude Code \
              there once and accepts)",
-            crate::paths::short(&cwd)
+            crate::paths::short(&dir.to_string_lossy())
         ));
     }
-    let mut extra = Vec::new();
-    if !allowed_tools.is_empty() {
-        // Variadic: `launch::argv` puts a flag after it.
-        extra.push("--allowedTools".into());
-        extra.extend(allowed_tools);
-    }
-    let owner = caller.map(String::from);
-    start(
-        shrine,
-        Start { cwd, name, model, effort, mode, prompt, extra, owner, ..Start::default() },
-    )
+    Ok(())
 }
 
 /// What a resident is started with: a summon's fields, and a ritual run's own.

@@ -9,7 +9,7 @@ mod rituals;
 pub use conn::{Error, connect_or_start, peer_pid, refusal, request};
 
 use crate::paths;
-use crate::proto::{Cast, Reply, Request, Summon, Until, Wait};
+use crate::proto::{Cast, Reply, Request, Summon, Until, Wait, WorktreeAsk};
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
@@ -162,6 +162,15 @@ struct New {
     /// Print the new resident as JSON: id, name, slot and the rest `list --json` gives
     #[arg(long)]
     json: bool,
+    /// Work in a checkout of its own, <repo>/.claude/worktrees/<SLUG>, made or found first
+    #[arg(long, value_name = "SLUG")]
+    worktree: Option<String>,
+    /// The worktree's branch; BRANCH_PREFIX and the slug when left out
+    #[arg(long, requires = "worktree")]
+    branch: Option<String>,
+    /// What a new branch starts from; the remote's default branch, fetched, when left out
+    #[arg(long, value_name = "REF", requires = "worktree")]
+    base: Option<String>,
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -314,8 +323,13 @@ fn new(n: New) -> Result<(), String> {
         mode: n.mode,
         prompt: prompt.filter(|p| !p.trim().is_empty()),
         allowed_tools: n.allowed_tools,
+        worktree: n.worktree.map(|slug| WorktreeAsk { slug, branch: n.branch, base: n.base }),
     };
-    match request(Request::Summon(s), true)? {
+    let reply = request(Request::Summon(s), true)?;
+    if let Reply::Summoned { note: Some(note), .. } = &reply {
+        eprintln!("gensokyo: {note}");
+    }
+    match reply {
         Reply::Summoned { resident: r, .. } if n.json => {
             println!("{}", serde_json::to_string(&r).unwrap_or_default());
             Ok(())

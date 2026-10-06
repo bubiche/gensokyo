@@ -292,6 +292,20 @@ pub struct Summon {
     /// `claude --allowedTools`, kept for a recall too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    /// A checkout of its own, `<repo>/.claude/worktrees/<slug>`, made (or found) first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeAsk>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct WorktreeAsk {
+    pub slug: String,
+    /// Else `BRANCH_PREFIX` and the slug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// What a new branch starts from; else the remote's default branch, fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -378,6 +392,10 @@ pub enum Reply {
     Summoned {
         id: u64,
         resident: Resident,
+        /// What the user should know about how it was made: a worktree reused, a base that
+        /// could not be fetched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     Done {
         id: u64,

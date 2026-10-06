@@ -163,7 +163,7 @@ async fn summon_type_click_detach_reattach() {
     let mut c = Client::spawn(&dir, 120, 40);
     c.wait("the empty shrine", |s| s.contains("the shrine is empty")).await;
 
-    // Leader, n: the summon modal; Enter takes the client's own directory, Enter again a name.
+    // Leader, n: the summon modal; Enter takes the client's own directory, then a name.
     c.send(b"\x1d").await;
     c.send(b"n").await;
     c.wait("the summon modal", |s| s.contains("Where?")).await;
@@ -173,6 +173,15 @@ async fn summon_type_click_detach_reattach() {
         c.send(&[ch]).await;
     }
     c.send(b"\r").await;
+    // In a git repository (a build's target/ is in this one) a worktree is asked for next:
+    // Enter leaves it empty, which works right there.
+    let worktree = |s: &str| s.contains("Enter works right here");
+    let s = c
+        .wait("the stub, or the worktree stage", |s| worktree(s) || s.contains("stub-claude Reimu"))
+        .await;
+    if worktree(&s) {
+        c.send(b"\r").await;
+    }
     let s = c.wait("the stub on screen", |s| s.contains("stub-claude Reimu")).await;
     assert!(s.contains("1 ○ Reimu"), "{s}");
     // Typing waits until the stub reads, and past the reattach nudge's two resizes: a SIGWINCH

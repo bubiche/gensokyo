@@ -96,6 +96,9 @@ pub struct Add {
     /// When a prompt for a resident is typed: idle (once its turn has ended; the default) or now
     #[arg(long)]
     deliver: Option<String>,
+    /// Every run works in this worktree of cwd's repository, made the first time (target new)
+    #[arg(long, value_name = "NAME")]
+    worktree: Option<String>,
     /// Whether a fire missed while gensokyo was not running is made up once (true or false)
     #[arg(long, value_name = "BOOL")]
     catch_up: Option<String>,
@@ -237,7 +240,7 @@ fn add(o: Add) -> Result<(), String> {
     (a.description, a.model, a.effort, a.mode) = (o.description, o.model, o.effort, o.mode);
     (a.mcp_config, a.target, a.keep, a.overlap) = (o.mcp_config, o.target, o.keep, o.overlap);
     (a.catch_up, a.headless, a.disabled) = (o.catch_up, o.headless, o.disabled);
-    (a.when, a.quiet, a.deliver) = (o.when, o.quiet, o.deliver);
+    (a.when, a.quiet, a.deliver, a.worktree) = (o.when, o.quiet, o.deliver, o.worktree);
     a.allowed_tools = o.allowed_tools.iter().flat_map(|v| crate::frontmatter::items(v)).collect();
     let share = share();
     let (_, report) = ritual::add(

@@ -532,7 +532,7 @@ impl App {
                     self.say(Say::Notice, format!("{} {text}", state.glyph()));
                 }
             }
-            Reply::Summoned { id, resident } => {
+            Reply::Summoned { id, resident, .. } => {
                 // Only the modal waiting on it: one opened since is another summon.
                 if self.summoning.take_if(|s| *s == id).is_some()
                     && matches!(&self.m.modal, Some(Modal::Summon(s)) if s.waiting)

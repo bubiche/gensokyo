@@ -290,13 +290,38 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 Some(fail(why))
             }
             Request::List { all } => Some(Reply::List { id, residents: list(&shrine, all) }),
+            // A worktree first, by a task of its own: a checkout takes seconds. Refused, it
+            // makes none. One whose client leaves meanwhile still comes: git is half done.
+            Request::Summon(s) if s.worktree.is_some() => {
+                match super::shrine::may_summon(
+                    &shrine,
+                    &s,
+                    caller.as_deref(),
+                    std::path::Path::new(&s.cwd),
+                ) {
+                    Err(e) => Some(fail(e)),
+                    Ok(()) => {
+                        let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
+                        tokio::task::spawn_local(async move {
+                            let r = super::shrine::summon_in(&shrine, s, caller.as_deref()).await;
+                            let r = r.map_or_else(fail, |(resident, note)| Reply::Summoned {
+                                id,
+                                resident,
+                                note,
+                            });
+                            send(&out, &r).await;
+                        });
+                        None
+                    }
+                }
+            }
             Request::Summon(s) => Some(
                 summon(&shrine, s, caller.as_deref())
-                    .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+                    .map_or_else(fail, |resident| Reply::Summoned { id, resident, note: None }),
             ),
             Request::Recall { who } => Some(
                 recall(&shrine, &who, caller.as_deref())
-                    .map_or_else(fail, |resident| Reply::Summoned { id, resident }),
+                    .map_or_else(fail, |resident| Reply::Summoned { id, resident, note: None }),
             ),
             Request::Wait(w) => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());

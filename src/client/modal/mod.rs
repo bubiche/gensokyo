@@ -161,6 +161,9 @@ impl App {
         match &mut self.m.modal {
             Some(Modal::Timetable(tt)) if tt.confirm => tt.confirm = false,
             Some(Modal::Timetable(tt)) if tt.open.is_some() => tt.open = None,
+            Some(Modal::Summon(s)) if s.stage == Stage::Worktree && !s.waiting => {
+                (s.stage, s.error) = (Stage::Name, None);
+            }
             Some(Modal::Summon(s)) if s.stage == Stage::Name && !s.waiting => {
                 (s.stage, s.error) = (Stage::Dir, None);
                 self.refresh_modal();

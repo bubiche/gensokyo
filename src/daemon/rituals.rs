@@ -8,7 +8,7 @@ use super::registry;
 use super::shrine::{Shared, Shrine, Start, recall, start, taken, valid_name};
 use crate::cron::{self, Schedule, Why};
 use crate::hooks;
-use crate::proto::{Reply, RitualInfo, RitualVerb};
+use crate::proto::{self, Reply, RitualInfo, RitualVerb};
 use crate::ritual::{self, Dir, Ritual, Target, Trust, when};
 use crate::tele;
 use jiff::tz::TimeZone;
@@ -69,6 +69,8 @@ pub(super) struct Rites {
     /// the newest one's number. An older one that finds it is not the newest gives up.
     pub(super) waiting: HashMap<(String, String), Waiter>,
     held: u64,
+    /// Rituals whose worktree git is making for a run.
+    making: HashSet<String>,
     /// What a branch ritual's probe printed that was left out, said once per daemon.
     warned: HashSet<(String, String)>,
     /// The listing last sent to watchers.
@@ -373,7 +375,8 @@ pub(super) fn notice(sh: &Shrine, slug: &str, text: &str) {
 
 /// A run of it still going: a resident it started that has not finished, or a headless run.
 fn running(sh: &Shrine, slug: &str) -> bool {
-    sh.rites.headless.get(slug).is_some_and(|n| *n > 0)
+    sh.rites.making.contains(slug)
+        || sh.rites.headless.get(slug).is_some_and(|n| *n > 0)
         || sh.entries.iter().any(|e| {
             e.rec.ritual.as_deref() == Some(slug) && e.handle.is_some() && !e.aware.finished()
         })
@@ -390,6 +393,9 @@ fn fire(
     now: i64,
     key: Option<Fired>,
 ) -> Result<String, String> {
+    if let (Some(slug), Target::New) = (r.worktree.clone(), r.target()) {
+        return in_worktree(shrine, r, label, alongside, key, slug);
+    }
     let cwd = r.cwd.as_deref().map(crate::paths::short).unwrap_or_default();
     log(json!({"ev": "ritual", "slug": r.slug, "ran": label, "alongside": alongside}));
     let said = match r.target() {
@@ -425,6 +431,52 @@ fn fire(
     delivered(d, key);
     let beside = if alongside { ", alongside the run that was still going" } else { "" };
     d.note(now, "ran", &format!("ran ({label}){beside}"));
+    Ok(said)
+}
+
+/// A run in the ritual's worktree: found or made first, by a task of its own (a checkout takes
+/// seconds), then fired there. Meanwhile the ritual counts as running.
+fn in_worktree(
+    shrine: &Shared,
+    r: &Ritual,
+    label: &str,
+    alongside: bool,
+    key: Option<Fired>,
+    slug: String,
+) -> Result<String, String> {
+    let cwd = r.cwd.clone().ok_or("cwd: missing")?;
+    shrine.borrow_mut().rites.making.insert(r.slug.clone());
+    let said = format!("{} is making its worktree {slug}, then runs there", r.slug);
+    let (shrine, mut run, label) = (shrine.clone(), r.clone(), label.to_string());
+    tokio::task::spawn_local(async move {
+        let ask = proto::WorktreeAsk { slug, ..Default::default() };
+        let prefix = crate::paths::config("BRANCH_PREFIX").unwrap_or_default();
+        let made = super::worktree::make(std::path::Path::new(&cwd), &ask, &prefix).await;
+        shrine.borrow_mut().rites.making.remove(&run.slug);
+        let d = Dir::of(&run.slug);
+        let made = match made {
+            Ok(m) => m,
+            Err(e) => return complain(&shrine, &run, &d, now(), &format!("worktree: {e}")),
+        };
+        if let Some(n) = &made.note {
+            d.note(now(), "worktree", n);
+        }
+        // The repository's top may be above the trusted cwd, and a run at the trust dialog
+        // would be alive and stuck.
+        if !trust(&shrine).trusted(std::path::Path::new(&made.path)) {
+            let why = format!(
+                "worktree: nothing has answered Claude Code's trust prompt for {} (open Claude \
+                 Code there once and accept)",
+                crate::paths::short(&made.path)
+            );
+            return complain(&shrine, &run, &d, now(), &why);
+        }
+        (run.cwd, run.worktree) = (Some(made.path), None);
+        match fire(&shrine, &run, &d, &label, alongside, now(), key) {
+            Ok(_) => _ = shrine.borrow_mut().rites.complained.remove(&run.slug),
+            Err(e) => complain(&shrine, &run, &d, now(), &e),
+        }
+    });
     Ok(said)
 }
 

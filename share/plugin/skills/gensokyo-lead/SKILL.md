@@ -45,9 +45,11 @@ It prints one JSON object (`id`, `name`, `slot`, `owner`, `turns`, `needs`, …)
 already have 5 helpers, when you are a helper, and in a directory Claude Code was never trusted
 in: tell the user to open Claude Code there once and accept, or pick a directory they trust.
 
-**Separate checkouts.** Two helpers editing one working tree collide. Give each its own with
-`git worktree add` inside the repo you are in (`git worktree add .worktrees/<name> -b <branch>`)
-and summon it there. A directory outside a trusted one may be refused as untrusted.
+**Separate checkouts.** Two helpers editing one working tree collide. Give each its own:
+`gensokyo new <repo dir> --worktree <name> --name <helper>` makes (or reuses)
+`.claude/worktrees/<name>` on a branch of that name, from the freshly fetched default branch
+(`--base <ref>` for another, `--branch <b>` to name it), and summons the helper there. Tell the
+helper its branch. Don't make worktrees by hand, and don't remove them: that is the user's.
 
 ## Wait in the background, then read
 

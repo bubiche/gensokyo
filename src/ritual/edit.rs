@@ -23,6 +23,7 @@ pub struct Add {
     pub keep: Option<String>,
     pub overlap: Option<String>,
     pub deliver: Option<String>,
+    pub worktree: Option<String>,
     pub headless: bool,
     pub catch_up: Option<String>,
     pub prompt: String,
@@ -109,6 +110,7 @@ pub fn add(
         ("keep", &a.keep),
         ("overlap", &a.overlap),
         ("deliver", &a.deliver),
+        ("worktree", &a.worktree),
         ("catch_up", &a.catch_up),
     ] {
         if let Some(v) = v {

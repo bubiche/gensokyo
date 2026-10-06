@@ -1,0 +1,10 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ summon ───────────────────────────────────┐"
+"│ In ~/dev/scratch_repo                     │"
+"│ worktree: fix-login                       │"
+"│ Enter works right here when this is empty │"
+"│ [summon ⏎] [cancel esc]                   │"
+"└───────────────────────────────────────────┘"

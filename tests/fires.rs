@@ -370,6 +370,28 @@ fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
 }
 
 #[test]
+fn a_headless_run_that_says_too_much_is_cut_but_its_answer_is_kept_whole() {
+    let answer = "y".repeat(5000);
+    let env = [
+        ("GENSOKYO_RUN_BYTES", "2048"),
+        ("STUB_P_NOISE", "9000"),
+        ("STUB_P_RESULT", answer.as_str()),
+    ];
+    let (d, log) = headless_run("hl-much", &env);
+    assert!(log.contains("--- cut at 2 KB: all of it is in "), "{log}");
+    assert!(!log.contains(&"y".repeat(2049)), "{} bytes of log", log.len());
+    let file = |ext: &str| {
+        let runs = std::fs::read_dir(d.dir.join("rituals/quiet/runs")).unwrap().flatten();
+        let mut f = runs.map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == ext));
+        std::fs::read_to_string(f.next().unwrap()).unwrap()
+    };
+    let err = file("err");
+    assert!(err.ends_with("\n--- cut here by gensokyo, past 2 KB\n"), "{err}");
+    assert_eq!(err.len(), 2048 + "\n--- cut here by gensokyo, past 2 KB\n".len());
+    assert!(file("json").contains(&answer), "the answer itself is whole");
+}
+
+#[test]
 fn a_headless_run_that_fails_says_so_either_way() {
     let (d, log) = headless_run("hl-fail", &[("STUB_P_FAIL", "no login")]);
     assert!(log.contains("--- claude exited 1, and said:\nstub-claude: no login"), "{log}");

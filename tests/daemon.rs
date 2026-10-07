@@ -1386,3 +1386,16 @@ fn a_release_whose_selection_went_says_so_and_a_resident_cannot_select() {
     let e = back.iter().find(|v| v["id"] == 2).unwrap();
     assert!(e["error"].as_str().unwrap().starts_with("the screens and keyboards"), "{e}");
 }
+
+#[test]
+fn a_long_login_log_is_emptied_as_the_daemon_starts_and_a_short_one_kept() {
+    let d = Daemon::new("loginlog", &[]);
+    let log = d.dir.join("login.log");
+    std::fs::write(&log, "launchd caught this\n".repeat(60_000)).unwrap();
+    d.cli(&["list"]);
+    assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+    std::fs::write(&log, "launchd caught this\n").unwrap();
+    d.cli(&["quit"]);
+    d.cli(&["list"]);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "launchd caught this\n");
+}

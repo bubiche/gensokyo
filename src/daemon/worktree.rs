@@ -247,7 +247,8 @@ pub(super) async fn make(dir: &Path, ask: &WorktreeAsk, prefix: &str) -> Result<
 }
 
 /// `.claude/worktrees/` kept out of `git status`, in the repo's own exclude file, unless
-/// something already ignores it.
+/// something already ignores it. Never twice: a `.gitignore` that un-ignores it wins over the
+/// line however often it is there.
 async fn exclude(top: &Path, common: &Path, slug: &str) {
     let probe = format!(".claude/worktrees/{slug}");
     if git(top, &["check-ignore", "-q", &probe], LOCAL).await.is_ok() {
@@ -256,6 +257,9 @@ async fn exclude(top: &Path, common: &Path, slug: &str) {
     let file = common.join("info/exclude");
     let _ = std::fs::create_dir_all(common.join("info"));
     let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+    if text.lines().any(|l| l == "/.claude/worktrees/") {
+        return;
+    }
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }

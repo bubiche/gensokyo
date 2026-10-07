@@ -82,6 +82,15 @@ fn write_log(log: &mut Option<Log>, mut v: Value) {
     }
 }
 
+/// `path` cut back to its first `keep` bytes once past `most`, in place: whoever appends to it
+/// goes on at the new end. A cut that keeps some says where it was made.
+pub(super) fn cut(path: &Path, most: u64, keep: u64) {
+    let Ok(mut f) = OpenOptions::new().append(true).open(path) else { return };
+    if f.metadata().is_ok_and(|m| m.len() > most) && f.set_len(keep).is_ok() && keep > 0 {
+        let _ = write!(f, "\n--- cut here by gensokyo, past {} KB\n", most >> 10);
+    }
+}
+
 /// A panic as one log line. Tokio catches a task's panic and carries on without the task, so
 /// this line is all there is to say it happened. Never waits for the log: the panic may have
 /// come from inside `log`.

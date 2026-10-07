@@ -18,6 +18,17 @@ use std::time::{Duration, Instant};
 /// Headless run logs kept per ritual.
 const RUNS_KEPT: usize = 50;
 
+/// The most of a run's stderr kept once it ends, and of its answer copied into its log, in bytes.
+const RUN_MOST: u64 = 1 << 20;
+
+/// `RUN_MOST`, or `$GENSOKYO_RUN_BYTES` for tests, read once.
+fn run_most() -> u64 {
+    static MOST: OnceLock<u64> = OnceLock::new();
+    *MOST.get_or_init(|| {
+        std::env::var("GENSOKYO_RUN_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(RUN_MOST)
+    })
+}
+
 /// A headless run still going after this is stopped, its whole process group: a `claude -p`
 /// that hangs would otherwise hold its ritual up until the daemon restarts.
 const HEADLESS_LIMIT: Duration = Duration::from_secs(3600);
@@ -192,6 +203,7 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
                 }
             }
         };
+        super::log::cut(&part(&run.stem, "err"), run_most(), run_most());
         // One that ended while no daemon was there took until its last write, not until now.
         let took = match ended {
             Some(Ended::Unseen) => last_write(&run.stem)
@@ -266,6 +278,17 @@ fn part(stem: &Path, ext: &str) -> PathBuf {
     PathBuf::from(format!("{}.{ext}", stem.display()))
 }
 
+/// A run's answer as its log copies it: past `run_most()`, the rest is only in its `.json`.
+fn shown(s: &str, stem: &Path) -> String {
+    match crate::hooks::cap(s, run_most() as usize) {
+        c if c.len() < s.len() => {
+            let json = part(stem, "json");
+            format!("{c}\n--- cut at {} KB: all of it is in {}\n", run_most() >> 10, json.display())
+        }
+        c => format!("{c}\n"),
+    }
+}
+
 /// From a finished headless run's files: the journal line, the notice, and what the log ends
 /// with. A run that fails can still print its object (`is_error`, the message as `result`).
 fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
@@ -289,7 +312,7 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
         let said: Vec<&str> = err.lines().take(20).collect();
         let mut tail = format!("--- claude {code}, and said:\n");
         if !result.is_empty() {
-            tail += &format!("{result}\n");
+            tail += &shown(&result, stem);
         }
         tail += &format!("{}\n---\nfailed after {took}\n", said.join("\n"));
         let why = if first.is_empty() { tele::clean(&err, 120) } else { first };
@@ -309,11 +332,11 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
     let denied = denied.join(", ");
     let mut tail = if v.is_null() {
         format!(
-            "gensokyo could not read the result as JSON; it is here as claude printed it.\n\n{}\n",
-            String::from_utf8_lossy(&raw)
+            "gensokyo could not read the result as JSON; it is here as claude printed it.\n\n{}",
+            shown(&String::from_utf8_lossy(&raw), stem)
         )
     } else {
-        format!("{result}\n")
+        shown(&result, stem)
     };
     tail += &format!("\n---\ndone in {took}");
     if let Some(c) = &cost {

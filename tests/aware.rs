@@ -5,7 +5,7 @@ mod common;
 
 use gensokyo::daemon::aware::{Aware, Key, Line, Registry, kitty_key};
 use gensokyo::daemon::registry;
-use gensokyo::hooks::{reduce, take_spool};
+use gensokyo::hooks::{SPOOL_MOST, reduce, spool, take_spool};
 use gensokyo::proto::{Hook, State};
 use gensokyo::tele;
 use serde_json::{Value, json};
@@ -307,6 +307,24 @@ fn the_spool_is_read_in_order_and_what_was_just_renamed_waits_a_beat() {
     assert_eq!(ats, [40, 50]);
     // Tried again at each start, and kept again while still unread.
     assert_eq!(std::fs::read_to_string(root.join("spool.later.jsonl")).unwrap(), "not json\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_spool_nobody_reads_keeps_its_newest_hooks() {
+    let root = common::fresh("spool-most");
+    let line = |at: i64| json!({"t": "hook", "resident": "r", "hook": {"event": "Stop", "at": at}});
+    let hook = |at: i64| spool(&root, &serde_json::from_value(line(at)).unwrap());
+    std::fs::write(root.join("spool.0.jsonl"), format!("{}\n", line(1))).unwrap();
+    let full = format!("{}\n", line(2));
+    std::fs::write(root.join("spool.jsonl"), full.repeat(SPOOL_MOST as usize / full.len()))
+        .unwrap();
+    hook(3);
+    assert!(!root.join("spool.jsonl").exists(), "a spool past its size moves aside");
+    hook(4);
+    let ats: Vec<_> = take_spool(&root, 0).iter().map(|(_, h)| h.at).collect();
+    assert!(!ats.contains(&1), "the oldest went");
+    assert_eq!(ats[ats.len() - 3..], [2, 3, 4]);
     let _ = std::fs::remove_dir_all(&root);
 }
 

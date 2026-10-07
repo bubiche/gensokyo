@@ -450,7 +450,8 @@ version of it is refused. Script against the commands.
   (each resident's last answer), `daemon.log`, `run/` (the socket and locks), and each ritual's
   notes, journal and probe output. `GENSOKYO_STATE_DIR` moves it. `daemon.log` moves to
   `daemon.log.1` past 5 MB. A departed record, and its answer, is forgotten once it is more than
-  30 days old and over 100 others have left since; a ritual keeps its newest 50 runs.
+  30 days old and over 100 others have left since; a ritual keeps its newest 50 runs. A headless
+  run's stderr is cut to its first 1 MB once it ends.
 
 ## Building and developing
 

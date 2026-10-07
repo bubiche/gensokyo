@@ -7,7 +7,7 @@
 #                             call adds a line to agents.calls
 #   -p / --print              one headless run: the JSON object of --output-format json, else
 #                             the result as plain text. What it answers is set by STUB_P_* (see
-#                             below: SLEEP, FAIL, ERROR, RESULT, DENY, SESSION, COST, TURNS); every call leaves its arguments in print.args and its
+#                             below: SLEEP, NOISE, FAIL, ERROR, RESULT, DENY, SESSION, COST, TURNS); every call leaves its arguments in print.args and its
 #                             prompt in print.prompt
 #   interactive (default)     honours --session-id, --name, --resume, swallows the other launch
 #                             flags, sets the window title to "✳ <name>", pushes the keyboard
@@ -105,6 +105,8 @@ if [ -n "$printing" ]; then
   # worked, one whose tools were refused with nobody there to ask, one that failed before it
   # started, and one still going when something else asks whether it is.
   [ -n "${STUB_P_SLEEP:-}" ] && sleep "$STUB_P_SLEEP"
+  # A run that writes this many bytes to stderr.
+  [ -n "${STUB_P_NOISE:-}" ] && head -c "$STUB_P_NOISE" /dev/zero | tr '\0' x >&2
   # A tool or MCP server that outlives the run, in its process group.
   if [ -n "${STUB_P_LEAVE:-}" ]; then
     sleep 300 </dev/null >/dev/null 2>&1 &

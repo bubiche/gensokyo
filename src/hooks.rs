@@ -19,6 +19,9 @@ const DELIVER: Duration = Duration::from_millis(300);
 /// The most `spool.later.jsonl` holds, in bytes.
 const SPOOL_LATER_MAX: u64 = 256 * 1024;
 
+/// The size, in bytes, past which `spool.jsonl` moves to `spool.0.jsonl`.
+pub const SPOOL_MOST: u64 = 2 << 20;
+
 /// How long a spool renamed aside waits before the poll reads it, in ms.
 pub const SPOOL_SETTLE: i64 = 1000;
 
@@ -115,17 +118,18 @@ fn deliver(req: &Request) -> bool {
     }
 }
 
-/// One line appended to `spool.jsonl`, for the daemon to replay.
+/// One line appended to `spool.jsonl`, for the daemon to replay. Past `SPOOL_MOST` it moves to
+/// `spool.0.jsonl`, over the one before: with no daemon to read it, the newest hooks are kept.
 pub fn spool(root: &Path, req: &Request) {
     let Ok(mut line) = serde_json::to_vec(req) else { return };
     line.push(b'\n');
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(root.join("spool.jsonl"));
+    let path = root.join("spool.jsonl");
+    let f = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&path);
     // One write: appends from several hooks at once do not interleave.
     let _ = f.and_then(|mut f| f.write_all(&line));
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > SPOOL_MOST) {
+        let _ = std::fs::rename(&path, root.join("spool.0.jsonl"));
+    }
 }
 
 /// Every spooled hook, oldest first, and the spool emptied. It is renamed aside, so a hook

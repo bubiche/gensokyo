@@ -29,6 +29,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::AbortHandle;
 
+/// The size, in bytes, past which `login.log` is emptied as the daemon starts.
+const LOGIN_MOST: u64 = 1 << 20;
+
 /// How long an input may wait for room in a resident's queue: one that has stopped reading its
 /// tty would otherwise hold up every request after it on the connection.
 const INPUT_WAIT: Duration = Duration::from_millis(500);
@@ -39,6 +42,8 @@ pub fn main() -> std::process::ExitCode {
     // SAFETY: one thread still; the runtime starts below.
     unsafe { std::env::set_var("GENSOKYO_STATE_DIR", &root) };
     let run = root.join("run");
+    // launchd appends to it at every start, and starts again a daemon that could not.
+    super::log::cut(&root.join("login.log"), LOGIN_MOST, 0);
     for d in [&run, &root.join("residents"), &root.join("departed"), &root.join("answers")] {
         if let Err(e) = std::fs::create_dir_all(d) {
             eprintln!("gensokyo daemon: {}: {e}", d.display());

@@ -87,6 +87,18 @@ fn a_worktree_starts_from_the_fetched_default_and_is_reused_by_its_name() {
 }
 
 #[test]
+fn a_gitignore_that_shows_the_worktrees_gets_one_exclude_line_all_the_same() {
+    let (d, work) = setup("shown", "me/");
+    std::fs::write(work.join(".gitignore"), "!/.claude/worktrees/\n").unwrap();
+    for slug in ["one", "two"] {
+        let r = summon(&d, &work, json!({"worktree": {"slug": slug}}));
+        assert_eq!(r["t"], "summoned", "{r}");
+    }
+    let exclude = std::fs::read_to_string(work.join(".git/info/exclude")).unwrap();
+    assert_eq!(exclude.matches("/.claude/worktrees/").count(), 1, "{exclude}");
+}
+
+#[test]
 fn a_branch_only_the_remote_has_is_tracked() {
     let (d, work) = setup("remote", "");
     git(

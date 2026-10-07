@@ -44,7 +44,7 @@ const IDLE_HOLD: Duration = Duration::from_secs(10);
 const HOLD_MOST: Duration = Duration::from_secs(4 * 3600);
 
 /// A length from the environment in ms, for tests; else `d`.
-fn env_ms(var: &str, d: Duration) -> Duration {
+pub(super) fn env_ms(var: &str, d: Duration) -> Duration {
     std::env::var(var).ok().and_then(|v| v.parse().ok()).map_or(d, Duration::from_millis)
 }
 

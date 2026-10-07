@@ -421,6 +421,54 @@ async fn the_timetable_runs_pauses_and_removes_a_ritual_and_keeps_the_examples()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_search_moves_the_view_to_each_match_and_its_keys_never_reach_the_resident() {
+    let dir = state("search");
+    let _quit = Quit(dir.clone());
+    cli(&dir, &["new", "work", "-n", "Reimu"]);
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
+    c.wait("the stub reading", |_| ready(&dir) == 1).await;
+    let t = Instant::now();
+    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    // 120 lines, a mark every 30 from the 10th: the stub echoes them after the tty did.
+    let lines: Vec<String> = (0..120)
+        .map(|i| if i % 30 == 10 && i < 100 { format!("mark{i}") } else { format!("line{i}") })
+        .collect();
+    c.send(format!("\x1b[200~{}\x1b[201~\r", lines.join("\r")).as_bytes()).await;
+    c.wait("the echo", |s| s.contains("> line119")).await;
+
+    // Back from the live screen: the newest above it first, then older with n.
+    c.send(b"\x1d/").await;
+    c.wait("the prompt", |s| s.contains("└ / ")).await;
+    c.send(b"mark").await;
+    c.wait("what is typed", |s| s.contains("└ /mark ")).await;
+    c.send(b"\r").await;
+    let at = |n: &'static str, not: &'static str| {
+        move |s: &str| s.contains("/mark · n N") && s.contains(n) && !s.contains(not)
+    };
+    c.wait("the newest", at("> mark70", "> line119")).await;
+    c.send(b"n").await;
+    c.wait("the one before", at("> mark40", "> mark70")).await;
+    c.send(b"N").await;
+    c.wait("forward again", at("> mark70", "> mark40")).await;
+    // On toward the live screen: the view goes home, and the keys stay the search's.
+    c.send(b"?").await;
+    c.wait("the prompt, on", |s| s.contains("└ ? ")).await;
+    c.send(b"line119\r").await;
+    c.wait("on the live screen", |s| s.contains("?line119 · n N") && !s.contains("↑ ")).await;
+    c.send(b"n").await;
+    c.wait("nothing newer", |s| s.contains("no “line119” further on")).await;
+    // Esc ends it; n then is the resident's.
+    c.send(b"\x1b").await;
+    c.wait("the search over", |s| !s.contains("n N for more")).await;
+    c.send(b"n\r").await;
+    c.wait("the n read", |_| stub(&dir, "input").lines().last() == Some("n")).await;
+    assert!(!stub(&dir, "input").contains("mark\n"), "the search went to the resident");
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn the_wheel_scrolls_back_for_every_client_and_a_letter_goes_home_and_on() {
     let dir = state("scroll");
     let _quit = Quit(dir.clone());

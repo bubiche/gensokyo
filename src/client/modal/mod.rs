@@ -72,6 +72,7 @@ fn help() -> (String, Vec<Row>) {
     }));
     rows.push(Row::text("Nobody on screen, or a departed one: the keys alone."));
     rows.push(Row::text("Scrolled back: j k a row, b f a screen, g the top, q home."));
+    rows.push(Row::text("Search: / back, ? on, then n more the same way, N the other."));
     let legend: Vec<String> = [
         (State::Busy, "busy"),
         (State::Awaits, "needs you"),
@@ -101,7 +102,7 @@ pub(super) enum Key {
 }
 
 impl Key {
-    fn of(c: &Chunk) -> Key {
+    pub(super) fn of(c: &Chunk) -> Key {
         match c {
             // One character per read is typing; more is a burst, taken as a paste.
             Chunk::Text(t) if t.chars().count() == 1 => Key::Text(t.chars().next().unwrap_or(' ')),

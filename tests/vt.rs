@@ -6,7 +6,7 @@ mod common;
 use common::base64;
 use std::path::{Path, PathBuf};
 
-use gensokyo::vt::{Color, Frame, Key, KeyEvent, Mods, Style, Vt};
+use gensokyo::vt::{Color, FOUND, Frame, Key, KeyEvent, Mods, Style, Vt};
 
 fn shift_enter() -> KeyEvent {
     KeyEvent::press(Key::Enter, Mods::SHIFT)
@@ -231,6 +231,128 @@ fn the_alternate_screen_has_no_scrollback_to_move_through() {
     assert!(f.cursor.is_some());
     vt.feed(b"\x1b[?1049l");
     assert_eq!(vt.scrolled(), (0, 26));
+}
+
+/// What a search found, as drawn: row on screen, first column, text.
+fn found(f: &Frame) -> Vec<(usize, u16, String)> {
+    let runs = f.rows.iter().enumerate().flat_map(|(y, r)| r.iter().map(move |r| (y, r)));
+    runs.filter(|(_, r)| r.style == FOUND).map(|(y, r)| (y, r.col, r.text.clone())).collect()
+}
+
+#[test]
+fn the_scrollback_is_searched_back_and_on_and_what_was_found_is_drawn() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        let s = match i % 10 {
+            3 if i == 13 => format!("line {i} Needle\r\n"),
+            3 => format!("line {i} needle\r\n"),
+            _ => format!("line {i}\r\n"),
+        };
+        vt.feed(s.as_bytes());
+    }
+    // Back from the live screen: the newest first, a third of the way down the view.
+    assert!(vt.find("needle", true));
+    let f = vt.frame();
+    assert_eq!(found(&f), [(1, 8, "needle".into())]);
+    assert_eq!((f.text()[1].as_str(), f.back), ("line 23 needle", 4));
+    // Lower case finds either case; a capital only its own.
+    assert!(vt.find("needle", true));
+    assert_eq!(vt.frame().text()[1], "line 13 Needle");
+    assert!(vt.find("needle", true));
+    assert_eq!(vt.frame().text()[1], "line 3 needle");
+    // Nothing older: what was found stays, and so does the view.
+    assert!(!vt.find("needle", true));
+    let f = vt.frame();
+    assert_eq!(
+        (found(&f), f.text()[1].as_str()),
+        ([(1, 7, "needle".into())].to_vec(), "line 3 needle")
+    );
+    assert!(vt.find("Needle", false));
+    assert_eq!(vt.frame().text()[1], "line 13 Needle");
+    assert!(!vt.find("Needle", false));
+    assert!(!vt.find("Needle", true));
+    // Output while it shows leaves it on its text.
+    for i in 30..40 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let f = vt.frame();
+    assert_eq!(
+        (found(&f), f.text()[1].as_str()),
+        ([(1, 8, "Needle".into())].to_vec(), "line 13 Needle")
+    );
+    // Scrolled away from it, a search starts from the view instead.
+    vt.scroll(Some(-1000));
+    assert!(found(&vt.frame()).is_empty());
+    assert!(vt.find("needle", false));
+    assert_eq!(vt.frame().text()[3], "line 3 needle");
+    // Home again, it is let go.
+    vt.scroll(None);
+    assert!(vt.find("line 39", true));
+    let f = vt.frame();
+    assert_eq!((found(&f), f.back), ([(3, 0, "line 39".into())].to_vec(), 0));
+    vt.scroll(None);
+    assert!(found(&vt.frame()).is_empty());
+}
+
+#[test]
+fn a_search_goes_through_a_row_match_by_match_and_counts_wide_cells() {
+    let mut vt = Vt::new(30, 4);
+    vt.feed("two \u{4e2d} ab ab ab \u{4e2d}ab\r\n".as_bytes());
+    for _ in 0..6 {
+        vt.feed(b"filler\r\n");
+    }
+    let cols = |vt: &mut Vt| found(&vt.frame()).iter().map(|f| f.1).collect::<Vec<_>>();
+    let mut seen = Vec::new();
+    while vt.find("ab", true) {
+        seen.extend(cols(&mut vt));
+    }
+    // The wide character before them takes two columns each.
+    assert_eq!(seen, [18, 13, 10, 7]);
+    assert!(vt.find("\u{4e2d}ab", false));
+    assert_eq!(found(&vt.frame()), [(0, 16, "\u{4e2d}ab".into())]);
+}
+
+#[test]
+fn what_was_found_keeps_to_its_text_when_the_oldest_rows_go() {
+    let mut vt = Vt::new(200, 10);
+    let pad = "x".repeat(150);
+    let feed = |vt: &mut Vt, from: usize, to: usize| {
+        let mut b = String::new();
+        for i in from..to {
+            let mark = if i % 1000 == 500 { " needle" } else { "" };
+            b.push_str(&format!("line {i}{mark} {pad}\r\n"));
+        }
+        vt.feed(b.as_bytes());
+    };
+    feed(&mut vt, 0, 7000);
+    assert!(vt.find("needle", true));
+    let at = |vt: &mut Vt| {
+        let f = vt.frame();
+        let y = found(&f).first().map(|f| f.0);
+        y.map(|y| f.text()[y].split(' ').take(2).collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(at(&mut vt).as_deref(), Some("line 6500"));
+    let kept = vt.scrolled().1;
+    // Enough more that the oldest rows go: every row's place from the top moves.
+    feed(&mut vt, 7000, 10000);
+    assert!(vt.scrolled().1 < kept + 1000, "the scrollback is full: old rows went");
+    assert_eq!(at(&mut vt).as_deref(), Some("line 6500"));
+    assert!(vt.find("needle", true));
+    assert_eq!(at(&mut vt).as_deref(), Some("line 5500"));
+}
+
+#[test]
+fn the_alternate_screen_is_not_searched() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    assert!(vt.find("line 2", true));
+    vt.feed(b"\x1b[?1049h\x1b[Hline 2 full screen");
+    assert!(!vt.find("line 2", true));
+    assert!(found(&vt.frame()).is_empty());
+    vt.feed(b"\x1b[?1049l");
+    assert!(!found(&vt.frame()).is_empty());
 }
 
 #[test]

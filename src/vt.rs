@@ -16,14 +16,15 @@ use std::io::Write;
 use std::ops::BitOr;
 use std::rc::Rc;
 
+use libghostty_vt::fmt::{Format, Formatter, FormatterOptions};
 use libghostty_vt::key::{self, Encoder, KittyKeyFlags, OptionAsAlt};
 use libghostty_vt::render::{CellIterator, RowIterator};
-use libghostty_vt::screen::CellWide;
+use libghostty_vt::screen::{CellWide, Screen, TrackedGridRef};
 use libghostty_vt::style::{RgbColor, StyleColor, Underline};
 use libghostty_vt::terminal::{
     ColorScheme, ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode,
-    ModeKind, Options, PrimaryDeviceAttributes, ScrollViewport, SecondaryDeviceAttributes,
-    TertiaryDeviceAttributes,
+    ModeKind, Options, Point, PointCoordinate, PointSpace, PrimaryDeviceAttributes, ScrollViewport,
+    SecondaryDeviceAttributes, TertiaryDeviceAttributes,
 };
 use libghostty_vt::{RenderState, Terminal};
 
@@ -39,6 +40,9 @@ const SCROLLBACK: usize = 10_000_000;
 /// DECXCPR, which Claude Code's fullscreen renderer sends and Ghostty leaves unanswered.
 const XCPR: &[u8] = b"\x1b[?6n";
 
+/// What a search found is drawn in, over the child's own style: the client's gold.
+pub const FOUND: Style = Style { fg: Color::Palette(0), bg: Color::Palette(3), attrs: 0 };
+
 pub struct Vt {
     term: Terminal<'static, 'static>,
     replies: Rc<RefCell<Vec<u8>>>,
@@ -48,6 +52,9 @@ pub struct Vt {
     encoder: Encoder<'static>,
     /// How much of `CSI ?6n` the stream has matched so far; a query can span two reads.
     xcpr: usize,
+    /// What the last search found: its first cell, which moves with the text as output comes
+    /// and old rows go, and how many columns it covers.
+    found: Option<(TrackedGridRef, u16)>,
 }
 
 impl Vt {
@@ -87,6 +94,7 @@ impl Vt {
             cell_it: CellIterator::new().unwrap(),
             encoder: Encoder::new().unwrap(),
             xcpr: 0,
+            found: None,
         }
     }
 
@@ -164,14 +172,106 @@ impl Vt {
     }
 
     /// Moves the view through the scrollback: `rows` back (negative) or forward, clamped at
-    /// either end, or with none, back to the live screen. Scrolled back, the view stays on the
-    /// same rows while output comes in, and the cursor is not shown. The alternate screen has no
-    /// scrollback, so there it does nothing.
+    /// either end, or with none, back to the live screen, where what a search found is let go.
+    /// Scrolled back, the view stays on the same rows while output comes in, and the cursor is
+    /// not shown. The alternate screen has no scrollback, so there it does nothing.
     pub fn scroll(&mut self, rows: Option<i32>) {
         self.term.scroll_viewport(match rows {
             Some(n) => ScrollViewport::Delta(n as isize),
-            None => ScrollViewport::Bottom,
+            None => {
+                self.found = None;
+                ScrollViewport::Bottom
+            }
         });
+    }
+
+    /// Looks for `needle` one screen row at a time, `back` toward older output or on toward
+    /// newer, from what the last search found while it shows, else from the view's far edge.
+    /// Any capital makes case count. Found, it is drawn in every frame, and the view moves to
+    /// it unless it shows already. The alternate screen has no scrollback to search.
+    pub fn find(&mut self, needle: &str, back: bool) -> bool {
+        if self.term.active_screen().unwrap() != Screen::Primary || needle.is_empty() {
+            return false;
+        }
+        let exact = needle.chars().any(char::is_uppercase);
+        // One char for one, so an index into the folded row is one into the row.
+        let fold = |c: char| if exact { c } else { c.to_lowercase().next().unwrap_or(c) };
+        let needle: Vec<char> = needle.chars().map(fold).collect();
+        let rows = u32::from(self.size().1);
+        let top = self.term.scrollbar().unwrap().offset as u32;
+        let at = self.found_at().filter(|&(_, y)| (top..top + rows).contains(&y));
+        let text = self.all_text();
+        let total = text.len() as u32;
+        let from = at.map_or(if back { top + rows - 1 } else { top }, |(_, y)| y);
+        let ys: Box<dyn Iterator<Item = u32>> = match back {
+            true => Box::new((0..=from.min(total.saturating_sub(1))).rev()),
+            false => Box::new(from..total),
+        };
+        for y in ys {
+            let row: Vec<char> = text[y as usize].chars().map(fold).collect();
+            let starts = row.windows(needle.len()).enumerate().filter(|(_, w)| *w == needle);
+            let mut spans = starts.map(|(i, _)| self.span(y, i, needle.len()));
+            let span = match at.filter(|&(_, at_y)| at_y == y) {
+                Some((x, _)) if back => spans.rfind(|s| s.0 < x),
+                Some((x, _)) => spans.find(|s| s.0 > x),
+                None if back => spans.next_back(),
+                None => spans.next(),
+            };
+            if let Some((x, cols)) = span {
+                let cell = self.term.track_grid_ref(Point::Screen(PointCoordinate { x, y }));
+                self.found = Some((cell.unwrap(), cols));
+                if !(top..top + rows).contains(&y) {
+                    // A third of the way down, with what led up to it above.
+                    let row = y.saturating_sub(rows / 3) as usize;
+                    self.term.scroll_viewport(ScrollViewport::Row(row));
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether a search found something that is still drawn.
+    pub fn finding(&self) -> bool {
+        self.found.is_some()
+    }
+
+    /// Where what the last search found starts: column, and row counted from the oldest kept.
+    fn found_at(&self) -> Option<(u16, u32)> {
+        let p = self.found.as_ref()?.0.point(PointSpace::Screen).ok()??;
+        Some((p.x, p.y))
+    }
+
+    /// Every row from the oldest kept to the live screen's last, as plain text, one per row.
+    fn all_text(&self) -> Vec<String> {
+        let opts = FormatterOptions::new().with_format(Format::Plain).with_trim(true);
+        let mut f = Formatter::new(&self.term, opts).unwrap();
+        let text = f.format_alloc(None).unwrap();
+        String::from_utf8_lossy(&text).split('\n').map(str::to_owned).collect()
+    }
+
+    /// The first column and the width of `len` characters from character `at` of row `y`, as
+    /// the plain text counts them: a wide character is one character over two cells, a cluster
+    /// several characters in one.
+    fn span(&self, y: u32, at: usize, len: usize) -> (u16, u16) {
+        let cols = self.size().0;
+        let (mut chars, mut start) = (0, None);
+        let mut buf = ['\0'; 16];
+        for x in 0..cols {
+            let cell = self.term.grid_ref(Point::Screen(PointCoordinate { x, y })).unwrap();
+            if matches!(cell.cell().unwrap().wide().unwrap(), CellWide::SpacerTail) {
+                continue;
+            }
+            match start {
+                None if chars >= at => start = Some(x),
+                Some(s) if chars >= at + len => return (s, x - s),
+                _ => {}
+            }
+            // An empty cell is a blank in the text.
+            chars += cell.graphemes(&mut buf).map_or(buf.len(), |n| n.max(1));
+        }
+        let s = start.unwrap_or(cols);
+        (s, cols - s)
     }
 
     /// Rows the view is scrolled back from the live screen, and rows of scrollback there are.
@@ -196,6 +296,15 @@ impl Vt {
 
     /// The visible screen as style runs.
     pub fn frame(&mut self) -> Frame {
+        // What a search found, where it shows: it belongs to the main screen, not the other.
+        let found = match self.term.active_screen().unwrap() {
+            Screen::Primary => self.found.as_ref(),
+            Screen::Alternate => None,
+        };
+        let found = found.and_then(|(cell, cols)| {
+            let p = cell.point(PointSpace::Viewport).ok()??;
+            Some((p.y, p.x..p.x + cols))
+        });
         let snap = self.render.update(&self.term).unwrap();
         let cursor = match snap.cursor_visible().unwrap() {
             true => snap.cursor_viewport().unwrap().map(|c| (c.x, c.y)),
@@ -204,6 +313,7 @@ impl Vt {
         let mut rows = Vec::new();
         let mut row_it = self.row_it.update(&snap).unwrap();
         while let Some(row) = row_it.next() {
+            let found = found.clone().filter(|(y, _)| *y == rows.len() as u32).map(|f| f.1);
             let mut runs: Vec<Run> = Vec::new();
             let mut cell_it = self.cell_it.update(row).unwrap();
             let mut col = 0;
@@ -215,6 +325,7 @@ impl Vt {
                     continue;
                 }
                 let style = match cell.has_styling().unwrap() {
+                    _ if found.as_ref().is_some_and(|f| f.contains(&x)) => FOUND,
                     true => Style::from_ghostty(&cell.style().unwrap()),
                     false => Style::default(),
                 };

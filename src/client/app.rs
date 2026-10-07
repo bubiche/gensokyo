@@ -7,8 +7,8 @@
 
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward, Scrollback};
-use super::modal::{Act, Cast, Modal, Recall, Summon, Timetable};
-use super::render::{self, Button, Hit, HitMap, Message, Model, Say};
+use super::modal::{self, Act, Cast, Modal, Recall, Summon, Timetable};
+use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use crate::cli;
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request, Resident};
@@ -424,7 +424,7 @@ impl App {
             return;
         }
         (self.m.focused, self.homing) = (id, false);
-        (self.m.screen, self.m.selection) = (None, None);
+        (self.m.screen, self.m.selection, self.m.find) = (None, None, None);
         match self.live() {
             Some(who) => self.send(Request::View { who }),
             None => self.send(Request::Unview),
@@ -615,7 +615,7 @@ impl App {
             self.focus(id);
         } else if self.live().is_none() {
             // Departed while on screen: the departed screen, and the host back to plain keys.
-            self.m.screen = None;
+            (self.m.screen, self.m.find) = (None, None);
             self.modes();
         } else {
             self.back(was);
@@ -668,11 +668,18 @@ impl App {
             self.m.leader = true;
         } else if self.m.modal.is_some() {
             self.modal_key(&c);
+        } else if self.m.find.as_ref().is_some_and(|f| f.typing.is_some()) {
+            self.find_key(&c);
         } else if self.live().is_some() {
-            if self.scrolled() {
+            // A search keeps the keys even when what it found is on the live screen.
+            if self.scrolled() || self.m.find.is_some() {
                 match keys::scrollback(&c) {
+                    Some(Scrollback::Find(back)) => return self.find(back),
+                    Some(Scrollback::Again(other)) if self.m.find.is_some() => {
+                        return self.search(other);
+                    }
+                    Some(Scrollback::Again(_)) | None => self.scroll(Scrollback::Live),
                     Some(s) => return self.scroll(s),
-                    None => self.scroll(Scrollback::Live),
                 }
             }
             self.talked = Some(self.clock());
@@ -727,15 +734,70 @@ impl App {
             Scrollback::Pages(n) => Some(n * page),
             Scrollback::Top => Some(TOP),
             Scrollback::Live => None,
-            Scrollback::Stay => return,
+            Scrollback::Stay | Scrollback::Find(_) | Scrollback::Again(_) => return,
         };
         self.homing = rows.is_none();
+        if self.homing {
+            self.m.find = None;
+        }
         if self.homing
             && let Some(fr) = &mut self.m.screen
         {
             fr.back = 0;
         }
         self.send(Request::Scroll { who, rows });
+    }
+
+    /// The search prompt opens on the box's edge, `back` toward older output; what was last
+    /// looked for stays, for an Enter with nothing typed.
+    fn find(&mut self, back: bool) {
+        let needle = self.m.find.take().map(|f| f.needle).unwrap_or_default();
+        self.m.find = Some(Find { needle, back, typing: Some(String::new()) });
+    }
+
+    /// A key at the search prompt: Enter looks, Esc (or Backspace with nothing typed) leaves
+    /// it, and with nothing looked for yet, the search.
+    fn find_key(&mut self, c: &Chunk) {
+        let Some(f) = self.m.find.as_mut() else { return };
+        let Some(t) = f.typing.as_mut() else { return };
+        let done = match modal::Key::of(c) {
+            modal::Key::Text(ch) => {
+                t.push(ch);
+                false
+            }
+            modal::Key::Paste(p) => {
+                t.extend(p.chars().map(|ch| if ch.is_control() { ' ' } else { ch }));
+                false
+            }
+            modal::Key::Back => t.pop().is_none(),
+            modal::Key::Esc => true,
+            modal::Key::Enter => {
+                let t = std::mem::take(t);
+                if !t.is_empty() {
+                    f.needle = t;
+                }
+                f.typing = None;
+                if !f.needle.is_empty() {
+                    return self.search(false);
+                }
+                true
+            }
+            _ => false,
+        };
+        if done {
+            f.typing = None;
+            if f.needle.is_empty() {
+                self.m.find = None;
+            }
+        }
+    }
+
+    /// Looks for what the search is on, its own way or with `other` the other.
+    fn search(&mut self, other: bool) {
+        let (Some(who), Some(f)) = (self.live(), &self.m.find) else { return };
+        let req = Request::Search { who, needle: f.needle.clone(), back: f.back != other };
+        self.homing = false;
+        self.send(req);
     }
 
     fn input(&mut self, who: String, f: Forward) {
@@ -940,6 +1002,11 @@ impl App {
                 let half = i32::from(self.size.1.max(2) / 2);
                 self.scroll(Scrollback::By(-half));
             }
+            Chord::Find if self.m.modes.alt => {
+                self.say(Say::Info, "a full-screen program has no scrollback");
+            }
+            Chord::Find if self.live().is_some() => self.find(true),
+            Chord::Find => {}
             Chord::Cancel | Chord::Unbound => {}
         }
     }

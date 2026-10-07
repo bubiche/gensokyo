@@ -301,6 +301,85 @@ fn the_wheel_and_the_chord_scroll_back_and_keys_move_or_leave() {
 }
 
 #[test]
+fn a_search_has_the_keys_until_esc_even_on_the_live_screen() {
+    let mut a = shrine();
+    let area = Rect::new(0, 0, 120, 40);
+    a.paint(area, &mut Buffer::empty(area));
+    sent(&mut a);
+    let search = |out: &[Value]| -> Vec<(String, bool)> {
+        let s = out.iter().filter(|r| r["t"] == "search");
+        s.map(|r| (r["needle"].as_str().unwrap().into(), r["back"] == json!(true))).collect()
+    };
+    // The chord opens the prompt; what is typed is the prompt's, not the resident's.
+    host(&mut a, b"\x1d/");
+    host(&mut a, b"x");
+    host(&mut a, b"\x7f");
+    for ch in "needle".chars() {
+        host(&mut a, ch.to_string().as_bytes());
+    }
+    assert!(sent(&mut a).is_empty());
+    assert_eq!(a.m.find.as_ref().unwrap().typing.as_deref(), Some("needle"));
+    host(&mut a, b"\r");
+    assert_eq!(search(&sent(&mut a)), [("needle".into(), true)]);
+    // Found on the live screen, the view is home, and n and N are still the search's.
+    host(&mut a, b"n");
+    host(&mut a, b"N");
+    host(&mut a, b"\x1b[110;2u");
+    let want = [("needle".into(), true), ("needle".into(), false), ("needle".into(), false)];
+    assert_eq!(search(&sent(&mut a)), want);
+    daemon(&mut a, Reply::Error { id: 9, error: "no “needle” further back".into() });
+    assert_eq!(said(&a), Some("no “needle” further back"));
+    // ? the other way, and Enter with nothing typed looks for the same again.
+    host(&mut a, b"?");
+    host(&mut a, b"\r");
+    assert_eq!(search(&sent(&mut a)), [("needle".into(), false)]);
+    // Rows and pages still move; Esc goes home and ends it, and n is the resident's again.
+    host(&mut a, b"k");
+    assert_eq!(kinds(&sent(&mut a)), ["scroll"]);
+    host(&mut a, b"\x1b");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll"]);
+    assert!(out[0].get("rows").is_none() && a.m.find.is_none());
+    host(&mut a, b"n");
+    assert_eq!(kinds(&sent(&mut a)), ["input"]);
+    // A prompt left with nothing looked for leaves no search; with something, it stays.
+    host(&mut a, b"\x1d/");
+    host(&mut a, b"\x1b");
+    assert!(a.m.find.is_none());
+    host(&mut a, b"\x1d/");
+    host(&mut a, b"ab\r");
+    sent(&mut a);
+    host(&mut a, b"/");
+    host(&mut a, b"\x7f");
+    assert_eq!(
+        a.m.find.as_ref().map(|f| (f.needle.as_str(), f.typing.is_none())),
+        Some(("ab", true))
+    );
+    // Another key goes home and on to the resident.
+    host(&mut a, b"x");
+    assert_eq!(kinds(&sent(&mut a)), ["scroll", "input"]);
+    assert!(a.m.find.is_none());
+    // Home, then scrolled back without a search: / opens one, and n before one is any key.
+    for back in [0, 9] {
+        let frame = Frame { cols: 80, rows: vec![], back, history: 400, ..Frame::default() };
+        let modes = Modes::default();
+        daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes });
+    }
+    host(&mut a, b"/");
+    assert!(a.m.find.as_ref().is_some_and(|f| f.back && f.typing.is_some()));
+    host(&mut a, b"\x1b");
+    host(&mut a, b"n");
+    assert_eq!(kinds(&sent(&mut a)), ["scroll", "input"]);
+    // On the alternate screen there is nothing to look through.
+    let modes = Modes { alt: true, ..Modes::default() };
+    let frame = Frame { cols: 80, rows: vec![], ..Frame::default() };
+    daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 3, frame, modes });
+    host(&mut a, b"\x1d/");
+    assert!(a.m.find.is_none());
+    assert_eq!(said(&a), Some("a full-screen program has no scrollback"));
+}
+
+#[test]
 fn j_and_k_go_round_the_sidebar_and_a_finds_whoever_needs_you() {
     let mut a = shrine();
     let mut sakuya = resident(3, "Sakuya");

@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 pub const SIDEBAR_W: u16 = 25;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
-pub(super) const CHORDS: [(&str, &str); 16] = [
+pub(super) const CHORDS: [(&str, &str); 17] = [
     ("n", "summon"),
     ("c", "cast"),
     ("b", "banish"),
@@ -28,6 +28,7 @@ pub(super) const CHORDS: [(&str, &str); 16] = [
     ("k", "previous"),
     ("a", "needs you"),
     ("[", "scroll"),
+    ("/", "search"),
     ("1-9", "slot"),
     ("m", "mouse"),
     ("d", "detach"),
@@ -53,6 +54,8 @@ pub struct Model {
     pub selection: Option<((u16, u16), (u16, u16))>,
     /// The leader was pressed and the next key is ours.
     pub leader: bool,
+    /// A search through the scrollback: from its prompt until the view goes home.
+    pub find: Option<Find>,
     /// A line for the user, above the sidebar's buttons, until it expires.
     pub message: Option<Message>,
     /// Drawn when the shrine is empty.
@@ -67,6 +70,27 @@ pub struct Model {
     pub today: String,
     /// The timetable, once the daemon has sent it.
     pub rituals: Option<Vec<RitualInfo>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Find {
+    /// What was last looked for.
+    pub needle: String,
+    /// Toward older output: `/`, and `?` the other way.
+    pub back: bool,
+    /// The prompt is open, with what is typed so far.
+    pub typing: Option<String>,
+}
+
+impl Find {
+    /// The line on the box: the prompt, or what is being looked for and the keys that go on.
+    pub fn line(&self) -> String {
+        let mark = if self.back { '/' } else { '?' };
+        match &self.typing {
+            Some(t) => format!(" {mark}{t}"),
+            None => format!(" {mark}{} · n N for more · esc returns ", self.needle),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +203,12 @@ pub fn cursor(m: &Model, area: Rect) -> Option<(u16, u16)> {
         let (x, y) = (inner.x + width(&fit_field(s, inner.width)), inner.y + i as u16);
         return (x < inner.right() && y < inner.bottom()).then_some((x, y));
     }
+    // The search prompt's, at the end of what is typed on the box's bottom edge.
+    if let Some(f) = m.find.as_ref().filter(|f| f.typing.is_some()) {
+        let main = main_rect(area);
+        let x = (main.x + 1).saturating_add(width(&f.line()));
+        return (x < main.right().saturating_sub(1)).then(|| (x, main.bottom() - 1));
+    }
     let fr = m.screen.as_ref().filter(|fr| fr.back == 0)?;
     let (x, y) = fr.cursor?;
     let live = focused(m)?.departed.is_none();
@@ -209,6 +239,13 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
     if let Some(fr) = m.screen.as_ref().filter(|fr| fr.back > 0 && f.is_some()) {
         let s = format!(" ↑ {} of {} · esc returns ", fr.back, fr.history);
         block = block.title_top(Line::styled(s, GOLD).right_aligned());
+    }
+    if let Some(find) = m.find.as_ref().filter(|_| f.is_some()) {
+        let mut l = find.line();
+        if find.typing.is_some() {
+            l.push(' ');
+        }
+        block = block.title_bottom(Line::styled(l, GOLD));
     }
     let g = block.inner(main);
     block.render(main, buf);

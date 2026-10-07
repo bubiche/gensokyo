@@ -421,6 +421,17 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 }
                 Err(e) => Some(fail(e)),
             },
+            Request::Search { who, needle, back } => match live(&shrine, &who) {
+                Ok((_, _, h)) if h.modes().alt => {
+                    Some(fail("a full-screen program has no scrollback".into()))
+                }
+                Ok((_, _, h)) if h.find(&needle, back) => None,
+                Ok(_) => {
+                    let way = if back { "further back" } else { "further on" };
+                    Some(fail(format!("no “{needle}” {way}")))
+                }
+                Err(e) => Some(fail(e)),
+            },
             Request::Resize { cols, rows } => {
                 resize(&shrine, cols, rows);
                 None
@@ -494,6 +505,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         Request::Input { .. }
         | Request::View { .. }
         | Request::Scroll { .. }
+        | Request::Search { .. }
         | Request::Focus { .. }
         | Request::Resize { .. } => Some(
             "the screens and keyboards are the user's: a resident does not type into, show or \

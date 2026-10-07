@@ -1,13 +1,13 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
-//! `watch`, `view`, `unview`, `input`, `resize`, `focus`, `hook` and `statusline` are answered
-//! only when they fail; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
+//! `watch`, `view`, `unview`, `input`, `scroll`, `search`, `resize`, `focus`, `hook` and
+//! `statusline` are answered only when they fail; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
 use crate::vt::{Frame, Modes, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 7;
+pub const PROTO: u32 = 8;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -68,6 +68,15 @@ pub enum Request {
         who: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rows: Option<i32>,
+    },
+    /// Looks through the resident's scrollback and screen for `needle`, `back` toward older
+    /// output, from what the last search found or the view's far edge: the view moves to it and
+    /// every client viewing it sees it drawn, until the view is back on the live screen.
+    Search {
+        who: String,
+        needle: String,
+        #[serde(default)]
+        back: bool,
     },
     /// The size of the client's grid: every live resident and every later summon takes it.
     /// The last client to say wins.

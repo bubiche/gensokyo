@@ -110,6 +110,8 @@ pub enum Chord {
     Close,
     /// Back through the resident's scrollback, half a screen.
     ScrollBack,
+    /// Look back through the resident's scrollback for something.
+    Find,
     /// The next or the previous resident in the sidebar, round at the ends.
     Next,
     Prev,
@@ -161,6 +163,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'd' => Chord::Detach,
         'x' => Chord::Close,
         '[' => Chord::ScrollBack,
+        '/' => Chord::Find,
         'j' => Chord::Next,
         'k' => Chord::Prev,
         'a' => Chord::Awaiting,
@@ -179,21 +182,31 @@ pub enum Scrollback {
     Top,
     /// Back to the live screen, and the key goes no further.
     Live,
+    /// Look for something: `back` toward older output.
+    Find(bool),
+    /// Look for it again, `true` the other way: what it is if a search is on, else any key.
+    Again(bool),
     /// A release: nothing.
     Stay,
 }
 
 /// A key as the scrollback reads it: rows and pages as less and a terminal's scrollback have
-/// them, Esc and q to leave. None is any other key, which goes back to the live screen and on
-/// to the resident.
+/// them, a search, Esc and q to leave. None is any other key, which goes back to the live
+/// screen and on to the resident.
 pub fn scrollback(c: &Chunk) -> Option<Scrollback> {
     use Scrollback::*;
     let ch = match c {
         Chunk::Text(t) if t.chars().count() == 1 => t.chars().next(),
         Chunk::Key { key: Some(k), .. } if k.event == 3 => return Some(Stay),
-        Chunk::Key { key: Some(k), .. } if k.mods & !LOCKS == 0 => match k.code {
-            27 => return Some(Live),
-            code => char::from_u32(code),
+        Chunk::Key { key: Some(k), .. } => match (k.code, k.mods & !LOCKS) {
+            (27, 0) => return Some(Live),
+            // Shifted, from kitty's all-as-escapes mode: `?` is Shift and `/`, US layout.
+            (47, SHIFT) => Some('?'),
+            (code, SHIFT) => char::from_u32(code)
+                .filter(char::is_ascii_lowercase)
+                .map(|c| c.to_ascii_uppercase()),
+            (code, 0) => char::from_u32(code),
+            _ => None,
         },
         Chunk::Key { raw, key: None } => {
             return match raw.as_slice() {
@@ -217,6 +230,10 @@ pub fn scrollback(c: &Chunk) -> Option<Scrollback> {
         'f' | ' ' => Some(Pages(1)),
         'g' => Some(Top),
         'G' | 'q' => Some(Live),
+        '/' => Some(Find(true)),
+        '?' => Some(Find(false)),
+        'n' => Some(Again(false)),
+        'N' => Some(Again(true)),
         _ => None,
     }
 }

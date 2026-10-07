@@ -137,6 +137,7 @@ fn chord_after_the_leader() {
         ("d", Chord::Detach),
         ("x", Chord::Close),
         ("[", Chord::ScrollBack),
+        ("/", Chord::Find),
         ("j", Chord::Next),
         ("k", Chord::Prev),
         ("a", Chord::Awaiting),
@@ -232,6 +233,14 @@ fn keys_that_move_through_the_scrollback() {
         (b"\x1b[107;1:3u", Stay),
         // An arrow's release, which the framer leaves unparsed.
         (b"\x1b[1;1:3A", Stay),
+        (b"/", Find(true)),
+        (b"?", Find(false)),
+        (b"n", Again(false)),
+        (b"N", Again(true)),
+        // Shifted, in kitty's all-as-escapes form: Shift and `/`, Shift and a letter.
+        (b"\x1b[47;2u", Find(false)),
+        (b"\x1b[110;2u", Again(true)),
+        (b"\x1b[103;2u", Live),
     ] {
         assert_eq!(s(b), Some(want), "{b:?}");
     }

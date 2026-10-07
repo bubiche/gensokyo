@@ -71,6 +71,7 @@ what comes next:
 | `a` | the next resident that needs you |
 | `1`–`9` | the resident in that slot |
 | `[` | scroll back through the resident's scrollback |
+| `/` | search back through the resident's scrollback |
 | `m` | mouse capture on or off |
 | `d` | detach: the client leaves, the residents keep running |
 | `q` | quit: every resident `/exit`s and the daemon stops |
@@ -83,6 +84,14 @@ arrows move a row, `b`/`f`, Space or PgUp/PgDn a screen, `g` or Home goes to the
 `G`, End or Esc back to the live screen; anything else you type goes back to the live screen
 and on to the resident. A resident's scrollback is its own, so two clients showing it scroll
 together.
+
+`/` searches back through the scrollback and `?` forward toward the live screen: type the text
+on the box's bottom edge and press Enter. The view jumps to the match and highlights it; `n`
+finds the next one the same way and `N` the other way. When there are no more, the view stays
+and a message says so. A lowercase search ignores case, and any capital makes case count. Each
+screen row is searched on its own, so text that wraps onto the next row isn't found. While a
+search is on, `n` and `N` stay with it even when the match is on the live screen; Esc or `q`
+ends it. A full-screen program's alternate screen has no scrollback to search.
 
 In a dialog, Enter does the main thing, Esc goes back one stage, and `y`/`n` answer the
 yes-or-no ones.

@@ -83,9 +83,20 @@ impl Handle {
         self.poke.notify_one();
     }
 
-    /// Back to the live screen, before anything is typed: nobody types into history.
+    /// Looks for `needle` (`Vt::find`); like a scroll, every client showing it sees the view
+    /// move and what was found.
+    pub fn find(&self, needle: &str, back: bool) -> bool {
+        let found = self.vt.borrow_mut().find(needle, back);
+        self.poke.notify_one();
+        found
+    }
+
+    /// Back to the live screen, before anything is typed: nobody types into history, and what
+    /// a search found goes.
     pub fn to_live(&self) {
-        if self.vt.borrow().scrolled().0 > 0 {
+        let vt = self.vt.borrow();
+        if vt.scrolled().0 > 0 || vt.finding() {
+            drop(vt);
             self.scroll(None);
         }
     }

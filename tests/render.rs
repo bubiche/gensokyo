@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
 use gensokyo::client::modal::{self, Cast, Modal, Recall, Stage, Summon, Timetable};
-use gensokyo::client::render::{self, Button, Hit, HitMap, Message, Model, Say};
+use gensokyo::client::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
@@ -229,6 +229,21 @@ fn screens() -> Vec<(&'static str, Model)> {
             with(&|m| {
                 let fr = m.screen.as_mut().unwrap();
                 (fr.back, fr.history) = (120, 3400);
+            }),
+        ),
+        (
+            "search-prompt",
+            with(&|m| {
+                m.find =
+                    Some(Find { needle: String::new(), back: true, typing: Some("nee".into()) });
+            }),
+        ),
+        (
+            "searching",
+            with(&|m| {
+                let fr = m.screen.as_mut().unwrap();
+                (fr.back, fr.history) = (120, 3400);
+                m.find = Some(Find { needle: "needle".into(), back: false, typing: None });
             }),
         ),
         (
@@ -590,6 +605,13 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
     m.modal = None;
     m.screen.as_mut().unwrap().back = 4;
     assert_eq!(render::cursor(&m, AREA), None);
+    // At the search prompt, it is after what is typed, on the box's bottom edge.
+    m.find = Some(Find { needle: String::new(), back: true, typing: Some("nee".into()) });
+    let (t, _) = draw(&m, AREA.width, AREA.height);
+    let (x, y) = render::cursor(&m, AREA).expect("a cursor");
+    let buf = t.backend().buffer();
+    let row: String = (0..x).map(|x| buf[(x, y)].symbol()).collect();
+    assert!(row.ends_with("└ /nee"), "{row:?}");
 }
 
 #[test]

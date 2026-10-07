@@ -456,6 +456,28 @@ fn j_and_k_go_round_the_sidebar_and_a_finds_whoever_needs_you() {
 }
 
 #[test]
+fn a_cast_starts_on_the_resident_on_screen_and_a_double_enter_casts_nothing() {
+    let mut a = shrine();
+    host(&mut a, b"\x1d2");
+    host(&mut a, b"\x1dc");
+    let card =
+        Card { slug: "wrap".into(), title: "Wrap Up".into(), summary: String::new(), pair: false };
+    daemon(&mut a, Reply::Cards { id: 1, cards: vec![card], unusable: vec![] });
+    sent(&mut a);
+    host(&mut a, b"\r");
+    assert!(screen(&mut a).iter().any(|l| l.contains("› 2 ○ Marisa")));
+    // The second Enter of a double one is not taken; one a moment later casts at Marisa.
+    host(&mut a, b"\r");
+    assert!(matches!(a.m.modal, Some(Modal::Cast(_))));
+    assert!(!sent(&mut a).iter().any(|r| r["t"] == "cast"));
+    a.later(Duration::from_millis(400));
+    host(&mut a, b"\r");
+    let out: Vec<Value> = sent(&mut a).into_iter().filter(|r| r["t"] == "cast").collect();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["targets"], serde_json::json!(["id-Marisa"]));
+}
+
+#[test]
 fn esc_goes_back_one_stage_in_summon_and_cast_too() {
     let mut a = shrine();
     host(&mut a, b"\x1dn");

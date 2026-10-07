@@ -88,9 +88,13 @@ impl App {
         let Some(Modal::Cast(c)) = &self.m.modal else { return };
         let last = cast_choices(&self.m, c).len().saturating_sub(1);
         let Some(Modal::Cast(c)) = &mut self.m.modal else { return };
+        // The Enter that casts is not taken in the same breath as the one before it: a double
+        // Enter on a card would otherwise cast it at whoever comes first.
+        let casts = c.card.as_ref().is_some_and(|k| !k.pair || c.target.is_some());
         match k {
             Key::Up | Key::Text('k') => c.selected = c.selected.min(last).saturating_sub(1),
             Key::Down | Key::Text('j') => c.selected = (c.selected + 1).min(last),
+            Key::Enter if casts && !self.answer() => {}
             Key::Enter => self.confirm(),
             _ => {}
         }
@@ -108,7 +112,7 @@ impl App {
         let card = match &c.card {
             None => {
                 c.card = c.cards.iter().flatten().find(|k| k.slug == pick).cloned();
-                c.selected = 0;
+                c.selected = self.on_screen(&c);
                 self.m.modal = Some(Modal::Cast(c));
                 return;
             }
@@ -125,5 +129,11 @@ impl App {
         };
         self.send(Request::Cast(proto::Cast { card: card.slug, targets, peer }));
         self.say(Say::Info, format!("casting {}…", card.title));
+    }
+
+    /// Where the target list starts: on the resident on screen, else at the top.
+    fn on_screen(&self, c: &Cast) -> usize {
+        let Some(id) = &self.m.focused else { return 0 };
+        cast_choices(&self.m, c).iter().position(|(v, _)| v == id).unwrap_or(0)
     }
 }

@@ -143,8 +143,9 @@ gensokyo draws its own one-line status line; `STATUSLINE=user` in the config run
 ## Spell cards
 
 A **spell card** is a prompt in a file. `Ctrl-] c` asks which card, then who gets it —
-everyone, everyone who needs you, everyone resting, or one resident — and types it into each
-one's prompt as if you had typed it there. Four ship with gensokyo:
+everyone, everyone who needs you, everyone resting, or one resident, starting on the one on
+screen — and types it into each one's prompt as if you had typed it there. Four ship with
+gensokyo:
 
 | Card | Its summary |
 |---|---|

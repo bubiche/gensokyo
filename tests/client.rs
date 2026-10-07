@@ -310,8 +310,8 @@ async fn a_resident_nobody_watches_rings_the_host() {
     c.send(b"\x1b[I").await;
     c.wait("Marisa seen", |s| s.contains("2 ○ Marisa")).await;
 
-    // Leader, c: a card (the user's own, first by title), then everyone: both get it, filled
-    // in for each.
+    // Leader, c: a card (the user's own, first by title), then everyone (up from Marisa, on
+    // screen, where the targets start): both get it, filled in for each.
     let cards = dir.join("conf/spellcards");
     std::fs::create_dir_all(&cards).unwrap();
     std::fs::write(cards.join("probe.md"), "---\ntitle: Aa Probe\n---\nprobe for {self}\n")
@@ -319,7 +319,14 @@ async fn a_resident_nobody_watches_rings_the_host() {
     c.send(b"\x1dc").await;
     c.wait("the cards", |s| s.contains("› Aa Probe")).await;
     c.send(b"\r").await;
-    c.wait("the targets", |s| s.contains("› everyone")).await;
+    c.wait("the targets", |s| s.contains("› 2 ○ Marisa")).await;
+    for row in ["› 1 ○ Reimu", "› everyone resting", "› everyone who needs you", "› everyone  "]
+    {
+        c.send(b"k").await;
+        c.wait(row, |s| s.contains(row)).await;
+    }
+    let t = Instant::now();
+    c.wait("a breath", |_| t.elapsed() > Duration::from_millis(400)).await;
     c.send(b"\r").await;
     // The reply wraps in the sidebar: its rows, read as one line.
     let side = |s: &str| {

@@ -54,7 +54,7 @@ pub struct Aware {
     news: News,
 }
 
-/// gensokyo typing into it, from before the paste until the prompt's hook: another prompt
+/// gensokyo typing into it, from before the paste until a hook after the Enter: another prompt
 /// typed meanwhile would go in with this one, or into the turn it starts.
 #[derive(Clone, Copy, Debug)]
 struct Typing {
@@ -91,8 +91,9 @@ pub const TYPING: &str = "has a card or a ritual's prompt being typed in";
 pub struct Line {
     pub draft: bool,
     /// The draft began with `/` or `!`: a built-in command (`/context`, `/cost`) or a shell
-    /// command, which Enter runs with no prompt hook to say the line is empty again. Any other
-    /// draft waits for its prompt hook, which says that it went in.
+    /// command, which Enter runs, leaving the line empty, where a built-in sends no prompt hook
+    /// to say so. A panel one opens (`/cost`) the registry shows as `waiting` (2.1.29x), a
+    /// dialog. Any other draft waits for its prompt hook, which says that it went in.
     command: bool,
     /// The last key typed `\`, which makes the next Enter a newline.
     backslash: bool,
@@ -214,6 +215,7 @@ impl Aware {
             return false;
         }
         self.hook_at = h.at;
+        self.typed_in(h.at);
         if let Some(m) = &h.mode {
             self.mode = Some(tele::clean(m, 20));
         }
@@ -225,7 +227,6 @@ impl Aware {
                 self.running = true;
                 self.prompted = true;
                 self.line = Line::default();
-                self.typed_in(h.at);
             }
             ("Stop", _) => {
                 self.set(Some(Pending::Stopped), text);
@@ -277,7 +278,6 @@ impl Aware {
                 self.set(None, None);
                 self.running = false;
                 self.line = Line::default();
-                self.typed_in(h.at);
             }
             _ => {}
         }
@@ -318,7 +318,7 @@ impl Aware {
         self.dialog().or(self.line.draft.then_some(DRAFT))
     }
 
-    /// Taken for typing into until `unmark`, the prompt hook after `entered`, or `TYPING_MOST`.
+    /// Taken for typing into until `unmark`, a hook after `entered`, or `TYPING_MOST`.
     /// The mark, to hand back.
     pub fn mark(&mut self) -> u64 {
         self.marks += 1;
@@ -340,7 +340,9 @@ impl Aware {
         }
     }
 
-    /// A hook at `at` that only a sent prompt brings: the mark is done with.
+    /// A hook at `at`, after the Enter: it was read, and the mark is done with. Any hook, not
+    /// only the prompt's: hooks come from processes of their own, and one stamped later that
+    /// lands first gets the prompt's dropped as older.
     fn typed_in(&mut self, at: i64) {
         if self.typing.is_some_and(|t| t.entered.is_some_and(|e| at >= e)) {
             self.typing = None;

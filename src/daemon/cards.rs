@@ -230,8 +230,8 @@ fn aim(
 /// card, a ritual's prompt). It must be the text that shows, not merely a screen that changed:
 /// whatever swallows a paste redraws doing it, and an Enter into an unknown dialog answers it.
 /// Text that never shows gets no Enter: left in an input line it is visible and recoverable.
-/// One at a time: the resident is marked as typed into, from before the paste until its prompt
-/// hook, and another card or prompt waits or is turned away meanwhile.
+/// One at a time: the resident is marked as typed into, from before the paste until a hook says
+/// the Enter was read, and another card or prompt waits or is turned away meanwhile.
 pub(super) async fn deliver(
     shrine: &Shared,
     id: &str,

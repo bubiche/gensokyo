@@ -610,7 +610,14 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
         let mut sh = shrine.borrow_mut();
         sh.rites.held += 1;
         let n = sh.rites.held;
-        let fresh = Waiter { n, since: Instant::now(), first: now(), held: false, told: false };
+        let fresh = Waiter {
+            n,
+            since: Instant::now(),
+            first: now(),
+            unlisted: None,
+            held: false,
+            told: false,
+        };
         let was = sh.rites.waiting.insert(slot.clone(), fresh);
         if let Some(w) = was {
             sh.rites.waiting.insert(slot.clone(), Waiter { n, ..w });
@@ -655,6 +662,15 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
                 )
             })
         };
+        // Since when it has gone unlisted, kept across fires that take each other's place.
+        let unlisted = {
+            let starting = matches!(&state, Some((_, _, Some(why), ..)) if *why == STARTING);
+            let mut sh = shrine.borrow_mut();
+            sh.rites.waiting.get_mut(&slot).filter(|w| w.n == mine).and_then(|w| match starting {
+                true => Some(*w.unlisted.get_or_insert_with(Instant::now)),
+                false => w.unlisted.take().and(None),
+            })
+        };
         match state {
             None | Some((_, None, ..)) => {
                 gone(shrine);
@@ -662,8 +678,8 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
             }
             Some((name, Some(h), None, ready, _)) if ready || !idle => break (name, h),
             // `deliver: now` waits only for what passes by itself.
-            Some((name, _, Some(why), _, w))
-                if why == STARTING && w.since.elapsed() > ready_wait
+            Some((name, _, Some(why), ..))
+                if why == STARTING && unlisted.is_some_and(|t| t.elapsed() > ready_wait)
                     || !idle && why != STARTING && why != TYPING =>
             {
                 gone(shrine);
@@ -672,7 +688,8 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
             Some((name, _, why, _, w)) if now() - w.first > HOLD_MOST.as_secs() as i64 => {
                 gone(shrine);
                 let waited = tele::age(HOLD_MOST.as_secs());
-                let why = why.unwrap_or("is busy");
+                // A prompt on its way in is a moment's state, not what held it for hours.
+                let why = why.filter(|w| *w != TYPING).unwrap_or("is busy");
                 return undelivered(
                     shrine,
                     r,
@@ -768,6 +785,8 @@ pub(super) struct Waiter {
     since: Instant,
     /// The same, on the ritual clock.
     first: i64,
+    /// Since when its resident has not been listed by the registry, while that lasts.
+    unlisted: Option<Instant>,
     /// `held` is journaled once for a run of fires that take each other's place.
     held: bool,
     /// Told the user once that it waits on them: a dialog, or something typed and not sent.

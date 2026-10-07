@@ -498,7 +498,8 @@ fn a_resident_being_typed_into_takes_nothing_else_until_its_prompt_goes_in() {
     a.entered(m, 30);
     a.hook(&recorded("Stop", None, 25));
     assert_eq!(a.blocked(), Some(TYPING));
-    a.hook(&recorded("UserPromptSubmit", None, 31));
+    // Any hook after it says it was read: the prompt's may come second and be dropped as older.
+    a.hook(&hook(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash"}), 31));
     assert_eq!(a.blocked(), None);
     // Given up with nothing sent; an old mark handed back clears nothing.
     let m = a.mark();

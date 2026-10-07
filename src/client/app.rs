@@ -673,6 +673,16 @@ impl App {
         } else if self.live().is_some() {
             // A search keeps the keys even when what it found is on the live screen.
             if self.scrolled() || self.m.find.is_some() {
+                // Keys of ours that came in one read are taken one by one, as typed.
+                if let Chunk::Text(t) = &c
+                    && t.chars().nth(1).is_some()
+                    && self.ours(t)
+                {
+                    for ch in t.chars() {
+                        self.chunk(Chunk::Text(ch.into()));
+                    }
+                    return;
+                }
                 match keys::scrollback(&c) {
                     Some(Scrollback::Find(back)) => return self.find(back),
                     Some(Scrollback::Again(other)) if self.m.find.is_some() => {
@@ -746,6 +756,23 @@ impl App {
             fr.back = 0;
         }
         self.send(Request::Scroll { who, rows });
+    }
+
+    /// Whether text that came in one read is keys the scrollback or a search takes, and not
+    /// typing for the resident: all of it, up to a `/` or `?` whose prompt takes the rest, and
+    /// up to a key that goes home only as the last.
+    fn ours(&self, t: &str) -> bool {
+        let n = t.chars().count();
+        for (i, ch) in t.chars().enumerate() {
+            match keys::scrollback(&Chunk::Text(ch.into())) {
+                Some(Scrollback::Find(_)) => return true,
+                Some(Scrollback::Again(_)) if self.m.find.is_some() => {}
+                Some(Scrollback::Live) if i + 1 == n => {}
+                Some(Scrollback::By(_) | Scrollback::Pages(_) | Scrollback::Top) => {}
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// The search prompt opens on the box's edge, `back` toward older output; what was last

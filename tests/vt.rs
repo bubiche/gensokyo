@@ -313,6 +313,55 @@ fn a_search_goes_through_a_row_match_by_match_and_counts_wide_cells() {
 }
 
 #[test]
+fn blanks_left_by_a_cursor_move_or_a_tab_count_as_the_spaces_they_show() {
+    let mut vt = Vt::new(30, 4);
+    vt.feed(b"\x1b[1;10Hneedle\x1b[2;1Ha\tneedle\x1b[3;1H\x1b[44m  \x1b[0m needle");
+    let mut seen = Vec::new();
+    while vt.find("needle", true) {
+        seen.extend(found(&vt.frame()));
+    }
+    let want = [(2, 3, "needle"), (1, 8, "needle"), (0, 9, "needle")];
+    assert_eq!(seen, want.map(|(y, x, t)| (y, x, t.to_string())));
+}
+
+#[test]
+fn every_match_in_a_recorded_claude_code_session_is_drawn_over_its_own_text() {
+    let mut names: Vec<String> = std::fs::read_dir(fixtures())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| (n.starts_with("a1-") || n.starts_with("a3-")) && n.ends_with(".jsonl"))
+        .collect();
+    names.sort();
+    let mut checked = 0;
+    for name in &names {
+        let evs = read(&fixtures().join(name));
+        let Some(&Event::Start { cols, rows }) = evs.first() else { continue };
+        let mut vt = Vt::new(cols, rows);
+        for ev in &evs {
+            match ev {
+                Event::Out(b) => vt.feed(b),
+                Event::Resize { cols, rows } => vt.resize(*cols, *rows),
+                _ => {}
+            }
+        }
+        for needle in ["the", "Claude", "─"] {
+            for _ in 0..40 {
+                if !vt.find(needle, true) {
+                    break;
+                }
+                let f = vt.frame();
+                let hit = found(&f);
+                assert_eq!(hit.len(), 1, "{name}: {needle}: {hit:?}");
+                assert_eq!(hit[0].2.to_lowercase(), needle.to_lowercase(), "{name}: {needle}");
+                checked += 1;
+            }
+            vt.scroll(None);
+        }
+    }
+    assert!(checked > 100, "{checked} matches");
+}
+
+#[test]
 fn what_was_found_keeps_to_its_text_when_the_oldest_rows_go() {
     let mut vt = Vt::new(200, 10);
     let pad = "x".repeat(150);

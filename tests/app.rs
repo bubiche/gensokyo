@@ -329,6 +329,14 @@ fn a_search_has_the_keys_until_esc_even_on_the_live_screen() {
     assert_eq!(search(&sent(&mut a)), want);
     daemon(&mut a, Reply::Error { id: 9, error: "no “needle” further back".into() });
     assert_eq!(said(&a), Some("no “needle” further back"));
+    // Keys of the search's that came in one read are taken one by one, as typed.
+    host(&mut a, b"nnN");
+    let want = [("needle".into(), true), ("needle".into(), true), ("needle".into(), false)];
+    assert_eq!(search(&sent(&mut a)), want);
+    host(&mut a, b"?abc");
+    assert!(sent(&mut a).is_empty());
+    assert_eq!(a.m.find.as_ref().unwrap().typing.as_deref(), Some("abc"));
+    host(&mut a, b"\x1b");
     // ? the other way, and Enter with nothing typed looks for the same again.
     host(&mut a, b"?");
     host(&mut a, b"\r");
@@ -355,10 +363,18 @@ fn a_search_has_the_keys_until_esc_even_on_the_live_screen() {
         a.m.find.as_ref().map(|f| (f.needle.as_str(), f.typing.is_none())),
         Some(("ab", true))
     );
-    // Another key goes home and on to the resident.
+    // Another key goes home and on to the resident, and so does typing that only starts
+    // with keys of ours.
     host(&mut a, b"x");
     assert_eq!(kinds(&sent(&mut a)), ["scroll", "input"]);
     assert!(a.m.find.is_none());
+    host(&mut a, b"\x1d/");
+    host(&mut a, b"ab\r");
+    sent(&mut a);
+    host(&mut a, b"nope");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["scroll", "input"]);
+    assert_eq!(out[1]["bytes"], json!(b"nope"));
     // Home, then scrolled back without a search: / opens one, and n before one is any key.
     for back in [0, 9] {
         let frame = Frame { cols: 80, rows: vec![], back, history: 400, ..Frame::default() };

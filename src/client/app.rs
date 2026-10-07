@@ -1176,11 +1176,18 @@ impl App {
                 self.modes();
             }
             Chord::Detach => self.done = Some("detached; the residents keep running".into()),
-            Chord::Close => {
-                if let Some(who) = self.m.focused.clone() {
+            // A live one is asked first: its turn and its input line go with it. A departed
+            // one just leaves the sidebar.
+            Chord::Close => match self.focused() {
+                Some(r) if r.departed.is_none() => {
+                    self.m.modal = Some(Modal::Close { id: r.id.clone(), name: r.name.clone() });
+                }
+                Some(r) => {
+                    let who = r.id.clone();
                     self.send(Request::Close { who });
                 }
-            }
+                None => {}
+            },
             Chord::Focus(n) => match self.m.residents.iter().find(|r| r.slot == Some(n)) {
                 Some(r) => self.focus(Some(r.id.clone())),
                 None => self.say(Say::Info, format!("nobody is in slot {n}")),

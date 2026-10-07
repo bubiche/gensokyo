@@ -67,7 +67,7 @@ what comes next:
 | `n` / `c` | summon a resident / cast a spell card |
 | `b` / `r` | banish the one on screen / recall a departed one |
 | `t` | the timetable of rituals |
-| `x` | close the one on screen (`/exit`; a departed one leaves the sidebar) |
+| `x` | close the one on screen (asks first; `/exit`; a departed one leaves the sidebar) |
 | `j` / `k` | the next / previous resident in the sidebar |
 | `a` | the next resident that needs you |
 | `1`–`9` | the resident in that slot |

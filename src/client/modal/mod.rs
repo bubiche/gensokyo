@@ -24,6 +24,11 @@ pub enum Modal {
         id: String,
         name: String,
     },
+    /// A live resident asked to `/exit`, from the close chord.
+    Close {
+        id: String,
+        name: String,
+    },
     /// The departed, newest first.
     Recall(Recall),
     /// A spell card, then who gets it, then whom a pair card's target talks to.
@@ -45,6 +50,16 @@ impl Modal {
                     Row::text(&format!("Banish {name}?")),
                     Row::dim("It gets HUP, then TERM, then KILL."),
                     Row::yes_no("[banish y]", "[cancel n]"),
+                ],
+            ),
+            Modal::Close { name, .. } => (
+                " close ".into(),
+                vec![
+                    Row::text(&format!("Close {name}?")),
+                    Row::dim("It gets Esc, Ctrl-C, then /exit: a turn under"),
+                    Row::dim("way stops and what you typed is cleared."),
+                    Row::dim("Recall brings the conversation back."),
+                    Row::yes_no("[close y]", "[cancel n]"),
                 ],
             ),
             Modal::Recall(r) => r.view(m),
@@ -136,7 +151,7 @@ impl App {
         }
         match &mut self.m.modal {
             Some(Modal::Help) => self.m.modal = None,
-            Some(Modal::Quit | Modal::Banish { .. }) => match k {
+            Some(Modal::Quit | Modal::Banish { .. } | Modal::Close { .. }) => match k {
                 Key::Enter | Key::Text('y') if self.answer() => self.confirm(),
                 Key::Text('n') => self.m.modal = None,
                 _ => {}
@@ -213,6 +228,9 @@ impl App {
             Modal::Summon(s) => self.summon_confirm(s),
             Modal::Banish { id, .. } => {
                 self.send(Request::Banish { who: id });
+            }
+            Modal::Close { id, .. } => {
+                self.send(Request::Close { who: id });
             }
             Modal::Recall(r) => {
                 if let Some(r) = r.list.get(r.selected) {

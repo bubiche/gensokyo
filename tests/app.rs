@@ -83,6 +83,34 @@ fn shrine() -> App {
 }
 
 #[test]
+fn close_asks_before_a_live_resident_leaves_and_not_after() {
+    let mut a = shrine();
+    let close = |a: &mut App| sent(a).into_iter().filter(|r| r["t"] == "close").count();
+    // The chord asks; n keeps it, and a y in the same breath as the chord is not a yes.
+    host(&mut a, b"\x1dx");
+    assert!(screen(&mut a).iter().any(|l| l.contains("Close Reimu?")));
+    host(&mut a, b"n");
+    assert!(a.m.modal.is_none());
+    host(&mut a, b"\x1dx");
+    host(&mut a, b"y");
+    assert!(matches!(a.m.modal, Some(Modal::Close { .. })));
+    assert_eq!(close(&mut a), 0);
+    a.later(Duration::from_millis(400));
+    host(&mut a, b"y");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["close"]);
+    assert_eq!(out[0]["who"], "id-Reimu");
+    // A departed one just leaves the sidebar.
+    let mut gone = resident(1, "Reimu");
+    gone.departed = Some(1);
+    daemon(&mut a, Reply::Residents { residents: vec![gone, resident(2, "Marisa")] });
+    sent(&mut a);
+    host(&mut a, b"\x1dx");
+    assert!(a.m.modal.is_none());
+    assert_eq!(close(&mut a), 1);
+}
+
+#[test]
 fn keys_go_to_the_resident_on_screen_and_the_leader_takes_the_next() {
     let mut a = shrine();
     host(&mut a, b"n");

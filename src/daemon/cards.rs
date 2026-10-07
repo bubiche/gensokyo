@@ -230,6 +230,8 @@ fn aim(
 /// card, a ritual's prompt). It must be the text that shows, not merely a screen that changed:
 /// whatever swallows a paste redraws doing it, and an Enter into an unknown dialog answers it.
 /// Text that never shows gets no Enter: left in an input line it is visible and recoverable.
+/// One at a time: the resident is marked as typed into, from before the paste until its prompt
+/// hook, and another card or prompt waits or is turned away meanwhile.
 pub(super) async fn deliver(
     shrine: &Shared,
     id: &str,
@@ -237,10 +239,35 @@ pub(super) async fn deliver(
     text: &str,
     what: &str,
 ) -> Result<(), String> {
-    // Everyone is being asked to /exit: typing now would land between the Ctrl-C and it.
-    if shrine.borrow().quitting {
-        return Err("was not typed into: the daemon is stopping".into());
+    // Looked at and taken in one go: nothing else runs in between.
+    let mark = {
+        let mut sh = shrine.borrow_mut();
+        // Everyone is being asked to /exit: typing now would land between the Ctrl-C and it.
+        if sh.quitting {
+            return Err("was not typed into: the daemon is stopping".into());
+        }
+        let e = sh.entries.iter_mut().find(|e| e.rec.id == id).ok_or("has left")?;
+        if let Some(why) = e.aware.blocked() {
+            return Err(why.into());
+        }
+        e.aware.mark()
+    };
+    let sent = type_in(shrine, id, h, text, what, mark).await;
+    if sent.is_err() {
+        let mut sh = shrine.borrow_mut();
+        sh.entries.iter_mut().filter(|e| e.rec.id == id).for_each(|e| e.aware.unmark(mark));
     }
+    sent
+}
+
+async fn type_in(
+    shrine: &Shared,
+    id: &str,
+    h: &Rc<Handle>,
+    text: &str,
+    what: &str,
+    mark: u64,
+) -> Result<(), String> {
     let needle = needle(&clean(text));
     // The paste is looked for on the live screen, where it lands, even if a client scrolls
     // back while it is on its way.
@@ -281,12 +308,16 @@ pub(super) async fn deliver(
     tokio::time::sleep(ENTER_GAP.saturating_sub(pasted.elapsed())).await;
     // A dialog that came up meanwhile would take the Enter.
     let why = {
-        let sh = shrine.borrow();
-        let e = sh.entries.iter().find(|e| e.rec.id == id);
+        let mut sh = shrine.borrow_mut();
+        let quitting = sh.quitting;
+        let e = sh.entries.iter_mut().find(|e| e.rec.id == id);
         match e {
-            _ if sh.quitting => Some("is being asked to leave"),
+            _ if quitting => Some("is being asked to leave"),
             None => Some("has left"),
-            Some(e) => e.aware.blocked(),
+            Some(e) => e.aware.in_way().or_else(|| {
+                e.aware.entered(mark, hooks::now_ms());
+                None
+            }),
         }
     };
     if let Some(why) = why {

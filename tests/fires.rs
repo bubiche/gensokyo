@@ -1073,8 +1073,71 @@ fn a_fire_waits_no_longer_than_its_limit_and_deliver_now_does_not_wait() {
     // Four hours on, by the ritual clock, it gives up.
     d.clock(T0 + 3600 + 4 * 3600 + 10);
     wait(|| d.evs("ask", "not-sent").len() == 1, "the held fire dropped");
-    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h"]);
+    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h: it is busy"]);
     assert!(d.evs("ask", "sent").is_empty());
+}
+
+#[test]
+fn fires_that_take_each_others_place_are_given_up_four_hours_from_the_first() {
+    let d = Daemon::start("idle-chain", T0 + 120, &[("ask", &hourly("target: Sakuya\n"))], &[]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    wait(|| d.stamp("ask").is_some(), "first sight");
+    d.busy(&id, true);
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.evs("ask", "held").len() == 1, "held");
+    // The next hour's fire takes its place, and the hour after the fourth gives up on both.
+    d.clock(T0 + 2 * 3600 + 5);
+    wait(|| d.log().iter().any(|l| l["replaced"].is_string()), "replaced");
+    d.clock(T0 + 3600 + 4 * 3600 + 10);
+    wait(|| d.evs("ask", "not-sent").len() == 1, "the held fires dropped");
+    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h: it is busy"]);
+    assert_eq!(d.evs("ask", "held").len(), 1, "said once for the run of them");
+}
+
+#[test]
+fn a_fire_into_a_resident_the_registry_never_lists_is_given_up_after_a_while() {
+    let other = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/agents-2.1.260.json");
+    let env = [("STUB_REGISTRY", other), ("GENSOKYO_READY_WAIT_MS", "2000")];
+    let d = Daemon::start("unlisted", T0 + 120, &[("ask", &hourly("target: Sakuya\n"))], &env);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    d.stub(&r["resident"]["id"], "ready");
+    d.listed();
+    wait(|| d.stamp("ask").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.evs("ask", "not-sent").len() == 1, "given up");
+    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya is still starting up"]);
+}
+
+#[test]
+fn fires_held_behind_one_turn_go_in_one_at_a_time() {
+    let body = |b: &str| {
+        format!(
+            "---\nschedule: \"0 * * * *\"\ncwd: \"@cwd\"\ntarget: Sakuya\n---\n{b}\nIts second line.\n"
+        )
+    };
+    let (one, two, three) = (body("Ritual one."), body("Ritual two."), body("Ritual three."));
+    let rituals = [("one", one.as_str()), ("two", &two), ("three", &three)];
+    let d = Daemon::start("idle-two", T0 + 120, &rituals, &[]);
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
+    let id = r["resident"]["id"].clone();
+    d.stub(&id, "ready");
+    d.listed();
+    let slugs = ["one", "two", "three"];
+    wait(|| slugs.iter().all(|s| d.stamp(s).is_some()), "first sight");
+    d.busy(&id, true);
+    d.clock(T0 + 3600 + 5);
+    wait(|| slugs.iter().all(|s| d.evs(s, "held").len() == 1), "all held");
+    d.busy(&id, false);
+    wait(|| slugs.iter().all(|s| d.evs(s, "sent").len() == 1), "all sent");
+    // Each pasted whole and sent with its own Enter, never two in one prompt. Sent is said once
+    // the Enter is written: the stub may not have read it yet.
+    let whole = |s: &str| format!("\x1b[200~Ritual {s}.\nIts second line.\x1b[201~\n");
+    let typed = || d.stub(&id, "input");
+    wait(|| slugs.iter().all(|s| typed().contains(&whole(s))), "each typed whole, alone");
+    assert_eq!(typed().matches("\x1b[200~").count(), 3, "{:?}", typed());
 }
 
 #[test]

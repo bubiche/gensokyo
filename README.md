@@ -159,7 +159,8 @@ Casting never types into a resident that has something open — a permission dia
 question of its own, the trust dialog of a new directory — because the Enter after the card
 would answer the dialog. Nor into one where you have half typed a prompt: the card would go in
 with it, as one prompt, until you send that or clear it with Ctrl-C (a line emptied with
-Backspace still counts, since gensokyo doesn't read it). Those residents are named
+Backspace still counts, since gensokyo doesn't read it). Nor into one that another card or a
+ritual's prompt is still going into, until its prompt is in. Those residents are named
 and left out, and a card that does not show up in a resident's prompt is reported as not sent:
 
 ```
@@ -206,11 +207,15 @@ and "what have I got scheduled?" work the same way.
 - **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire
   until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
   question open, nothing half typed into it. Whether it is on screen makes no difference. A
-  newer fire takes the place of one still held, and one held for 4 h is dropped; the journal
-  says `held`, then `sent` or `not sent`. When what holds it is yours to clear (a dialog, or
-  text typed and not sent), a notification says so. A built-in command such as `/model` sends
-  Claude Code no prompt, so until the next prompt, Ctrl-C or `/clear` its text counts as unsent. `deliver: now` types it in at once, mid-turn too,
-  where Claude Code queues it, and gives up on a dialog instead of waiting.
+  newer fire takes the place of one still held, and 4 h after the first of them the fire is
+  dropped, with what held it; the journal says `held`, then `sent` or `not sent`. When what
+  holds it is yours to clear (a dialog, or text typed and not sent), a notification says so.
+  Text typed and not sent counts until a prompt goes in, Ctrl-C, `/clear`, or the Enter that
+  runs a `/` or `!` command. Fires for one resident go in one at a time, each after the turn
+  the last one started. A resident that has not come up within a minute (not yet seen by
+  Claude Code's session list, as at the trust dialog) is given up on. `deliver: now` types it
+  in at once, mid-turn too, where Claude Code queues it, and gives up on a dialog instead of
+  waiting.
 - **`model`**, **`effort`**, **`mode`** (the permission mode), **`allowed_tools`** and
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts
   with. A ritual that reads Slack or mail needs its MCP server: a claude.ai connector, the

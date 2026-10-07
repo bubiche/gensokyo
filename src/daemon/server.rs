@@ -465,10 +465,8 @@ async fn input(
     {
         let mut sh = shrine.borrow_mut();
         sh.typed = true;
-        if let Some(draft) = super::aware::typing(&bytes)
-            && let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == rid)
-        {
-            e.aware.typed(draft);
+        if let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == rid) {
+            e.aware.typed(&bytes);
         }
     }
     // A focus report is the terminal's, not typing: it leaves the view where it is.

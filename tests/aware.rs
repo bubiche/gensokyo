@@ -3,7 +3,7 @@
 
 mod common;
 
-use gensokyo::daemon::aware::{Aware, Registry, key_typing, typing};
+use gensokyo::daemon::aware::{Aware, Key, Line, Registry, kitty_key};
 use gensokyo::daemon::registry;
 use gensokyo::hooks::{reduce, take_spool};
 use gensokyo::proto::{Hook, State};
@@ -355,24 +355,31 @@ fn a_card_may_go_to_a_finished_turn_but_never_into_a_dialog_or_an_unlisted_sessi
     assert_eq!(a.blocked(), Some("is still starting up"));
 }
 
+/// Whether these keys, sent one after another, leave a draft, from a line that had one or not.
+fn draft(had: bool, keys: &[&[u8]]) -> bool {
+    let mut l = Line::default();
+    l.keys(if had { b"x" } else { b"" });
+    keys.iter().for_each(|k| l.keys(k));
+    l.draft
+}
+
 #[test]
 fn what_the_user_types_leaves_a_draft_or_clears_one_and_keys_that_type_nothing_say_nothing() {
     // Text, a paste, and kitty-encoded letters (shifted too) leave something in the line.
     for b in [&b"a"[..], b"\x1b[200~card\x1b[201~", b"\x1b[97u", b"\x1b[65;2u", "é".as_bytes()] {
-        assert_eq!(typing(b), Some(true), "{b:?}");
+        assert!(draft(false, &[b]), "{b:?}");
     }
     // Ctrl-C clears it, legacy or kitty; the last of several keys wins.
     for b in [&b"\x03"[..], b"\x1b[99;5u", b"abc\x03", b"\x1b[99;5:1u"] {
-        assert_eq!(typing(b), Some(false), "{b:?}");
+        assert!(!draft(true, &[b]), "{b:?}");
     }
-    assert_eq!(typing(b"\x03x"), Some(true));
+    assert!(draft(false, &[b"\x03x"]));
     // Up brings an earlier prompt back into the line.
-    assert_eq!((typing(b"\x1b[A"), typing(b"\x1bOA")), (Some(true), Some(true)));
-    // Enter, Tab, Backspace, Esc, arrows, F1, Alt-x, focus, SGR and X10 mouse reports, a
-    // key's release, Ctrl-A and a kitty Enter: nothing typed, nothing cleared.
+    assert!(draft(false, &[b"\x1b[A"]) && draft(false, &[b"\x1bOA"]));
+    // Tab, Backspace, Esc, arrows, F1, Alt-x, focus, SGR and X10 mouse reports, a key's
+    // release, Ctrl-A, Shift-Enter and Alt-Enter: nothing typed, nothing cleared.
     for b in [
-        &b"\r"[..],
-        b"\t",
+        &b"\t"[..],
         b"\x7f",
         b"\x1b",
         b"\x1b[B",
@@ -384,13 +391,41 @@ fn what_the_user_types_leaves_a_draft_or_clears_one_and_keys_that_type_nothing_s
         b"\x1b[M !!",
         b"\x1b[97;1:3u",
         b"\x1b[97;5u",
-        b"\x1b[13u",
+        b"\x1b[13;2u",
+        b"\x1b\r",
         b"\x1b[57399u",
     ] {
-        assert_eq!(typing(b), None, "{b:?}");
+        assert!(draft(true, &[b]) && !draft(false, &[b]), "{b:?}");
     }
-    assert_eq!(key_typing(99, 4 | 64, 1), Some(false), "Ctrl-C with Caps Lock on");
-    assert_eq!(key_typing(97, 2, 1), None, "Alt-a");
+    assert_eq!(kitty_key(99, 4 | 64, 1), Some(Key::Clear), "Ctrl-C with Caps Lock on");
+    assert_eq!(kitty_key(97, 2, 1), None, "Alt-a");
+    assert_eq!(kitty_key(13, 64, 1), Some(Key::Enter), "Enter with Caps Lock on");
+}
+
+#[test]
+fn enter_empties_the_line_only_of_a_command_which_no_hook_reports() {
+    // `/context` or `!ls` and Enter: run, the line empty, legacy or kitty, whole or key by key.
+    for keys in [
+        &[&b"/context\r"[..]][..],
+        &[b"/", b"c", b"o", b"\r"],
+        &[b"!ls", b"\x1b[13u"],
+        &[b"\x03/cost\r"],
+    ] {
+        assert!(!draft(false, keys), "{keys:?}");
+    }
+    // A prompt's Enter waits for its hook, which says that it went in.
+    assert!(draft(false, &[b"look at @src/ma", b"\r"]));
+    // A command after other text is that text; `\` then Enter, and Shift-Enter, are newlines.
+    assert!(draft(true, &[b"/context\r"]));
+    assert!(draft(false, &[b"/btw one", b"\\", b"\r"]));
+    assert!(draft(false, &[b"/btw one\x1b[13;2u"]));
+    assert!(!draft(false, &[b"/btw one\\", b"\r", b"two\r"]), "the newline, then the run");
+    // Enter inside a paste is text, in one chunk or across two.
+    assert!(draft(false, &[b"\x1b[200~/one\rtwo\r\x1b[201~"]));
+    assert!(draft(false, &[b"\x1b[200~/one\r", b"two\r\x1b[201~"]));
+    assert!(!draft(false, &[b"\x1b[200~/one\x1b[201~\r"]), "a pasted command, run");
+    // Up, whatever it brings back, waits for a hook.
+    assert!(draft(false, &[b"\x1b[A\r"]));
 }
 
 #[test]
@@ -398,13 +433,13 @@ fn a_draft_is_kept_from_the_keys_to_the_next_prompt_and_never_typed_into_a_dialo
     let draft = |a: &Aware| a.blocked().is_some_and(|b| b.contains("half typed"));
     let mut a = Aware::default();
     // Keys before the registry lists it go to its input line, or to a trust dialog: a draft.
-    a.typed(true);
+    a.typed(b"x");
     a.registry(Some(Registry::Idle), 1);
     assert!(draft(&a) && a.dialog().is_none());
     a.hook(&hook(json!({"hook_event_name": "UserPromptSubmit"}), 2));
     assert_eq!(a.blocked(), None);
     // Typed during the turn, it is still in the line when the turn ends; which still ends.
-    a.typed(true);
+    a.typed(b"x");
     a.hook(&hook(json!({"hook_event_name": "Stop", "last_assistant_message": "ok"}), 3));
     assert!(draft(&a));
     assert!(a.finished(), "a draft holds back cards, not the end of a turn");
@@ -413,7 +448,7 @@ fn a_draft_is_kept_from_the_keys_to_the_next_prompt_and_never_typed_into_a_dialo
     // Keys while a permission prompt is open answer it.
     let perm = json!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "m"});
     a.hook(&hook(perm, 5));
-    a.typed(true);
+    a.typed(b"x");
     a.registry(Some(Registry::Idle), 6);
     assert_eq!(a.blocked(), None, "answered, and nothing left in the line");
 }
@@ -444,4 +479,34 @@ fn a_branch_is_cut_to_show_and_whole_to_match() {
     assert_eq!(tele::git_head(&dir).as_deref(), Some(long.as_str()));
     assert_eq!(tele::git_branch(&dir).map(|b| b.chars().count()), Some(60));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_resident_being_typed_into_takes_nothing_else_until_its_prompt_goes_in() {
+    use gensokyo::daemon::aware::TYPING;
+    let mut a = Aware::default();
+    a.registry(Some(Registry::Idle), 5);
+    a.hook(&recorded("Stop", None, 10));
+    a.seen();
+    assert!(a.idle() && a.blocked().is_none());
+    let m = a.mark();
+    assert_eq!(a.blocked(), Some(TYPING));
+    assert!(!a.idle() && a.in_way().is_none(), "the one typing is not in its own way");
+    // A prompt that went in before this Enter is some other prompt.
+    a.hook(&recorded("UserPromptSubmit", None, 20));
+    assert_eq!(a.blocked(), Some(TYPING));
+    a.entered(m, 30);
+    a.hook(&recorded("Stop", None, 25));
+    assert_eq!(a.blocked(), Some(TYPING));
+    a.hook(&recorded("UserPromptSubmit", None, 31));
+    assert_eq!(a.blocked(), None);
+    // Given up with nothing sent; an old mark handed back clears nothing.
+    let m = a.mark();
+    a.unmark(m);
+    assert_eq!(a.blocked(), None);
+    let old = a.mark();
+    a.unmark(old);
+    let _new = a.mark();
+    a.unmark(old);
+    assert_eq!(a.blocked(), Some(TYPING));
 }

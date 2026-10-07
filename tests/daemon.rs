@@ -1268,8 +1268,7 @@ fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
     let (r, mut c, mut s) = with_a_pasted_past(&d);
     c.send(json!({"t": "input", "who": r["id"], "bytes": b"/mute\r"}));
     s.wait_for(&mut c, "muted");
-    // `/mute` fires no hook, so it still reads as typed text: Ctrl-C, as the user would.
-    c.send(json!({"t": "input", "who": r["id"], "bytes": b"\x03"}));
+    // `/mute` fires no hook: its Enter, a command's, is what leaves the line empty.
     wait(|| d.list().iter().any(|x| x["id"] == r["id"] && x["blocked"].is_null()), "cleared");
     let done = cast_while_scrolling(&d, &r);
     assert!(done["error"].as_str().unwrap_or("").contains("never showed"), "{done}");

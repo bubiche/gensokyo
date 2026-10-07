@@ -2,6 +2,7 @@
 //! the timetable's requests; headless runs are `headless.rs` and `keep` is `keep.rs`. The files and the rules about them
 //! are `crate::ritual`; the schedule is `crate::cron`. This decides and acts.
 
+use super::aware::{STARTING, TYPING};
 use super::cards::deliver;
 use super::log::log;
 use super::registry;
@@ -28,7 +29,8 @@ const TICK: Duration = Duration::from_secs(20);
 const QUEUE_LIFE: i64 = 3600;
 
 /// How long a persistent ritual's recalled session, or a named resident, may take to start up
-/// before the fire is given up.
+/// (to be listed by the registry, which is asked every few seconds meanwhile) before the fire
+/// is given up.
 const READY_WAIT: Duration = Duration::from_secs(60);
 
 /// `deliver: idle`: how long a resident must have been idle, by its last hook, before a fire is
@@ -36,8 +38,9 @@ const READY_WAIT: Duration = Duration::from_secs(60);
 /// ended: long enough for a reply the user is reading to be seen first.
 const IDLE_HOLD: Duration = Duration::from_secs(10);
 
-/// `deliver: idle`: a fire still waiting after this, on the ritual clock, is dropped. The prompt
-/// was written for its time, and a newer fire would have replaced it had there been one.
+/// `deliver: idle`: fires still waiting after this, on the ritual clock, are dropped: from the
+/// first of those that took each other's place, so a ritual that fires often is still given up
+/// on, and says so, while its resident stays busy.
 const HOLD_MOST: Duration = Duration::from_secs(4 * 3600);
 
 /// A length from the environment in ms, for tests; else `d`.
@@ -582,14 +585,16 @@ fn undelivered(shrine: &Shared, r: &Ritual, why: &str) {
 }
 
 /// The prompt into resident `id`'s input line, as a spell card goes: never into a dialog. One
-/// that is still starting (just recalled) is waited for; a dialog is reported instead. With
-/// `deliver: idle` (the default) it also waits, up to `HOLD_MOST` on the ritual clock, for the
-/// resident to be idle: no turn running, no dialog, nothing half typed, and `IDLE_HOLD` since
-/// its last hook. Focus plays no part. A newer fire for the same resident replaces a waiting one,
-/// and the probe goes on meanwhile, so what is typed is the newest.
+/// that is still starting (just recalled) is waited for, up to `READY_WAIT`, and so is a card or
+/// another prompt on its way in; a dialog is reported instead. With `deliver: idle` (the
+/// default) it also waits, up to `HOLD_MOST` on the ritual clock, for the resident to be idle:
+/// no turn running, no dialog, nothing half typed, and `IDLE_HOLD` since its last hook. Focus
+/// plays no part. A newer fire for the same resident replaces a waiting one, and the probe goes
+/// on meanwhile, so what is typed is the newest.
 async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: Sent) {
-    let (t, start, idle) = (Instant::now(), now(), r.deliver_idle());
+    let idle = r.deliver_idle();
     let hold = env_ms("GENSOKYO_IDLE_HOLD_MS", IDLE_HOLD).as_millis() as i64;
+    let ready_wait = env_ms("GENSOKYO_READY_WAIT_MS", READY_WAIT);
     let d = Dir::of(&r.slug);
     // Waiting, the probe's next fire may run: it replaces this one if it says something new.
     let (key, _hold, nudge) = match sent {
@@ -605,7 +610,7 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
         let mut sh = shrine.borrow_mut();
         sh.rites.held += 1;
         let n = sh.rites.held;
-        let fresh = Waiter { n, since: Instant::now(), held: false, told: false };
+        let fresh = Waiter { n, since: Instant::now(), first: now(), held: false, told: false };
         let was = sh.rites.waiting.insert(slot.clone(), fresh);
         if let Some(w) = was {
             sh.rites.waiting.insert(slot.clone(), Waiter { n, ..w });
@@ -635,10 +640,10 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
                 gone(shrine);
                 return undelivered(shrine, r, "the daemon is stopping");
             }
-            if !sh.rites.waiting.get(&slot).is_some_and(|w| w.n == mine) {
+            let Some(w) = sh.rites.waiting.get(&slot).filter(|w| w.n == mine).copied() else {
                 log(json!({"ev": "ritual", "slug": r.slug, "replaced": label}));
                 return;
-            }
+            };
             sh.entries.iter().find(|e| e.rec.id == id).map(|e| {
                 let quiet = hooks::now_ms() - e.aware.heard() >= hold;
                 (
@@ -646,6 +651,7 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
                     e.handle.clone().filter(|h| h.exit().is_none()),
                     e.aware.blocked(),
                     e.aware.idle() && quiet,
+                    w,
                 )
             })
         };
@@ -654,19 +660,26 @@ async fn type_prompt(shrine: &Shared, r: &Ritual, id: &str, label: &str, sent: S
                 gone(shrine);
                 return undelivered(shrine, r, "its resident has left");
             }
-            Some((name, Some(h), None, ready)) if ready || !idle => break (name, h),
-            Some((name, _, Some(why), _))
-                if !idle && (why != "is still starting up" || t.elapsed() > READY_WAIT) =>
+            Some((name, Some(h), None, ready, _)) if ready || !idle => break (name, h),
+            // `deliver: now` waits only for what passes by itself.
+            Some((name, _, Some(why), _, w))
+                if why == STARTING && w.since.elapsed() > ready_wait
+                    || !idle && why != STARTING && why != TYPING =>
             {
                 gone(shrine);
                 return undelivered(shrine, r, &format!("{name} {why}"));
             }
-            Some((name, ..)) if now() - start > HOLD_MOST.as_secs() as i64 => {
+            Some((name, _, why, _, w)) if now() - w.first > HOLD_MOST.as_secs() as i64 => {
                 gone(shrine);
                 let waited = tele::age(HOLD_MOST.as_secs());
-                return undelivered(shrine, r, &format!("{name} was not idle for {waited}"));
+                let why = why.unwrap_or("is busy");
+                return undelivered(
+                    shrine,
+                    r,
+                    &format!("{name} was not idle for {waited}: it {why}"),
+                );
             }
-            Some((name, _, why, _)) => {
+            Some((name, _, why, ..)) => {
                 if idle {
                     held(shrine, r, &slot, &name, label, why);
                 }
@@ -753,6 +766,8 @@ pub(super) struct Waiter {
     n: u64,
     /// When the first of the fires that took each other's place began to wait.
     since: Instant,
+    /// The same, on the ritual clock.
+    first: i64,
     /// `held` is journaled once for a run of fires that take each other's place.
     held: bool,
     /// Told the user once that it waits on them: a dialog, or something typed and not sent.
@@ -760,8 +775,8 @@ pub(super) struct Waiter {
 }
 
 /// Journals that a fire is held, once, and says so to the user when what holds it is theirs to
-/// clear. A built-in command (`/model`, `/context`) sends no prompt hook, so what was typed for
-/// it still counts as half typed until the next prompt, Ctrl-C or `/clear`.
+/// clear: a dialog, or text typed and not sent, which counts as half typed until a prompt goes
+/// in, Ctrl-C, `/clear`, or the Enter that runs a `/` or `!` command.
 fn held(
     shrine: &Shared,
     r: &Ritual,
@@ -776,7 +791,8 @@ fn held(
     else {
         return;
     };
-    let (journal, tell) = (!w.held, !w.told && why.is_some_and(|w| w != "is still starting up"));
+    let theirs = why.is_some_and(|w| w != STARTING && w != TYPING);
+    let (journal, tell) = (!w.held, !w.told && theirs);
     w.held = true;
     w.told |= tell;
     if journal {

@@ -679,6 +679,34 @@ fn held_past_an_edge_the_view_moves_a_row_at_a_time_and_the_selection_with_it() 
 }
 
 #[test]
+fn a_selection_over_thousands_of_rows_copies_every_line_as_written() {
+    let mut vt = Vt::new(200, 20);
+    // Every seventh line wraps onto a second row, and every so often one is empty.
+    let lines: Vec<String> = (0..4000)
+        .map(|i| match i % 7 {
+            0 => format!("long {i} {}", "y".repeat(250)),
+            3 => String::new(),
+            _ => format!("line {i}"),
+        })
+        .collect();
+    for l in &lines {
+        vt.feed(format!("{l}\r\n").as_bytes());
+    }
+    assert!(vt.scrolled().1 > 4000);
+    // From the oldest row kept, home, to the last line.
+    vt.scroll(Some(i32::MIN));
+    vt.select(1, Pointer::Press, 0, 0);
+    vt.scroll(None);
+    vt.select(1, Pointer::Drag, 199, 18);
+    let t = std::time::Instant::now();
+    let got = vt.select(1, Pointer::Release, 199, 18).unwrap();
+    eprintln!("{} rows copied in {:?}", vt.scrolled().1 + 19, t.elapsed());
+    let want = lines.join("\n");
+    assert_eq!(got.len(), want.trim_end_matches('\n').len());
+    assert!(got == want.trim_end_matches('\n'), "the copy differs from what was written");
+}
+
+#[test]
 fn each_viewer_sees_and_copies_only_its_own_selection() {
     let mut vt = Vt::new(20, 2);
     vt.feed(b"alpha beta");

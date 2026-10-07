@@ -1,8 +1,8 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
 //! `watch`, `view`, `unview`, `input`, `scroll`, `search`, `select`, `resize`, `focus`, `hook`
-//! and `statusline` are answered only when they fail, except a `select` release with something
-//! selected, answered with `done` and its text; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
+//! and `statusline` are answered only when they fail, except a `select` release, answered with
+//! `done` and the text selected; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
 use crate::vt::{Frame, Modes, Pointer, Run};
@@ -81,7 +81,7 @@ pub enum Request {
     },
     /// What the pointer did at cell `x`, `y` of the resident's screen as shown: this
     /// connection's own selection, drawn in its frames alone and kept on its text as output
-    /// comes. A release with something selected is answered with `done` and its text.
+    /// comes. A release is answered with `done` and the text selected, empty when none is.
     Select {
         who: String,
         how: Pointer,

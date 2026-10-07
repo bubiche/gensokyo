@@ -804,3 +804,19 @@ fn leader_y_copies_the_last_answer_or_says_why_it_cannot() {
     daemon(&mut a, Reply::Error { id, error: error.clone() });
     assert_eq!(said(&a), Some(error.as_str()));
 }
+
+#[test]
+fn a_click_while_an_answer_is_on_its_way_leaves_it_bound_for_the_clipboard() {
+    let mut a = gridded();
+    host(&mut a, b"\x1dy");
+    sgr(&mut a, 0, 30, 5, true);
+    sgr(&mut a, 0, 30, 5, false);
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["read", "select", "select"]);
+    let (read, release) = (out[0]["id"].as_u64().unwrap(), out[2]["id"].as_u64().unwrap());
+    // A click selects nothing: its answer is empty, and says nothing.
+    daemon(&mut a, Reply::Done { id: release, message: String::new() });
+    assert_eq!(said(&a), None);
+    daemon(&mut a, Reply::Done { id: read, message: "the whole answer".into() });
+    assert_eq!(said(&a), Some("copied Reimu's last answer, 16 characters"));
+}

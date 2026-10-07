@@ -16,7 +16,7 @@ use super::store::Store;
 use super::stream::{self, send, send_written, view, writer};
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request};
-use crate::vt::KeyEvent;
+use crate::vt::{KeyEvent, Pointer};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -438,10 +438,11 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 Err(e) => Some(fail(e)),
             },
             Request::Select { who, how, x, y } => match live(&shrine, &who) {
-                Ok((_, _, h)) => h
-                    .select(me, how, x, y)
-                    .filter(|t| !t.is_empty())
-                    .map(|message| Reply::Done { id, message }),
+                Ok((_, _, h)) => {
+                    let text = h.select(me, how, x, y);
+                    let message = text.unwrap_or_default();
+                    (how == Pointer::Release).then_some(Reply::Done { id, message })
+                }
                 Err(e) => Some(fail(e)),
             },
             Request::Resize { cols, rows } => {

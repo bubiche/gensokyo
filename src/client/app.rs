@@ -270,8 +270,8 @@ pub struct App {
     edge: Option<Instant>,
     /// The last left press in the grid that was not a double click's second: when, and where.
     pressed: Option<(Instant, (u16, u16))>,
-    /// The request whose `done` carries text to copy, and what the text is.
-    copying: Option<(u64, String)>,
+    /// The requests whose `done` carries text to copy, and what each text is.
+    copying: Vec<(u64, String)>,
     /// The grid size last sent.
     size: (u16, u16),
     /// Everyone, departed included, from the last `list --all`.
@@ -340,7 +340,7 @@ impl App {
             held: None,
             edge: None,
             pressed: None,
-            copying: None,
+            copying: Vec::new(),
             size: (0, 0),
             all: Vec::new(),
             lists: HashMap::new(),
@@ -572,11 +572,17 @@ impl App {
                     false => self.focus(Some(resident.id)),
                 }
             }
-            Reply::Done { id, message } => match self.copying.take_if(|c| c.0 == id) {
-                Some((_, what)) => self.copy(message, &what),
+            Reply::Done { id, message } => match self.copying.iter().position(|c| c.0 == id) {
+                Some(i) => {
+                    let (_, what) = self.copying.remove(i);
+                    if !message.is_empty() {
+                        self.copy(message, &what);
+                    }
+                }
                 None => self.say(Say::Info, message),
             },
             Reply::Error { id, error } => {
+                self.copying.retain(|c| c.0 != id);
                 if Some(id) == self.quit {
                     self.gone = None;
                 }
@@ -891,8 +897,9 @@ impl App {
             h.past = past;
             if !ev.press {
                 (self.held, self.edge) = (None, None);
-                let what = String::new();
-                self.copying = self.select(Pointer::Release, at).map(|id| (id, what));
+                if let Some(id) = self.select(Pointer::Release, at) {
+                    self.copying.push((id, String::new()));
+                }
                 return;
             }
             self.edge = match past {
@@ -1110,7 +1117,7 @@ impl App {
                 Some(r) => {
                     let (who, what) = (r.id.clone(), format!("{}'s last answer", r.name));
                     let id = self.send(Request::Read { who, screen: false, bare: true });
-                    self.copying = Some((id, what));
+                    self.copying.push((id, what));
                 }
                 None => self.say(Say::Info, "nobody is on screen"),
             },

@@ -38,9 +38,8 @@ pub(super) struct Left {
     /// Those whose claude is still running: none of them is resumed, which would have two
     /// processes writing one session.
     pub(super) running: HashSet<String>,
-    /// After a crash: when the daemon last recovered from one, epoch seconds (now, if this one
-    /// does), and whether that was too recent to again.
-    crash: Option<(i64, bool)>,
+    /// After a crash: whether it came too soon after the last recovery to recover again.
+    crash: Option<bool>,
 }
 
 /// At start, before anyone is recalled: the claude of every live record ended, if it is still
@@ -69,7 +68,7 @@ pub(super) async fn leftovers(store: &Store) -> Left {
             let _ = store::write_atomic(&run("crash"), format!("{now}\n").as_bytes());
         }
         log(json!({"ev": "crash", "left": records.len(), "again": again}));
-        crash = Some((if again { last.unwrap_or(now) } else { now }, again));
+        crash = Some(again);
     }
     // Only a process that started when the record says: the pid may be someone else's by now.
     let still = |(pid, at): (i32, u64)| pty::start_id(pid) == Some(at);
@@ -104,9 +103,9 @@ pub(super) async fn leftovers(store: &Store) -> Left {
 }
 
 /// After a crash: everyone it cut off back in their conversations, unless it came too soon
-/// after the last recovery, and a notice kept for the first client to watch.
+/// after the last recovery, and a notice kept for the clients to come.
 pub(super) fn recover(shrine: &Shared, left: &Left) {
-    let Some((stamp, again)) = left.crash else { return };
+    let Some(again) = left.crash else { return };
     let text = if again {
         let all: Vec<String> = left.records.iter().map(|r| r.name.clone()).collect();
         format!(
@@ -143,17 +142,6 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
         t
     };
     log(json!({"ev": "crash", "notice": text}));
-    let _ = store::write_atomic(&run("crash"), format!("{stamp}\n{text}\n").as_bytes());
-}
-
-/// The last crash's notice, once: it went out before any client could hear it.
-pub(super) fn unseen() -> Option<String> {
-    let s = std::fs::read_to_string(run("crash")).ok()?;
-    let (stamp, text) = s.split_once('\n')?;
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let _ = store::write_atomic(&run("crash"), format!("{stamp}\n").as_bytes());
-    Some(text.to_string())
+    // Kept as missed: no client can be watching yet.
+    shrine.borrow_mut().notice(&text);
 }

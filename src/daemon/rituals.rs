@@ -369,12 +369,12 @@ fn complain(shrine: &Shared, r: &Ritual, d: &Dir, now: i64, why: &str) {
     }
     sh.rites.complained.insert(r.slug.clone(), why.into());
     d.note(now, "not-run", &format!("not run: {why}"));
-    notice(&sh, &r.slug, why);
+    notice(&mut sh, &r.slug, why);
 }
 
-pub(super) fn notice(sh: &Shrine, slug: &str, text: &str) {
+pub(super) fn notice(sh: &mut Shrine, slug: &str, text: &str) {
     log(json!({"ev": "ritual", "slug": slug, "notice": text}));
-    let _ = sh.notices.send(Reply::Notice { text: format!("⏲ {slug}: {text}") });
+    sh.notice(&format!("⏲ {slug}: {text}"));
 }
 
 /// A run of it still going: a resident it started that has not finished, or a headless run.
@@ -581,7 +581,7 @@ fn undelivered(shrine: &Shared, r: &Ritual, why: &str) {
         return;
     }
     sh.rites.undelivered.insert(r.slug.clone(), why.into());
-    notice(&sh, &r.slug, &format!("{why}, so the fire was not delivered"));
+    notice(&mut sh, &r.slug, &format!("{why}, so the fire was not delivered"));
 }
 
 /// The prompt into resident `id`'s input line, as a spell card goes: never into a dialog. One
@@ -820,7 +820,7 @@ fn held(
         Dir::of(&r.slug).note(now(), "held", &text);
     }
     if tell {
-        notice(&sh, &r.slug, &format!("waiting for {name}, which {}", why.unwrap_or_default()));
+        notice(&mut sh, &r.slug, &format!("waiting for {name}, which {}", why.unwrap_or_default()));
     }
 }
 

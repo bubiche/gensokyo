@@ -5,7 +5,7 @@ use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::client::render::grid_rect;
-use gensokyo::proto::{Card, Reply, Resident, RitualInfo, State};
+use gensokyo::proto::{Card, Notice, Reply, Resident, RitualInfo, State};
 use gensokyo::vt::{Frame, Modes, Run, Style, Vt};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
@@ -600,6 +600,96 @@ fn a_message_goes_when_its_time_is_up_without_a_key() {
     // An error stays longer than news of something done.
     daemon(&mut a, Reply::Error { id: 9, error: "no such resident".into() });
     assert!(a.expires().unwrap() > at + Duration::from_secs(3));
+}
+
+/// The history's texts, newest first.
+fn history(a: &App) -> Vec<&str> {
+    a.m.history.iter().map(|(_, m)| m.text.as_str()).collect()
+}
+
+#[test]
+fn what_was_said_is_kept_newest_first_and_the_oldest_go_past_fifty() {
+    let mut a = shrine();
+    for i in 0..60 {
+        daemon(&mut a, Reply::Done { id: 9, message: format!("cast {i}") });
+    }
+    daemon(&mut a, Reply::Error { id: 9, error: "no resident 7".into() });
+    let h = history(&a);
+    assert_eq!((h.len(), h[0], h[1], h[49]), (50, "no resident 7", "cast 59", "cast 11"));
+    // A chord clears the sidebar's message, not the history.
+    host(&mut a, b"\x1dj");
+    assert_eq!((said(&a), history(&a).len()), (None, 50));
+}
+
+#[test]
+fn notices_from_before_take_their_places_and_those_nobody_heard_are_said_once() {
+    let notice = |at, text: &str, missed| Notice { at, text: text.into(), missed };
+    let mut a = shrine();
+    daemon(&mut a, Reply::Done { id: 9, message: "now".into() });
+    let notices = vec![
+        notice(i64::MAX, "\x1b]9;from the future\x07", false),
+        notice(30, "⏲ tea: not delivered", true),
+        notice(20, "⏲ tea: waiting for Reimu", true),
+        notice(10, "the daemon crashed", false),
+    ];
+    a.host.clear();
+    daemon(&mut a, Reply::Notices { notices });
+    let want = [" ]9;from the future ", "now", "⏲ tea: not delivered", "⏲ tea: waiting for Reimu"];
+    assert_eq!(history(&a)[..4], want);
+    assert_eq!(history(&a)[4], "the daemon crashed");
+    assert_eq!(said(&a), Some("2 notices while you were away: ^] h"));
+    // Old news: no bell, nothing to the desktop.
+    assert!(a.host.is_empty(), "{:?}", String::from_utf8_lossy(&a.host));
+    // One is counted too; none, not at all.
+    let mut a = shrine();
+    daemon(&mut a, Reply::Notices { notices: vec![notice(30, "⏲ tea: not delivered", true)] });
+    assert_eq!(said(&a), Some("1 notice while you were away: ^] h"));
+    let mut a = shrine();
+    daemon(&mut a, Reply::Notices { notices: vec![notice(30, "⏲ tea: not delivered", false)] });
+    assert_eq!((said(&a), history(&a)), (None, vec!["⏲ tea: not delivered"]));
+}
+
+#[test]
+fn leader_h_opens_the_history_which_scrolls_like_the_scrollback_and_closes() {
+    let mut a = shrine();
+    for i in 0..30 {
+        daemon(&mut a, Reply::Done { id: 9, message: format!("cast {i}") });
+    }
+    let top = |a: &App| match &a.m.modal {
+        Some(Modal::History(h)) => Some(h.top),
+        _ => None,
+    };
+    // At 120x40, 20 rows of the 30 show at once.
+    screen(&mut a);
+    host(&mut a, b"\x1dh");
+    assert_eq!(top(&a), Some(0));
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("history 1–20 of 30")), "{rows:#?}");
+    for (keys, want) in [
+        (&b"j"[..], 1),
+        (b"\x1b[B", 2),
+        (b"k", 1),
+        (b"\x1b[6~", 10),
+        (b"\x1b[6~", 10),
+        (b"\x1b[5~", 0),
+        (b"\x1b[5~", 0),
+        (b"G", 10),
+        (b"g", 0),
+        (b"x", 0),
+    ] {
+        host(&mut a, keys);
+        assert_eq!(top(&a), Some(want), "{}", String::from_utf8_lossy(keys));
+    }
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("ago cast 29")), "{rows:#?}");
+    for close in [&b"q"[..], b"h", b"\x1b"] {
+        host(&mut a, b"\x1dh");
+        assert_eq!(top(&a), Some(0));
+        host(&mut a, close);
+        assert_eq!(top(&a), None, "{}", String::from_utf8_lossy(close));
+    }
+    // Nothing went to the resident.
+    assert!(sent(&mut a).iter().all(|r| r["t"] != "input"));
 }
 
 #[test]

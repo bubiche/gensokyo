@@ -77,6 +77,7 @@ what comes next:
 | `m` | mouse capture on or off |
 | `d` | detach: the client leaves, the residents keep running |
 | `q` | quit: every resident `/exit`s and the daemon stops |
+| `h` | the history: every message and notice, newest first |
 | `?` | help, with the glyphs |
 | `Ctrl-]` | send the resident a `Ctrl-]` of its own |
 
@@ -97,6 +98,13 @@ ends it. A full-screen program's alternate screen has no scrollback to search.
 
 In a dialog, Enter does the main thing, Esc goes back one stage, and `y`/`n` answer the
 yes-or-no ones.
+
+What the shrine has to say (a cast's reply, an error, a ritual's notice) shows above the
+sidebar's buttons for a few seconds, and one too long for its five rows ends in `^] h`.
+`Ctrl-] h` is the history: every message since the client opened and the daemon's last 20
+notices, newest first, each in full with how long ago it came. `j`/`k`, the arrows and
+PgUp/PgDn scroll it; Esc, `q` or `h` close it. A client that opens after notices no client was
+there for says so once.
 
 Everything is also a click: the sidebar's lines focus a resident, and every button carries the
 key that does the same thing (`[summon n]`). `[mouse: shrine m]` turns mouse capture off, which
@@ -120,7 +128,8 @@ all back under recall. Each of these is also a command, for scripts (below).
 
 When the daemon itself crashes, the next one (launchd's, or the next `gensokyo`'s) brings
 everyone back into their own conversations, their turns cut off, and the first client to open
-is told so. A second crash within 10 minutes of that leaves them departed, to recall by hand.
+is told there is a notice in the history saying so. A second crash within 10 minutes of that
+leaves them departed, to recall by hand.
 
 ## When a resident needs you
 

@@ -1,6 +1,7 @@
 //! A daemon that dies without stopping: the next one ends whatever claude it left running,
-//! brings its residents back once into their own conversations and keeps the notice for the
-//! first client; a second crash soon after leaves them to the user, and a stop is never a crash.
+//! brings its residents back once into their own conversations and keeps the notice, missed
+//! until a client comes; a second crash soon after leaves them to the user, and a stop is never
+//! a crash.
 
 mod common;
 
@@ -44,16 +45,16 @@ fn kill(d: &Daemon, sig: i32) {
     wait(|| !alive(p), "the daemon to die");
 }
 
-/// What a client that starts watching now is told of a crash, if anything.
+/// What a client that starts watching now is handed that no client has had yet, if anything.
 fn notice(d: &Daemon) -> Option<String> {
     let (mut w, mut lines) = d.connect();
     writeln!(w, "{}", json!({"t": "watch"})).unwrap();
     loop {
         let v = next(&mut lines);
-        match v["t"].as_str() {
-            Some("notice") => return Some(v["text"].as_str().unwrap().to_string()),
-            Some("residents") => return None,
-            _ => {}
+        if v["t"] == "notices" {
+            let mut missed =
+                v["notices"].as_array().unwrap().iter().filter(|n| n["missed"] == true);
+            return missed.next().map(|n| n["text"].as_str().unwrap().to_string());
         }
     }
 }
@@ -84,7 +85,7 @@ fn a_crash_brings_everyone_back_once_and_one_soon_after_leaves_them_to_the_user(
     assert!(args.contains(&format!("--resume {id}")), "{args}");
     let gone = d.dir.join(format!("departed/{}.json", cirno["id"].as_str().unwrap()));
     assert!(gone.exists());
-    // Nobody watched as it came back: the first client to is told, and only that one.
+    // Nobody watched as it came back: the first client to is told, and the next has it as heard.
     let said = notice(&d).expect("a notice");
     assert!(said.contains("crashed") && said.contains("turns off"), "{said}");
     assert!(said.contains("back in their conversations: Reimu"), "{said}");

@@ -1,0 +1,27 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ history 2–21 of 28 ──────────────────────────────────────────────────┐"
+"│          was not delivered; it fires again tomorrow at 09:05 and     │"
+"│          will look for her then                                      │"
+"│  10m ago no resident 7                                               │"
+"│   1h ago cast 0                                                      │"
+"│   2h ago cast 1                                                      │"
+"│   3h ago cast 2                                                      │"
+"│   4h ago cast 3                                                      │"
+"│   5h ago cast 4                                                      │"
+"│   6h ago cast 5                                                      │"
+"│   7h ago cast 6                                                      │"
+"│   8h ago cast 7                                                      │"
+"│   9h ago cast 8                                                      │"
+"│  10h ago cast 9                                                      │"
+"│  11h ago cast 10                                                     │"
+"│  12h ago cast 11                                                     │"
+"│  13h ago cast 12                                                     │"
+"│  14h ago cast 13                                                     │"
+"│  15h ago cast 14                                                     │"
+"│  16h ago cast 15                                                     │"
+"│  17h ago cast 16                                                     │"
+"│ [close esc]                                                          │"
+"└──────────────────────────────────────────────────────────────────────┘"

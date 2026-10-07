@@ -316,6 +316,45 @@ fn a_named_resident_gets_the_prompt_alone_and_a_missing_one_is_reported() {
         d.evs("lost", "not-sent"),
         vec!["not sent: there is no resident called Nobody".to_string()]
     );
+    // Kept for clients to come, as heard: one was watching. When it came is on the wall clock.
+    let text = n["text"].as_str().unwrap().to_string();
+    assert_eq!(kept(&d), [(text, false)]);
+    let (mut w, mut events) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    let at = watch_for(&mut events, |v| v["t"] == "notices")["notices"][0]["at"].as_i64().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    assert!((now.as_secs() as i64 - at).abs() < 60, "{at}");
+}
+
+/// The notices a client that starts watching now is handed, newest first: each one's text, and
+/// whether no client had it before.
+fn kept(d: &Daemon) -> Vec<(String, bool)> {
+    let (mut w, mut events) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    let n = watch_for(&mut events, |v| v["t"] == "notices");
+    let all = n["notices"].as_array().unwrap().iter();
+    all.map(|n| (n["text"].as_str().unwrap().into(), n["missed"] == true)).collect()
+}
+
+#[test]
+fn notices_nobody_watched_are_missed_until_a_client_has_them_and_only_the_last_twenty_kept() {
+    let rituals: Vec<(String, String)> = (0..22)
+        .map(|i| (format!("lost{i:02}"), hourly(&format!("target: Nobody{i:02}\n"))))
+        .collect();
+    let rituals: Vec<(&str, &str)> =
+        rituals.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let d = Daemon::start("kept", T0 + 120, &rituals, &[]);
+    wait(|| (0..22).all(|i| d.stamp(&format!("lost{i:02}")).is_some()), "first sight");
+    assert_eq!(kept(&d), []);
+    d.clock(T0 + 3600 + 5);
+    let fired = || (0..22).all(|i| d.evs(&format!("lost{i:02}"), "not-sent").len() == 1);
+    wait(fired, "every fire");
+    let first = kept(&d);
+    assert_eq!(first.len(), 20);
+    assert!(first.iter().all(|(t, missed)| *missed && t.contains("so the fire was not delivered")));
+    // Had once, they are heard: the next client gets them all the same.
+    let second: Vec<(String, bool)> = first.into_iter().map(|(t, _)| (t, false)).collect();
+    assert_eq!(kept(&d), second);
 }
 
 fn headless_run(name: &str, env: &[(&str, &str)]) -> (Daemon, String) {

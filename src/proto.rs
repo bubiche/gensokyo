@@ -2,13 +2,17 @@
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
 //! `watch`, `view`, `unview`, `input`, `scroll`, `search`, `select`, `resize`, `focus`, `hook`
 //! and `statusline` are answered only when they fail, except a `select` release, answered with
-//! `done` and the text selected; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
+//! `done` and the text selected; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes, and the `notices` kept. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 10;
+pub const PROTO: u32 = 11;
+
+/// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
+/// off, is never cut.
+pub const NOTICE_MOST: usize = 1000;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -487,10 +491,26 @@ pub enum Reply {
         watched: bool,
     },
     /// Event: news about a ritual rather than a resident (a run that could not start, one that
-    /// finished headless). Shown and sent to the desktop; no bell.
+    /// finished headless), or a crash's. Shown and sent to the desktop; no bell. The daemon
+    /// keeps the last few for clients that come later.
     Notice {
         text: String,
     },
+    /// Event, once as a `watch` begins: the notices kept, newest first.
+    Notices {
+        notices: Vec<Notice>,
+    },
+}
+
+/// A notice as the daemon keeps it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notice {
+    /// Epoch seconds.
+    pub at: i64,
+    pub text: String,
+    /// No client was watching when it came, nor has one started to since.
+    #[serde(default)]
+    pub missed: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -7,7 +7,7 @@
 
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward, Scrollback};
-use super::modal::{self, Act, Cast, Modal, Recall, Summon, Timetable};
+use super::modal::{self, Act, Cast, History, Modal, Recall, Summon, Timetable};
 use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use crate::cli;
 use crate::paths;
@@ -37,6 +37,9 @@ const TOP: i32 = -(1 << 30);
 /// How long a message stays: long enough to read, and an error longer.
 const INFO_LIFE: Duration = Duration::from_secs(5);
 const ERROR_LIFE: Duration = Duration::from_secs(10);
+
+/// How many messages the history keeps.
+const HISTORY: usize = 50;
 
 /// A key this soon after one typed into a resident is more of that typing, not a command: the
 /// rest of a sentence meant for a resident that has just left must not act on the shrine (`a` moving on to another
@@ -276,7 +279,7 @@ pub struct App {
     /// The requests whose `done` carries text to copy, and what each text is.
     copying: Vec<(u64, String)>,
     /// The grid size last sent.
-    size: (u16, u16),
+    pub(super) size: (u16, u16),
     /// Everyone, departed included, from the last `list --all`.
     pub(super) all: Vec<Resident>,
     lists: HashMap<u64, Want>,
@@ -395,11 +398,36 @@ impl App {
         !self.burst(ANSWER)
     }
 
-    /// A message for the user, in place of the last one.
+    /// A message for the user, in place of the last one, and kept in the history.
     pub(super) fn say(&mut self, kind: Say, text: impl Into<String>) {
+        let msg = Message::new(kind, text);
+        self.m.history.insert(0, (now(), msg.clone()));
+        self.m.history.truncate(HISTORY);
         let life = if kind == Say::Error { ERROR_LIFE } else { INFO_LIFE };
-        self.m.message = Some(Message::new(kind, text));
+        self.show(msg, life);
+    }
+
+    fn show(&mut self, msg: Message, life: Duration) {
+        self.m.message = Some(msg);
         self.said = Some(Instant::now() + life);
+    }
+
+    /// The daemon's notices from before this client came, into the history in their places.
+    /// How many nobody has heard yet is said once.
+    fn notices(&mut self, notices: Vec<proto::Notice>) {
+        let missed = notices.iter().filter(|n| n.missed).count();
+        for n in notices {
+            let text = tele::clean(&n.text, proto::NOTICE_MOST);
+            self.m.history.push((n.at, Message::new(Say::Notice, text)));
+        }
+        self.m.history.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        self.m.history.truncate(HISTORY);
+        let text = match missed {
+            0 => return,
+            1 => "1 notice while you were away: ^] h".into(),
+            n => format!("{n} notices while you were away: ^] h"),
+        };
+        self.show(Message::new(Say::Notice, text), ERROR_LIFE);
     }
 
     /// When the message on show runs out.
@@ -584,12 +612,14 @@ impl App {
             Reply::Welcome { .. } | Reply::Waited { .. } => {}
             Reply::Rituals { rituals, .. } => self.rituals(rituals),
             Reply::Notice { text } => {
-                let text = crate::tele::clean(&text, 200);
+                let text = tele::clean(&text, proto::NOTICE_MOST);
                 if self.desktop {
-                    self.host.extend(format!("\x1b]9;{text}\x07").bytes());
+                    let short = tele::clean(&text, 200);
+                    self.host.extend(format!("\x1b]9;{short}\x07").bytes());
                 }
                 self.say(Say::Notice, text);
             }
+            Reply::Notices { notices } => self.notices(notices),
             Reply::Cards { cards, unusable, .. } => {
                 if let Some(Modal::Cast(c)) = &mut self.m.modal {
                     (c.cards, c.unusable) = (Some(cards), unusable);
@@ -1168,6 +1198,7 @@ impl App {
             }
             Chord::Quit => self.m.modal = Some(Modal::Quit),
             Chord::Help => self.m.modal = Some(Modal::Help),
+            Chord::History => self.m.modal = Some(Modal::History(History::default())),
             Chord::Capture => {
                 self.m.capture = !self.m.capture;
                 (self.held, self.edge) = (None, None);

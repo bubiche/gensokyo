@@ -1,6 +1,6 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
-use gensokyo::client::modal::{self, Cast, Modal, Recall, Stage, Summon, Timetable};
+use gensokyo::client::modal::{self, Cast, History, Modal, Recall, Stage, Summon, Timetable};
 use gensokyo::client::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
@@ -215,6 +215,24 @@ fn timetable(open: Option<&str>, confirm: bool) -> Modal {
     Modal::Timetable(Timetable { selected: 1, open: open.map(String::from), confirm })
 }
 
+/// What was said, newest first: a notice too long for one row, an error, then a run of plain
+/// messages, more than the history shows at once.
+fn history() -> Vec<(i64, Message)> {
+    let mut h = vec![
+        (
+            NOW - 40,
+            Message::new(
+                Say::Notice,
+                "⏲ standup: there is no resident called Sakuya, so the fire was not delivered; \
+                 it fires again tomorrow at 09:05 and will look for her then",
+            ),
+        ),
+        (NOW - 600, Message::new(Say::Error, "no resident 7")),
+    ];
+    h.extend((0..24).map(|i| (NOW - 3600 * (i + 1), Message::new(Say::Info, format!("cast {i}")))));
+    h
+}
+
 /// Every screen worth a snapshot, by name.
 fn screens() -> Vec<(&'static str, Model)> {
     let with = |f: &dyn Fn(&mut Model)| {
@@ -346,6 +364,24 @@ fn screens() -> Vec<(&'static str, Model)> {
             }),
         ),
         ("leader", with(&|m| m.leader = true)),
+        ("history-empty", with(&|m| m.modal = Some(Modal::History(History::default())))),
+        (
+            "history",
+            with(&|m| {
+                m.history = history();
+                m.modal = Some(Modal::History(History { top: 1 }));
+            }),
+        ),
+        (
+            "message-cut",
+            with(&|m| {
+                m.message = Some(Message::new(
+                    Say::Notice,
+                    "the daemon crashed, cutting its residents' turns off; back in their \
+                     conversations: Reimu, Marisa; left departed: Cirno (no conversation to resume)",
+                ))
+            }),
+        ),
         (
             "cast-reply",
             with(&|m| {

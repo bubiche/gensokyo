@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 pub const SIDEBAR_W: u16 = 25;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
-pub(super) const CHORDS: [(&str, &str); 18] = [
+pub(super) const CHORDS: [(&str, &str); 19] = [
     ("n", "summon"),
     ("c", "cast"),
     ("b", "banish"),
@@ -34,6 +34,7 @@ pub(super) const CHORDS: [(&str, &str); 18] = [
     ("m", "mouse"),
     ("d", "detach"),
     ("q", "quit"),
+    ("h", "history"),
     ("?", "help"),
     ("^]", "send ^]"),
 ];
@@ -56,6 +57,9 @@ pub struct Model {
     pub find: Option<Find>,
     /// A line for the user, above the sidebar's buttons, until it expires.
     pub message: Option<Message>,
+    /// What was said since the client came, and the daemon's notices from before, newest
+    /// first: when (epoch seconds), and what.
+    pub history: Vec<(i64, Message)>,
     /// Drawn when the shrine is empty.
     pub banner: Vec<String>,
     /// Shown as `~` in paths.
@@ -378,8 +382,18 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         hits.push(Rect { y, height: 1, ..inner }, Hit::Button(Button::Timetable));
     }
     if let Some(msg) = m.message.as_ref().filter(|_| !m.leader) {
-        // Wrapped, not cut: a cast's reply names who was left out at its end.
-        let lines = wrap(&msg.text, w, 5);
+        // Wrapped, not cut: a cast's reply names who was left out at its end. What does not fit
+        // ends in the way to the history, which has it whole.
+        let mut lines = wrap(&msg.text, w, usize::MAX);
+        if lines.len() > 5 {
+            const MORE: &str = "… ^] h";
+            lines.truncate(5);
+            let last = &mut lines[4];
+            while !last.is_empty() && width(last) + width(MORE) > w as u16 {
+                last.pop();
+            }
+            last.push_str(MORE);
+        }
         let y = up(lines.len() as u16);
         let style = match msg.kind {
             Say::Info => Style::new(),
@@ -589,7 +603,7 @@ impl Row {
 /// rect its rows are written in, its title and its rows.
 fn modal_layout(m: &Model, md: &Modal, g: Rect) -> (Rect, Rect, String, Vec<Row>) {
     use Row::*;
-    let (title, rows) = md.view(m, g.width.min(72).saturating_sub(4) as usize);
+    let (title, rows) = md.view(m, g.width.min(72).saturating_sub(4) as usize, g.height as usize);
     let text_w = |r: &Row| match r {
         Text(s, _) | Item(_, s, _) => width(s),
         // Room for the cursor after it.

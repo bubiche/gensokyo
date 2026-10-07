@@ -12,7 +12,7 @@ use crate::proto::{self, Reply, State, Summon, Telemetry};
 use crate::tele;
 use serde_json::json;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -25,6 +25,9 @@ const BANISH_GRACE: Duration = Duration::from_secs(3);
 
 /// How long one resident gets to act on one `/exit`; one that runs out is asked once more.
 const EXIT_WAIT: Duration = Duration::from_secs(6);
+
+/// How many notices are kept for clients that come later.
+const KEPT: usize = 20;
 
 /// `quit` waits this long for everyone's `/exit`, then banishes whoever is left.
 const QUIT_WAIT: Duration = Duration::from_secs(20);
@@ -87,6 +90,8 @@ pub(super) struct Shrine {
     pub(super) changed: watch::Sender<u64>,
     /// `notify` events, for every `watch`.
     pub(super) notices: broadcast::Sender<Reply>,
+    /// The last `KEPT` notices, newest first, for clients that come later.
+    pub(super) kept: VecDeque<proto::Notice>,
     pub(super) views: HashMap<u64, View>,
     pub(super) conns: u64,
     pub(super) rites: Rites,
@@ -100,6 +105,16 @@ pub(super) struct Shrine {
 }
 
 impl Shrine {
+    /// A notice to every client watching, and kept for those that come later: missed when
+    /// nobody watched as it came.
+    pub(super) fn notice(&mut self, text: &str) {
+        let text = tele::clean(text, proto::NOTICE_MOST);
+        let missed = self.notices.receiver_count() == 0;
+        self.kept.push_front(proto::Notice { at: store::now(), text: text.clone(), missed });
+        self.kept.truncate(KEPT);
+        let _ = self.notices.send(Reply::Notice { text });
+    }
+
     /// `claude` on PATH, and the environment it runs in for resident `id` (none: the registry).
     pub(super) fn claude(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
         let program = launch::claude(std::env::var_os("PATH").as_deref())?;

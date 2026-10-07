@@ -114,6 +114,8 @@ pub enum Chord {
     Find,
     /// The resident's last answer to the clipboard.
     Copy,
+    /// What was said, newest first.
+    History,
     /// The next or the previous resident in the sidebar, round at the ends.
     Next,
     Prev,
@@ -167,6 +169,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         '[' => Chord::ScrollBack,
         '/' => Chord::Find,
         'y' => Chord::Copy,
+        'h' => Chord::History,
         'j' => Chord::Next,
         'k' => Chord::Prev,
         'a' => Chord::Awaiting,

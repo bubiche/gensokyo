@@ -1,0 +1,8 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ history ─────────────────────────────┐"
+"│ nothing said yet                     │"
+"│ [close esc]                          │"
+"└──────────────────────────────────────┘"

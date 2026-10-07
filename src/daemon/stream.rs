@@ -58,17 +58,18 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
 }
 
 /// A `residents` event now and whenever the shrine changes after, the timetable now and
-/// whenever it changes, a crash's notice nobody has had yet, and every `notify` and `notice`.
+/// whenever it changes, the notices kept, and every `notify` and `notice` after. The notices
+/// kept are taken, and marked heard, as the stream subscribes: none comes twice, and none is
+/// lost between.
 pub(super) async fn watch(shrine: Shared, out: Out) {
-    let (mut rx, mut notices) = {
-        let sh = shrine.borrow();
-        (sh.changed.subscribe(), sh.notices.subscribe())
+    let (mut rx, mut notices, kept) = {
+        let mut sh = shrine.borrow_mut();
+        let kept = Vec::from(sh.kept.clone());
+        sh.kept.iter_mut().for_each(|n| n.missed = false);
+        (sh.changed.subscribe(), sh.notices.subscribe(), kept)
     };
-    if !send(&out, &rituals::listing(&shrine, 0)).await {
-        return;
-    }
-    if let Some(text) = super::crash::unseen()
-        && !send(&out, &Reply::Notice { text }).await
+    if !send(&out, &rituals::listing(&shrine, 0)).await
+        || !send(&out, &Reply::Notices { notices: kept }).await
     {
         return;
     }

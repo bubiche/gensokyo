@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{BIN, fresh, stub_env};
+use common::{BIN, fresh, stub_env, wait};
 use gensokyo::vt::{Style, Vt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -569,6 +569,56 @@ impl Client {
             self.wait("a frame", |_| t.elapsed() > Duration::from_millis(50)).await;
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn notices_from_while_nobody_watched_are_said_once_and_kept_in_the_history() {
+    let dir = state("away");
+    let _quit = Quit(dir.clone());
+    // A client came and went: what comes now, nobody hears.
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("the shrine", |s| s.contains("the shrine is empty")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+    let rituals = dir.join("conf/rituals");
+    std::fs::create_dir_all(&rituals).unwrap();
+    // Fired by hand: neither finds its resident.
+    for name in ["lost", "astray"] {
+        let text = "---\nschedule: \"@yearly\"\ntarget: Nobody\n---\nSay the time.\n";
+        std::fs::write(rituals.join(format!("{name}.md")), text).unwrap();
+        cli(&dir, &["ritual", "run", name]);
+        let journal = dir.join(format!("rituals/{name}/journal.jsonl"));
+        let sent = || std::fs::read_to_string(&journal).unwrap_or_default().contains("not-sent");
+        wait(sent, "the fire not delivered");
+    }
+    // Whole, its end on the row under its start.
+    let full = |s: &str, name: &str| {
+        let (_, y) = find(s, &format!("⏲ {name}: there is no resident called Nobody, so the"));
+        s.lines().nth(y as usize).is_some_and(|l| l.contains("not delivered "))
+    };
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("told", |s| side(s).contains("2 notices while you were away: ^] h")).await;
+    c.send(b"\x1dh").await;
+    let s = c.wait("the history", |s| s.contains("┌ history")).await;
+    assert!(full(&s, "lost") && full(&s, "astray"), "{s}");
+    c.send(b"q").await;
+    c.wait("closed", |s| !s.contains("┌ history")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+
+    // The next client has them too, and is told nothing.
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("the shrine", |s| s.contains("the shrine is empty")).await;
+    let t = Instant::now();
+    let s = c.wait("a moment", |_| t.elapsed() > Duration::from_millis(400)).await;
+    assert!(!side(&s).contains("while you were away"), "{s}");
+    c.send(b"\x1dh").await;
+    let s = c.wait("the history", |s| s.contains("┌ history")).await;
+    assert!(full(&s, "lost") && full(&s, "astray"), "{s}");
+    c.send(b"\x1b").await;
+    c.wait("closed", |s| !s.contains("┌ history")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
 }
 
 /// Reimu, summoned from the CLI, on screen in a 120x40 client, reading her tty.

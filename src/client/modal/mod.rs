@@ -2,11 +2,13 @@
 //! click on one of its rows, and Enter. One file each; the yes/no ones and help are here.
 
 mod cast;
+mod history;
 mod recall;
 mod summon;
 mod timetable;
 
 pub use cast::{Cast, cast_choices};
+pub use history::History;
 pub use recall::Recall;
 pub use summon::{Stage, Summon};
 pub(super) use timetable::Act;
@@ -36,12 +38,14 @@ pub enum Modal {
     Timetable(Timetable),
     Quit,
     Help,
+    /// What was said, newest first.
+    History(History),
 }
 
 impl Modal {
     /// Its title and its rows, buttons last. `w` is the widest a line can be; long ones are
-    /// wrapped to it.
-    pub(super) fn view(&self, m: &Model, w: usize) -> (String, Vec<Row>) {
+    /// wrapped to it. `h` is the most rows there is room for, the box's included.
+    pub(super) fn view(&self, m: &Model, w: usize, h: usize) -> (String, Vec<Row>) {
         match self {
             Modal::Summon(s) => s.view(m),
             Modal::Banish { name, .. } => (
@@ -74,6 +78,7 @@ impl Modal {
                 ],
             ),
             Modal::Help => help(),
+            Modal::History(hs) => hs.view(m, w, h),
         }
     }
 }
@@ -169,6 +174,7 @@ impl App {
             }
             Some(Modal::Cast(_)) => self.cast_key(k),
             Some(Modal::Timetable(_)) => self.timetable_key(k),
+            Some(Modal::History(_)) => self.history_key(c),
             None => {}
         }
     }
@@ -243,7 +249,7 @@ impl App {
                 self.quit = Some(self.send(Request::Quit));
                 self.gone = Some("the shrine is empty; the daemon stopped".into());
             }
-            Modal::Help => {}
+            Modal::Help | Modal::History(_) => {}
         }
     }
 

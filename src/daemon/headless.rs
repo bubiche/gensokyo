@@ -235,7 +235,7 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
         if let Some(n) = sh.rites.headless.get_mut(&run.slug) {
             *n = n.saturating_sub(1);
         }
-        notice(&sh, &run.slug, &told);
+        notice(&mut sh, &run.slug, &told);
         drop(sh);
         repush(&shrine);
     });

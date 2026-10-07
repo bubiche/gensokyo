@@ -115,6 +115,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         size: SIZE,
         changed: watch::channel(0).0,
         notices: broadcast::channel(16).0,
+        kept: Default::default(),
         views: HashMap::new(),
         conns: 0,
         rites: Default::default(),

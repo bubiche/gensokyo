@@ -515,7 +515,7 @@ impl App {
     /// child marked a link to somewhere `vt::link` lets through is printed again inside OSC 8,
     /// as `buf` holds it, where nothing is drawn over the grid. The host keeps a link on a cell
     /// until the cell is written, so one that held a link last time and holds none now is
-    /// printed again bare. The cursor is put back where it was.
+    /// printed again bare. A cursor that shows goes back to where ratatui put it.
     pub fn links(&mut self, area: Rect, buf: &Buffer) -> Vec<u8> {
         let g = render::grid_rect(area);
         let open = |x, y| matches!(self.hits.at(x, y), Some((_, Hit::Grid)));
@@ -549,10 +549,10 @@ impl App {
             out.extend(b"\x1b]8;;\x1b\\");
         }
         self.linked = spans;
-        match out.is_empty() {
-            true => out,
-            false => [b"\x1b7".as_slice(), &out, b"\x1b8"].concat(),
+        if let Some((x, y)) = render::cursor(&self.m, area).filter(|_| !out.is_empty()) {
+            out.extend(format!("\x1b[{};{}H", y + 1, x + 1).bytes());
         }
+        out
     }
 
     /// The host's title follows the resident on screen: its name, then the title it set itself

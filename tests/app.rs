@@ -923,8 +923,10 @@ fn a_link_is_drawn_again_inside_osc_8_over_its_own_cells_and_the_cursor_put_back
     let g = grid_rect(Rect::new(0, 0, 120, 40));
     let at = (g.y as usize + 2, g.x + 4);
     assert_eq!(h.links(), [(at.0, at.1, "example".into(), url.into())]);
-    assert!(out.starts_with(b"\x1b7\x1b]8;;https://example.com\x1b\\"), "{out:?}");
-    assert!(out.ends_with(b"\x1b]8;;\x1b\\\x1b8"));
+    assert!(out.starts_with(b"\x1b]8;;https://example.com\x1b\\"), "{out:?}");
+    let home = format!("\x1b]8;;\x1b\\\x1b[{};{}H", g.y + 1, g.x + 1);
+    assert!(out.ends_with(home.as_bytes()), "{out:?}");
+    assert_eq!(h.vt.frame().cursor, Some((g.x, g.y)));
     assert!(h.vt.frame().text()[at.0].contains("see example end"));
     // Every frame, as the selection draws it.
     let picked = Style { attrs: Style::INVERSE, ..Style::default() };

@@ -266,15 +266,15 @@ pub(super) fn read(
     }
     let name = &rec.name;
     if bare {
-        return match (a.ended, a.text) {
+        return match (a.ended, a.text.filter(|t| !t.trim().is_empty())) {
             (Ended::Interrupted, _) => Err(format!(
                 "{name}'s last turn was cut short, at a dialog or by a restart: no answer to copy"
             )),
-            (Ended::Failed, _) => {
+            (_, Some(text)) => Ok(text),
+            (Ended::Failed, None) => {
                 Err(format!("{name}'s last turn stopped on an API error: no answer to copy"))
             }
             (_, None) => Err(format!("{name}'s last turn ended with no answer kept")),
-            (_, Some(text)) => Ok(text),
         };
     }
     let text = a.text.unwrap_or_else(|| {

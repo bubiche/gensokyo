@@ -440,8 +440,15 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::Select { who, how, x, y } => match live(&shrine, &who) {
                 Ok((_, _, h)) => {
                     let text = h.select(me, how, x, y);
-                    let message = text.unwrap_or_default();
-                    (how == Pointer::Release).then_some(Reply::Done { id, message })
+                    match text {
+                        _ if how != Pointer::Release => None,
+                        Some(message) => Some(Reply::Done { id, message }),
+                        None => Some(fail(
+                            "nothing copied: the selection went as the screen changed size or \
+                             switched"
+                                .into(),
+                        )),
+                    }
                 }
                 Err(e) => Some(fail(e)),
             },

@@ -1371,3 +1371,18 @@ fn the_log_moves_aside_once_past_its_size() {
     talk(&d, 99, "last", &[]);
     assert!(d.log().iter().any(|e| e["who"] == "last"), "{:?}", d.log());
 }
+
+#[test]
+fn a_release_whose_selection_went_says_so_and_a_resident_cannot_select() {
+    let d = Daemon::start("select", &[]);
+    let r = d.summon(json!({}));
+    d.stub(&r["id"], "ready");
+    let release = json!({"t": "select", "id": 2, "who": r["id"], "how": "release", "x": 0, "y": 0});
+    // No selection held, as after a resize let it go: nothing copied, and why.
+    let e = d.req(release.clone());
+    assert!(e["error"].as_str().unwrap().starts_with("nothing copied: the selection went"), "{e}");
+    let me = json!({"t": "hello", "proto": PROTO, "who": "t", "resident": r["id"]});
+    let back = raw(&d, &format!("{me}\n{release}\n"));
+    let e = back.iter().find(|v| v["id"] == 2).unwrap();
+    assert!(e["error"].as_str().unwrap().starts_with("the screens and keyboards"), "{e}");
+}

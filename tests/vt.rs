@@ -619,7 +619,7 @@ fn a_double_click_takes_a_word_with_wide_characters_whole_and_on_across_a_wrap()
     assert_eq!(double(&mut vt, 32, 0).as_deref(), Some("cafe\u{301}"));
     assert_eq!(double(&mut vt, 21, 0).as_deref(), Some(":"));
     // A blank is no word.
-    assert_eq!(double(&mut vt, 38, 0), None);
+    assert_eq!(double(&mut vt, 38, 0).as_deref(), Some(""));
     assert_eq!(reversed(&vt.frame_for(1)), []);
 
     let mut vt = Vt::new(10, 4);
@@ -637,6 +637,12 @@ fn a_double_click_takes_a_word_with_wide_characters_whole_and_on_across_a_wrap()
     vt.select(1, Pointer::Double, 5, 0);
     vt.select(1, Pointer::Drag, 1, 0);
     assert_eq!(vt.select(1, Pointer::Release, 1, 0).as_deref(), Some("one two"));
+
+    // Claude Code's marks are followed by a no-break space, which ends a word like any space.
+    let mut vt = Vt::new(40, 4);
+    vt.feed("⏺\u{a0}Hello world\r\n❯\u{a0}fix it".as_bytes());
+    assert_eq!(double(&mut vt, 3, 0).as_deref(), Some("Hello"));
+    assert_eq!(double(&mut vt, 3, 1).as_deref(), Some("fix"));
 }
 
 #[test]
@@ -712,7 +718,7 @@ fn each_viewer_sees_and_copies_only_its_own_selection() {
     vt.feed(b"alpha beta");
     // A click alone selects nothing.
     vt.select(1, Pointer::Press, 1, 0);
-    assert_eq!(vt.select(1, Pointer::Release, 1, 0), None);
+    assert_eq!(vt.select(1, Pointer::Release, 1, 0).as_deref(), Some(""));
     assert_eq!(reversed(&vt.frame_for(1)), []);
     vt.select(1, Pointer::Press, 0, 0);
     vt.select(1, Pointer::Drag, 4, 0);
@@ -761,7 +767,7 @@ fn a_selection_whose_rows_are_gone_copies_nothing() {
     let first = pick(&mut vt, (0, 0), (5, 1)).unwrap();
     assert!(first.starts_with("line ") && first.ends_with("\nline 1"), "{first:?}");
     feed(&mut vt, 7000, 10000);
-    assert_eq!(vt.select(1, Pointer::Release, 5, 1), None);
+    assert_eq!(vt.select(1, Pointer::Release, 5, 1).as_deref(), Some(""));
     assert_eq!(reversed(&vt.frame_for(1)), []);
 }
 

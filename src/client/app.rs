@@ -677,6 +677,10 @@ impl App {
             Chunk::Focus { gained, .. } => {
                 // The daemon keeps quiet about a resident on screen in a focused terminal.
                 self.send(Request::Focus { on: *gained });
+                // A release away from the terminal is never seen.
+                if !gained {
+                    (self.held, self.edge) = (None, None);
+                }
                 if self.m.modal.is_none() {
                     self.forward(&c);
                 }
@@ -884,6 +888,10 @@ impl App {
             (self.held, self.edge) = (None, None);
         }
         if let Some(h) = self.held.as_mut().filter(|_| !wheel) {
+            // Another button's release.
+            if !ev.press && !left {
+                return;
+            }
             // The drag stays in the grid wherever the pointer goes; past its top or bottom
             // edge, the view moves a row every `EDGE` while it is held there.
             let g = h.grid;
@@ -897,6 +905,10 @@ impl App {
             h.past = past;
             if !ev.press {
                 (self.held, self.edge) = (None, None);
+                // The motion to it may not have been reported.
+                if moved {
+                    self.select(Pointer::Drag, at);
+                }
                 if let Some(id) = self.select(Pointer::Release, at) {
                     self.copying.push((id, String::new()));
                 }
@@ -907,8 +919,14 @@ impl App {
                 None => None,
             };
             if moved {
+                // A press here soon after is a new selection, not a double click.
+                self.pressed = None;
                 self.select(Pointer::Drag, at);
             }
+            return;
+        }
+        // On the other screen the wheel goes in as arrow keys, and typing drops the selection.
+        if wheel && self.held.is_some() && self.m.modes.alt {
             return;
         }
         match self.hits.at(col, row) {
@@ -950,6 +968,11 @@ impl App {
 
     /// The view a row further, back past the top edge or on past the bottom, once it is time.
     pub fn tick(&mut self) {
+        // No release reaches a drag once capture is off or a modal is up: it is over.
+        if !self.m.capture || self.m.modal.is_some() {
+            (self.held, self.edge) = (None, None);
+            return;
+        }
         let Some(h) = self.held.as_ref().filter(|_| self.edge.is_some_and(|t| t <= self.clock()))
         else {
             return;
@@ -1071,6 +1094,7 @@ impl App {
             Chord::Help => self.m.modal = Some(Modal::Help),
             Chord::Capture => {
                 self.m.capture = !self.m.capture;
+                (self.held, self.edge) = (None, None);
                 self.host.extend_from_slice(if self.m.capture { CAPTURE_ON } else { CAPTURE_OFF });
                 self.any_motion = false;
                 self.modes();

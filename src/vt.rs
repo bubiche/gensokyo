@@ -45,10 +45,15 @@ const XCPR: &[u8] = b"\x1b[?6n";
 /// What a search found is drawn in, over the child's own style: the client's gold.
 pub const FOUND: Style = Style { fg: Color::Palette(0), bg: Color::Palette(3), attrs: 0 };
 
-/// What ends a word for a double click: Ghostty's own boundaries. A blank ends one too.
+/// What ends a word for a double click: Ghostty's own boundaries. A blank or any other space
+/// ends one too, such as the no-break space Claude Code writes after its marks (❯, ⏺, ⎿).
 const BOUNDARIES: &[char] = &[
     ' ', '\t', '\'', '"', '│', '`', '|', ':', ';', ',', '(', ')', '[', ']', '{', '}', '<', '>', '$',
 ];
+
+/// How far a double click's word reaches either way, in cells: words are looked up for every
+/// frame, and a long enough run (a minified line, say) would stall the daemon.
+const WORD_MOST: usize = 2000;
 
 /// A cell by row, counted from the oldest kept, and column: in that order, so cells compare in
 /// reading order.
@@ -325,14 +330,16 @@ impl Vt {
 
     /// What `viewer`'s pointer did at cell `x`, `y` of the view (clamped to it). A release
     /// gives the selection's text: soft-wrapped rows joined, the child's own line breaks kept,
-    /// each line's trailing blanks dropped. The selection stays until the next press or
-    /// `unselect`, drawn only in `frame_for` that viewer.
+    /// each line's trailing blanks dropped, or None when the selection went before it (a
+    /// resize, the other screen). The selection stays until the next press, `unselect` or a
+    /// resize, drawn only in `frame_for` that viewer.
     pub fn select(&mut self, viewer: u64, how: Pointer, x: u16, y: u16) -> Option<String> {
         let (cols, rows) = self.size();
         let at =
             Point::Viewport(PointCoordinate { x: x.min(cols - 1), y: u32::from(y.min(rows - 1)) });
         let screen = self.term.active_screen().unwrap();
         if let Pointer::Press | Pointer::Double = how {
+            self.picks.remove(&viewer);
             let (click, head) =
                 (self.term.track_grid_ref(at).ok()?, self.term.track_grid_ref(at).ok()?);
             let words = how == Pointer::Double;
@@ -344,7 +351,12 @@ impl Vt {
         match how {
             Pointer::Back => self.term.scroll_viewport(ScrollViewport::Delta(-1)),
             Pointer::On => self.term.scroll_viewport(ScrollViewport::Delta(1)),
-            Pointer::Release => return self.picked(viewer).and_then(|(a, b)| self.text(a, b)),
+            // Where the selection ends, which output may have moved from under the pointer.
+            Pointer::Release => {
+                return Some(
+                    self.picked(viewer).and_then(|(a, b)| self.text(a, b)).unwrap_or_default(),
+                );
+            }
             _ => {}
         }
         p.head.set(&mut self.term, at).ok()?;
@@ -392,8 +404,9 @@ impl Vt {
         let sel = Selection::new(cell(a)?, cell(b)?, false);
         let opts = FormatOptions::new().with_emit_format(Format::Plain).with_selection(&sel);
         let text = self.term.format_selection_alloc(None, opts).ok()??;
-        // A line per row, joined here by each row's own wrap: Ghostty's unwrap also goes by the
-        // next row's, which Claude Code's redraws leave on rows that follow on from nothing.
+        // A line per row, joined here by each row's own wrap: Ghostty's unwrap carries a wrapped
+        // row's blanks over by the next row's continuation flag, which Claude Code's redraws
+        // leave disagreeing with the row before.
         let mut lines = vec![String::new()];
         for (y, row) in (a.0..).zip(String::from_utf8_lossy(&text).split('\n')) {
             if y > a.0 && !self.wrapped(y - 1) {
@@ -425,7 +438,7 @@ impl Vt {
         let kind = |at: At| {
             let c = self.cell(at)?.1;
             let ch = char::from_u32(c.codepoint().ok()?)?;
-            c.has_text().ok()?.then(|| BOUNDARIES.contains(&ch))
+            c.has_text().ok()?.then(|| ch.is_whitespace() || BOUNDARIES.contains(&ch))
         };
         // A wide character's second cell, or the blank left at the end of a row it did not
         // fit, which belong to the character before.
@@ -444,7 +457,8 @@ impl Vt {
         let mut ends = (at, at);
         for back in [true, false] {
             let mut p = at;
-            while let Some(q) = step(p, back) {
+            for _ in 0..WORD_MOST {
+                let Some(q) = step(p, back) else { break };
                 p = q;
                 if spacer(q) {
                     continue;

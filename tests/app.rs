@@ -779,6 +779,47 @@ fn held_past_the_grids_edge_a_drag_moves_the_view_on_the_clock_until_it_comes_ba
 }
 
 #[test]
+fn a_drag_whose_release_cannot_come_stops_moving_the_view() {
+    let mut a = gridded();
+    // Another button's release is not the drag's.
+    sgr(&mut a, 0, 40, 20, true);
+    sgr(&mut a, 2, 41, 20, false);
+    assert_eq!(picks(&sent(&mut a)), [("press", 13, 18)]);
+    // A press soon after a drag is a new selection, not a double click.
+    sgr(&mut a, 32, 42, 20, true);
+    sgr(&mut a, 0, 42, 20, false);
+    sgr(&mut a, 0, 40, 20, true);
+    sgr(&mut a, 0, 40, 20, false);
+    let want = [("drag", 15, 18), ("release", 15, 18), ("press", 13, 18), ("release", 13, 18)];
+    assert_eq!(picks(&sent(&mut a)), want);
+    // A release away from the last cell reported: the motion to it was not.
+    a.later(EDGE * 20);
+    sgr(&mut a, 0, 40, 20, true);
+    sgr(&mut a, 0, 46, 20, false);
+    let want = [("press", 13, 18), ("drag", 19, 18), ("release", 19, 18)];
+    assert_eq!(picks(&sent(&mut a)), want);
+    // Capture turned off mid-drag past the edge: the release goes to the host now.
+    sgr(&mut a, 0, 50, 20, true);
+    sgr(&mut a, 32, 50, 1, true);
+    host(&mut a, b"\x1dm");
+    sent(&mut a);
+    a.later(EDGE);
+    a.tick();
+    assert!(a.edge().is_none());
+    assert_eq!(picks(&sent(&mut a)), []);
+    // A modal opened mid-drag.
+    host(&mut a, b"\x1dm");
+    sgr(&mut a, 0, 50, 20, true);
+    sgr(&mut a, 32, 50, 1, true);
+    host(&mut a, b"\x1dt");
+    sent(&mut a);
+    a.later(EDGE);
+    a.tick();
+    assert!(a.edge().is_none());
+    assert_eq!(picks(&sent(&mut a)), []);
+}
+
+#[test]
 fn the_wheel_while_a_drag_is_held_scrolls_and_the_selection_follows_the_pointer() {
     let mut a = gridded();
     sgr(&mut a, 0, 40, 20, true);

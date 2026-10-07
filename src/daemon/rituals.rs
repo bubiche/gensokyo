@@ -759,10 +759,10 @@ fn nudge(
         Err(e) => return complain(shrine, r, d, now(), &e),
     };
     shrine.borrow_mut().rites.complained.remove(&r.slug);
-    if let Some(b) =
-        bad.filter(|b| shrine.borrow_mut().rites.warned.insert((r.slug.clone(), b.clone())))
-    {
-        d.note(now(), "left-out", &b);
+    for b in bad {
+        if shrine.borrow_mut().rites.warned.insert((r.slug.clone(), b.clone())) {
+            d.note(now(), "left-out", &b);
+        }
     }
     if by_hand && sends.is_empty() {
         let why = "no resident works on a branch its probe named with facts";

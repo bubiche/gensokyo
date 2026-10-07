@@ -247,15 +247,21 @@ and "what have I got scheduled?" work the same way.
   gh-prs`, or `when: "my-probe --flag"` with arguments), and not a link out of there. That only holds while no resident can write
   those directories: keep them outside every resident's `cwd` if it runs with edits accepted.
 - **`target: branch`**: its probe prints one JSON object, `{"<repo>:<branch>": {facts}}`, the
-  repo as the path of `origin`'s URL (`owner/repo`), and each branch's facts go to the resident
-  working on that branch of that repo, a worktree or a `cd` included (`list --json` `here`).
-  The prompt is the ritual's body with `{branch}`, `{key}`, `{facts}` (`ci: FAILURE@1a2b3c4,
-  threads: 3`) and any `{_name}` filled in. Only what is new for that branch is sent: the same
-  facts again are not, a fact going away sends nothing, and its return does. A fact named
-  `_name` is context, never news. This is the one place a probe's output reaches a prompt, so a
-  value must be a short token (letters, digits, `_.:/#@-`, at most 200) and a name lowercase;
-  anything else is left out and journaled once. Nothing ships for it; the ritual skill has a
-  GitHub-PR probe to copy.
+  repo as the path of `origin`'s URL (`owner/repo`, matched ignoring case), and each branch's
+  facts go to the resident working on that branch of that repo, a worktree or a `cd` included
+  (`list --json` `here`). A fork or a renamed repo has its own path, so a key reaches only a
+  clone whose `origin` is that repo. The prompt is the ritual's body with `{branch}`, `{key}`,
+  `{facts}` (`ci: FAILURE@1a2b3c4, threads: 3`) and any `{_name}` filled in. A branch is told
+  only when one of its facts is new, and then all of them are listed, the new ones first: the
+  same facts again are not news, a fact going away sends nothing, and its return does. A held
+  fire for a branch that has left the output is dropped. A fact named `_name` is context, never
+  news. This is the one place a probe's output reaches a prompt, so a value must be a short
+  token (letters, digits, `_.:/#@-`, at most 200) and a name lowercase; anything else is left
+  out, each journaled once. Tokens can still spell words, so a probe passes only what it works
+  out itself (states, counts, hashes, numbers), never a name or label someone else chose. A
+  probe that cannot find out exits non-zero rather than print a partial or empty answer: a
+  branch missing from it has its next facts all new. Nothing ships for it; the ritual skill has
+  a GitHub-PR probe to copy.
 - **`quiet: true`** (with `target: new`): its runs' finished turns neither ring nor turn gold.
   Their permission prompts still do.
 

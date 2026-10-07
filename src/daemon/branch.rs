@@ -1,7 +1,10 @@
-//! `target: branch`: a probe prints `{"<repo>:<branch>": {facts}}`, and each branch's new facts
-//! are typed into the resident working on it. This is the one place a probe's output reaches a
-//! prompt, so only short tokens get through: a fact's value is letters, digits and `_.:/#@-`,
-//! never prose. A fact going away sends nothing; one that comes back is new again.
+//! `target: branch`: a probe prints `{"<repo>:<branch>": {facts}}`, and when a branch has a new
+//! fact, all of its facts, the new ones first, are typed into the resident working on it. This
+//! is the one place a probe's output reaches a prompt, so only short tokens get through: a
+//! fact's value is letters, digits and `_.:/#@-`, never prose. Tokens can still spell words, so
+//! a probe passes only what it works out itself (states, counts, hashes, numbers). A fact going
+//! away sends nothing; one that comes back is new again. The repo is matched ignoring ASCII
+//! case, the branch exactly.
 
 use super::shrine::Shared;
 use crate::ritual::{Dir, Ritual};
@@ -12,8 +15,8 @@ use std::path::Path;
 
 type Facts = BTreeMap<String, String>;
 
-/// Each nudge by the id of the resident it goes to, and what was left out, to say once.
-pub(super) type Routed = (Vec<(String, Nudge)>, Option<String>);
+/// Each nudge by the id of the resident it goes to, and what was left out, each to say once.
+pub(super) type Routed = (Vec<(String, Nudge)>, Vec<String>);
 
 /// One branch's news, on its way to the resident there.
 pub(super) struct Nudge {
@@ -66,8 +69,8 @@ fn value(v: &Value) -> Option<String> {
     token(&t, "_.:/#@-", 200).then_some(t)
 }
 
-/// The facts of one key, and its context (`_name`), with the first thing left out.
-fn facts(v: &Value, bad: &mut Option<String>) -> Option<(Facts, Facts)> {
+/// The facts of key `key`, and its context (`_name`), adding what was left out to `bad`.
+fn facts(key: &str, v: &Value, bad: &mut Vec<String>) -> Option<(Facts, Facts)> {
     let (mut facts, mut context) = (Facts::new(), Facts::new());
     for (name, v) in v.as_object()? {
         let (plain, into) = match name.strip_prefix('_') {
@@ -77,10 +80,7 @@ fn facts(v: &Value, bad: &mut Option<String>) -> Option<(Facts, Facts)> {
         let named = plain.len() <= 24 && plain.chars().all(|c| c.is_ascii_lowercase() || c == '_');
         match value(v).filter(|_| named && !plain.is_empty()) {
             Some(t) => _ = into.insert(name.clone(), t),
-            None => {
-                _ = bad
-                    .get_or_insert_with(|| format!("left out {name}: not a name and a short token"))
-            }
+            None => bad.push(format!("left out {name} of {key}: not a name and a short token")),
         }
     }
     Some((facts, context))
@@ -92,9 +92,9 @@ fn place(dir: &str) -> Option<(String, String)> {
     Some((tele::git_repo(p)?, tele::git_head(p)?))
 }
 
-/// What a fire of branch ritual `r` sends, by resident id. Records what went away, and drops a
-/// held nudge whose news is gone. Err when the output is not one JSON object; the second item
-/// is what was left out, to say once.
+/// What a fire of branch ritual `r` sends, by resident id. Records what went away, and drops
+/// each held fire of `r` for a resident that is sent nothing now. Err when the output is not one
+/// JSON object; the second item is what was left out, each to say once.
 pub(super) fn route(
     shrine: &Shared,
     r: &Ritual,
@@ -109,16 +109,12 @@ pub(super) fn route(
                 .into(),
         );
     };
-    let mut bad = None;
+    let mut bad = Vec::new();
     let mut now = BTreeMap::new();
     for (key, v) in &all {
-        match (split(key), facts(v, &mut bad)) {
-            (Some(_), Some(f)) => _ = now.insert(key.clone(), f),
-            _ => {
-                _ = bad.get_or_insert_with(|| {
-                    format!("left out the key {key}: not <repo>:<branch> with facts")
-                })
-            }
+        match split(key).and_then(|_| facts(key, v, &mut bad)) {
+            Some(f) => _ = now.insert(key.clone(), f),
+            None => bad.push(format!("left out the key {key}: not <repo>:<branch> with facts")),
         }
     }
     // A fact gone is forgotten as sent, so its return is news.
@@ -143,16 +139,11 @@ pub(super) fn route(
     for (key, (f, context)) in now {
         let (repo, branch) =
             split(&key).map(|(r, b)| (r.to_string(), b.to_string())).unwrap_or_default();
-        let here = places.iter().filter(|p| p.1 == repo && p.2 == branch);
+        let here = places.iter().filter(|p| p.1.eq_ignore_ascii_case(&repo) && p.2 == branch);
         let Some(who) = here.max_by_key(|p| (p.3, p.4)).map(|p| p.0.clone()) else { continue };
         let new = |n: &&String| by_hand || was.get(&key).and_then(|w| w.get(*n)) != f.get(*n);
         let fresh: Vec<&String> = f.keys().filter(new).collect();
-        if fresh.is_empty() && by_hand {
-            continue;
-        }
         if fresh.is_empty() {
-            // Its news went away before it could be told: a held fire for it gives up.
-            sh.rites.waiting.remove(&(r.slug.clone(), who));
             continue;
         }
         let mut line: Vec<String> = fresh.iter().map(|n| format!("{n}: {}", f[*n])).collect();
@@ -160,22 +151,26 @@ pub(super) fn route(
         let text = fill(&r.prompt, &key, &branch, &line.join(", "), &context);
         out.push((who, Nudge { key, repo, branch, facts: f, by_hand, text }));
     }
+    // A held fire for a resident sent nothing now gives up: its news went away (a merged PR's
+    // key is gone), or another resident on that branch is told instead.
+    sh.rites.waiting.retain(|(slug, id), _| *slug != r.slug || out.iter().any(|(to, _)| to == id));
     Ok((out, bad))
 }
 
 /// The ritual's body with `{key}`, `{branch}`, `{facts}` and each `{_name}` filled in; a
-/// `{_name}` the probe did not give is left empty. A body with no `{facts}` gets them at its end.
+/// `{_name}` the probe did not give is left empty, and a `{_` that is no placeholder stays. A
+/// body with no `{facts}` gets them at its end.
 fn fill(body: &str, key: &str, branch: &str, facts: &str, context: &Facts) -> String {
     let mut t = body.replace("{key}", key).replace("{branch}", branch);
     for (n, v) in context {
         t = t.replace(&format!("{{{n}}}"), v);
     }
-    while let Some(i) = t.find("{_") {
-        let Some(end) = t[i..].find('}').map(|e| i + e) else { break };
-        if !token(&t[i + 2..end], "_", 23) {
-            break;
+    let mut from = 0;
+    while let Some(i) = t[from..].find("{_").map(|i| from + i) {
+        match t[i..].find('}').map(|e| i + e).filter(|&end| token(&t[i + 2..end], "_", 24)) {
+            Some(end) => t.replace_range(i..=end, ""),
+            None => from = i + 2,
         }
-        t.replace_range(i..=end, "");
     }
     match t.contains("{facts}") {
         true => t.replace("{facts}", facts),
@@ -189,7 +184,7 @@ pub(super) fn still(shrine: &Shared, d: &Dir, id: &str, n: &Nudge) -> bool {
     let sh = shrine.borrow();
     let Some(e) = sh.entries.iter().find(|e| e.rec.id == id) else { return false };
     let dir = e.here.as_ref().map_or(e.rec.cwd.clone(), |(_, d)| d.clone());
-    let on = place(&dir).is_some_and(|(r, b)| r == n.repo && b == n.branch);
+    let on = place(&dir).is_some_and(|(r, b)| r.eq_ignore_ascii_case(&n.repo) && b == n.branch);
     let was = sent(d);
     on && (n.by_hand
         || n.facts.iter().any(|(k, v)| was.get(&n.key).and_then(|w| w.get(k)) != Some(v)))

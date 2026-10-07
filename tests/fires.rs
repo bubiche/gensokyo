@@ -1208,11 +1208,12 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     let feed = |v: Value| std::fs::write(d.dir.join("feed"), v.to_string()).unwrap();
     feed(json!({"acme/app:main": {"ci": "FAILURE@abc1234", "_pr": 7}}));
     let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: branch\n---\n\
-        News on {branch} (PR {_pr}{_none}): {facts}\n";
+        News on {branch} (PR {_pr}{_none}{_abcdefghijklmnopqrstuvwx}){_ see}{_none}: {facts}\n";
     d.ritual("watch", text);
     let typed = || d.stub(&id, "input").matches("News on").count();
     wait(|| typed() == 1, "the first news");
-    assert!(d.stub(&id, "input").contains("News on main (PR 7): ci: FAILURE@abc1234"));
+    // A `{_name}` not given is left empty, and a `{_` that is not one is kept.
+    assert!(d.stub(&id, "input").contains("News on main (PR 7){_ see}: ci: FAILURE@abc1234"));
 
     // The same again is no news; the fact going away sends nothing; its return does.
     d.minute(1);
@@ -1224,7 +1225,7 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     wait(|| typed() == 2, "the failure back");
 
     // Sakuya moves into the worktree: main's news has nobody, fix's reaches it. A key and a
-    // fact that are not tokens are left out, and said once.
+    // fact that are not tokens are left out, each said once.
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
     let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": wt});
     let (mut w, mut lines) = d.connect();
@@ -1240,11 +1241,11 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     wait(|| typed() == 3, "the worktree's news");
     let input = d.stub(&id, "input");
     assert!(
-        input.contains("News on nebel95/fix (PR ): review: CHANGES_REQUESTED\x1b[201~"),
+        input.contains("News on nebel95/fix (PR ){_ see}: review: CHANGES_REQUESTED\x1b[201~"),
         "{input}"
     );
     assert!(!input.contains("def5678") && !input.contains("two words"), "{input}");
-    assert_eq!(d.evs("watch", "left-out").len(), 1, "{:?}", d.evs("watch", "left-out"));
+    assert_eq!(d.evs("watch", "left-out").len(), 3, "{:?}", d.evs("watch", "left-out"));
 
     // Held mid-turn, then the news clears before the turn ends: nothing is typed.
     d.busy(&id, true);
@@ -1281,7 +1282,29 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     wait(|| typed() == 4, "the news once back");
     assert!(d.stub(&id, "input").contains("conflicts: true"));
 
+    // Held, and the branch leaves the output (its PR merged): nothing is typed, or recorded.
+    d.busy(&id, true);
+    let fix = json!({"review": "CHANGES_REQUESTED", "conflicts": true, "ci": "FAILURE@9a9a9a9"});
+    feed(json!({"acme/app:nebel95/fix": fix}));
+    d.minute(9);
+    wait(|| d.evs("watch", "held").len() == 3, "held a third time");
+    feed(json!({}));
+    d.minute(10);
+    d.busy(&id, false);
+    d.settle();
+    d.settle();
+    assert_eq!(typed(), 4, "a gone branch's news typed");
+    let sent = std::fs::read_to_string(d.dir.join("rituals/watch/branches.json")).unwrap();
+    assert!(!sent.contains("nebel95/fix"), "{sent}");
+
     // By hand, nothing new: sent all the same.
+    feed(json!({"acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED"}}));
     assert_eq!(d.verb("run", "watch")["t"], "done");
     wait(|| typed() == 5, "the fire by hand");
+
+    // The repo's case is not the origin's: the same repo all the same.
+    feed(json!({"Acme/App:nebel95/fix": {"ci": "FAILURE@0f0f0f0"}}));
+    d.minute(11);
+    wait(|| typed() == 6, "news under the repo in another case");
+    assert!(d.stub(&id, "input").contains("ci: FAILURE@0f0f0f0"));
 }

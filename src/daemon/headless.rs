@@ -203,13 +203,14 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
                 }
             }
         };
-        super::log::cut(&part(&run.stem, "err"), run_most(), run_most());
         // One that ended while no daemon was there took until its last write, not until now.
         let took = match ended {
             Some(Ended::Unseen) => last_write(&run.stem)
                 .map_or(age(&run).as_secs(), |t| (t - run.started).max(0) as u64),
             _ => age(&run).as_secs(),
         };
+        // After `took`: the cut is a write.
+        super::log::cut(&part(&run.stem, "err"), run_most(), run_most());
         let (journal, told, tail) = match ended {
             Some(e) => report(&run.stem, e, &tele::age(took)),
             None => {

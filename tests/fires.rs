@@ -460,7 +460,8 @@ fn a_headless_run_outlives_its_daemon_and_the_next_one_sees_it_out() {
 
 #[test]
 fn a_headless_run_that_ended_between_daemons_is_journaled_by_the_next() {
-    let env = [("STUB_P_SLEEP", "2")];
+    // Its stderr is cut as it is seen out, which leaves the time of its last write alone.
+    let env = [("STUB_P_SLEEP", "2"), ("STUB_P_NOISE", "9000"), ("GENSOKYO_RUN_BYTES", "2048")];
     let d = Daemon::start("hl-between", T0 + 120, &[("quiet", &hourly("headless: true\n"))], &env);
     wait(|| d.stamp("quiet").is_some(), "first sight");
     d.clock(T0 + 3600 + 5);

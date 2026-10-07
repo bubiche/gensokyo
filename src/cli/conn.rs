@@ -132,11 +132,19 @@ pub fn connect_or_start() -> Result<UnixStream, String> {
 }
 
 /// The lines of `daemon.log` written since `from` that say why it stopped, and where the rest
-/// is: older ones are some earlier daemon's.
+/// is: older ones are some earlier daemon's. A log now shorter than `from` moved to
+/// `daemon.log.1` meanwhile: the rest of that, then all of the new one.
 fn why(from: u64) -> String {
     let path = paths::state_dir().join("daemon.log");
-    let all = std::fs::read(&path).unwrap_or_default();
-    let text = String::from_utf8_lossy(all.get(from as usize..).unwrap_or_default());
+    let from = from as usize;
+    let mut all = std::fs::read(&path).unwrap_or_default();
+    if all.len() < from {
+        let old = std::fs::read(path.with_extension("log.1")).unwrap_or_default();
+        all = [old.get(from..).unwrap_or_default(), &all].concat();
+    } else {
+        all.drain(..from);
+    }
+    let text = String::from_utf8_lossy(&all);
     // A JSON line that is an exit or a panic, or anything written to stderr as it is.
     let telling = |l: &&str| match serde_json::from_str::<serde_json::Value>(l) {
         Ok(v) => matches!(v["ev"].as_str(), Some("exit" | "panic" | "error")),

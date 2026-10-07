@@ -24,10 +24,15 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with(args, &[])
+    }
+
+    fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         Command::new(BIN)
             .args(args)
             .current_dir(&self.dir)
             .envs(stub_env(&self.dir))
+            .envs(env.iter().copied())
             .env("CLAUDE_CODE_CHILD_SESSION", "1")
             .env("TERM_PROGRAM", "iTerm.app")
             .env("ITERM_SESSION_ID", "w0t0p0")
@@ -227,4 +232,15 @@ fn a_daemon_that_dies_at_start_is_reported_at_once() {
     );
     assert!(err(&o).contains("daemon.log"), "{}", err(&o));
     assert!(t.elapsed() < Duration::from_secs(4), "waited for a daemon that had already exited");
+}
+
+#[test]
+fn why_a_daemon_died_is_found_after_its_log_moved_aside() {
+    let e = Env::new("moved");
+    // Its lock cannot be opened, which it logs as it exits; that one line moves the log aside.
+    std::fs::create_dir_all(e.dir.join("run/daemon.lock")).unwrap();
+    std::fs::write(e.dir.join("daemon.log"), "x".repeat(1999) + "\n").unwrap();
+    let o = e.run_with(&["list"], &[("GENSOKYO_LOG_BYTES", "2000")]);
+    assert!(e.dir.join("daemon.log.1").exists());
+    assert!(err(&o).contains("run/daemon.lock: "), "{}", err(&o));
 }

@@ -86,6 +86,7 @@ pub fn main() -> Result<(), String> {
     }
     let state = paths::state_dir();
     line("state", short(&state));
+    line("size", size(&state));
     let config = paths::config_dir();
     let defaults = if config.join("config").is_file() { "" } else { " (defaults)" };
     line("config", format!("{}{defaults}", short(&config)));
@@ -130,6 +131,42 @@ fn daemon() -> String {
             format!("running{pid}, {n} resident{}", if n == 1 { "" } else { "s" })
         }
         Ok(other) => format!("unexpected reply {other:?}"),
+    }
+}
+
+/// How much the state dir holds, and its three largest files.
+fn size(dir: &Path) -> String {
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    let total: u64 = files.iter().map(|f| f.1).sum();
+    files.sort_by_key(|f| std::cmp::Reverse(f.1));
+    let name = |p: &Path| p.strip_prefix(dir).unwrap_or(p).display().to_string();
+    let top: Vec<String> =
+        files.iter().take(3).map(|(p, n)| format!("{} {}", name(p), bytes(*n))).collect();
+    match top.is_empty() {
+        true => bytes(total),
+        false => format!("{}; largest {}", bytes(total), top.join(", ")),
+    }
+}
+
+/// Every file under `dir` with its size; links are not followed.
+fn walk(dir: &Path, out: &mut Vec<(std::path::PathBuf, u64)>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(m) = e.metadata() else { continue };
+        match m.is_dir() {
+            true => walk(&e.path(), out),
+            false if m.is_file() => out.push((e.path(), m.len())),
+            false => {}
+        }
+    }
+}
+
+/// `n` bytes in B, KB (rounded up) or MB.
+fn bytes(n: u64) -> String {
+    match n {
+        n if n < 1024 => format!("{n} B"),
+        n if n < 1024 * 1024 => format!("{} KB", n.div_ceil(1024)),
+        n => format!("{:.1} MB", n as f64 / (1024.0 * 1024.0)),
     }
 }
 

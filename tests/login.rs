@@ -214,6 +214,12 @@ fn doctor_reads_without_starting_anything() {
     e.ok(&["list"]);
     let text = e.ok(&["doctor"]);
     assert!(text.contains("daemon     running (pid ") && text.contains(", 0 residents"), "{text}");
+    std::fs::create_dir_all(e.dir.join("rituals/big/runs")).unwrap();
+    std::fs::write(e.dir.join("rituals/big/runs/1.log"), vec![b'x'; 3 << 20]).unwrap();
+    std::os::unix::fs::symlink("/", e.dir.join("rituals/big/root")).unwrap();
+    let text = e.ok(&["doctor"]);
+    let size = text.lines().find(|l| l.trim_start().starts_with("size")).unwrap_or_default();
+    assert!(size.contains(" MB; largest rituals/big/runs/1.log 3.0 MB, "), "{text}");
     assert!(!text.contains("never reach residents"), "{text}");
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);

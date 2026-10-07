@@ -33,7 +33,8 @@ Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 `GENSOKYO_VERSION`, `GENSOKYO_DIR`, `GENSOKYO_BIN_DIR`). Nothing is written anywhere else.
 
 - `gensokyo doctor` says which binary and which `claude` are in use, whether the daemon and the
-  login agent are running, and what looks wrong.
+  login agent are running, how much the state dir holds and its largest files, and what looks
+  wrong.
 - `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
   open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
   is how the daemon finds `claude`: run it again after `claude` moves. Only that `PATH`,

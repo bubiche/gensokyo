@@ -1283,6 +1283,31 @@ fn a_card_is_looked_for_on_the_live_screen_while_someone_scrolls_back() {
 }
 
 #[test]
+fn a_dialog_drawn_over_the_card_before_its_enter_keeps_the_enter() {
+    // A gap long enough to draw over the card in, well after it shows.
+    let d = Daemon::start("castcover", &[("STUB_HOOKS", "1"), ("GENSOKYO_ENTER_GAP_MS", "4000")]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nSay hi to {self}.").unwrap();
+    let r = d.summon(json!({"name": "Reimu"}));
+    d.stub(&r["id"], "ready");
+    wait(|| d.list()[0]["blocked"].is_null(), "the registry to list it");
+    // A dialog that no hook or registry has told of yet, drawn while the Enter is held. A
+    // command's Enter leaves the line empty, so nothing is in the card's way.
+    input(&d, "Reimu", "/cover 1.5");
+    let done = d.req(json!({"t": "cast", "id": 3, "card": "hi", "targets": ["Reimu"]}));
+    assert_eq!(
+        done["error"],
+        "Hi reached nobody; Reimu has something over its input line, a dialog most likely; the \
+         card waits in its input line, not submitted",
+        "{done}"
+    );
+    assert!(!d.stub(&r["id"], "input").contains("Say hi"), "{}", d.stub(&r["id"], "input"));
+    // It may be in the input line still: the next card would go in with it.
+    assert_eq!(d.list()[0]["blocked"], "has a prompt half typed into it (Ctrl-C there clears it)");
+}
+
+#[test]
 fn hooks_and_the_status_line_say_where_a_resident_works_and_the_newer_wins() {
     let d = Daemon::start("here", &[]);
     // A repo on main, and a worktree of it on nebel95/fix, as git lays them out.

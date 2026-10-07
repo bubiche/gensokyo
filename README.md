@@ -160,7 +160,9 @@ question of its own, the trust dialog of a new directory — because the Enter a
 would answer the dialog. Nor into one where you have half typed a prompt: the card would go in
 with it, as one prompt, until you send that or clear it with Ctrl-C (a line emptied with
 Backspace still counts, since gensokyo doesn't read it). Nor into one that another card or a
-ritual's prompt is still going into, until its prompt is in. Those residents are named
+ritual's prompt is still going into, until its prompt is in. A busy resident still takes a
+card, which Claude Code queues; if a dialog opens over the card before its Enter, the Enter is
+held and the card stays in the input line, unsent. Those residents are named
 and left out, and a card that does not show up in a resident's prompt is reported as not sent:
 
 ```

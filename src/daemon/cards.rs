@@ -12,6 +12,7 @@ use crate::proto::{self, Cast, State};
 use serde_json::json;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// How long a card may take to show in a resident's input line before it is called lost. One
@@ -20,6 +21,15 @@ const SHOW_WAIT: Duration = Duration::from_secs(5);
 
 /// From the paste to the Enter, at the least.
 const ENTER_GAP: Duration = Duration::from_millis(300);
+
+/// `ENTER_GAP`, or `$GENSOKYO_ENTER_GAP_MS` for tests, read once.
+fn enter_gap() -> Duration {
+    static GAP: OnceLock<Duration> = OnceLock::new();
+    *GAP.get_or_init(|| {
+        let ms = std::env::var("GENSOKYO_ENTER_GAP_MS").ok().and_then(|v| v.parse().ok());
+        ms.map_or(ENTER_GAP, Duration::from_millis)
+    })
+}
 
 fn dirs(sh: &Shrine) -> Vec<PathBuf> {
     let mut d = vec![paths::config_dir().join("spellcards")];
@@ -305,8 +315,12 @@ async fn type_in(
             }
         }
     }
-    tokio::time::sleep(ENTER_GAP.saturating_sub(pasted.elapsed())).await;
-    // A dialog that came up meanwhile would take the Enter.
+    tokio::time::sleep(enter_gap().saturating_sub(pasted.elapsed())).await;
+    // A dialog that came up meanwhile would take the Enter. A permission, a question and a plan
+    // to approve all draw over the input line (2.1.292), long before a hook or the registry
+    // tells of them, so the paste must still show. Left open: the moment the PTY takes to
+    // bring one here.
+    let covered = shown(&h.live_text(), &needle) <= was;
     let why = {
         let mut sh = shrine.borrow_mut();
         let quitting = sh.quitting;
@@ -314,6 +328,7 @@ async fn type_in(
         match e {
             _ if quitting => Some("is being asked to leave"),
             None => Some("has left"),
+            Some(_) if covered => Some("has something over its input line, a dialog most likely"),
             Some(e) => e.aware.in_way().or_else(|| {
                 e.aware.entered(mark, hooks::now_ms());
                 None

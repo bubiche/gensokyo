@@ -59,7 +59,9 @@ PROMPT
   not on it stops the run at a permission dialog until the user answers, which for a 02:00 run
   means until morning - so name the tools the prompt is going to need. `--mode acceptEdits` is
   the blunter way; `--model haiku` is worth it for anything that is only reading and
-  summarising. `--effort` and `--mcp-config <file>` go to claude as they are. `--prompt "…"`
+  summarising. `--effort` goes to claude as it is, and so does `--mcp-config <file>`, which
+  has to be one the user keeps in gensokyo's config dir: its servers start with every run, so
+  you name theirs and never write one. `--prompt "…"`
   stands in for `--prompt-file` when the prompt is one line.
 - `--target` is where the fire lands. Leave it out for the default, a fresh resident per run,
   which is the right answer for almost everything - the prompt is written for a session that
@@ -106,6 +108,11 @@ having written the file - when the directory is one Claude Code has never been t
 warning matters: such a ritual does not fire at all (it says "not firing until that is fixed"
 instead of a next fire) until the user opens Claude Code in that directory once and accepts its
 trust dialog. Never leave it out of what you report.
+
+**A ritual you write arrives paused**, whatever `--disabled` says: the user resumes it with
+`gensokyo ritual enable <name>` or the timetable's resume, and both show them what each run may
+do without asking - its mode, its allowed tools, its MCP config and its probe - before it fires.
+You cannot resume or run it yourself. Say that it is paused and give them the command.
 
 ## A run with no pane: `--headless`
 
@@ -273,7 +280,8 @@ notes file of its own that gensokyo names in the prompt for it. So:
 
 ## After it is written
 
-Tell the user to fire it once by hand while they are sitting there:
+Tell the user to fire it once by hand while they are sitting there, then resume it (a resident
+is refused both):
 
 ```bash
 gensokyo ritual run slack-morning     # now, whatever the schedule says; the schedule is untouched
@@ -281,8 +289,8 @@ gensokyo ritual run slack-morning     # now, whatever the schedule says; the sch
 
 That shows what it stops to ask, while the user is there to answer, which is much better than
 finding out at 09:05 on Monday. An answer lasts only for that session, and each fire of the
-default target is a fresh one: add whatever it asked for to `allowed_tools` (edit its file),
-or the next fire stops at the same prompt. Its own notes file needs nothing: every run may
+default target is a fresh one: tell the user what to add to `allowed_tools` in its file, or the
+next fire stops at the same prompt. Its own notes file needs nothing: every run may
 write that. The clock picks the new ritual up on its own; nothing needs restarting.
 
 ## The other things the user will ask for
@@ -290,7 +298,7 @@ write that. The clock picks the new ritual up on its own; nothing needs restarti
 ```bash
 gensokyo ritual list --json           # what is scheduled, when each fires next, what is wrong with one
 gensokyo ritual disable slack-morning # "pause it" - the file stays, the schedule stops
-gensokyo ritual enable slack-morning  # and back on again
+gensokyo ritual enable slack-morning  # and back on again - the user's to run, not yours
 gensokyo ritual log slack-morning     # the last 20 fires, skips and complaints (-n N, --all)
 gensokyo ritual edit slack-morning    # opens the file in the user's editor - for them, not for you
 gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and its journal, gone
@@ -299,7 +307,8 @@ gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and it
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
 each ritual's `name`, `enabled`, `schedule`, `next_fire` (epoch seconds; `next_fire_local` is
 the same minute on this machine's clock), `last_run`, `target`, `headless`, `keep`, `overlap`,
-`deliver`, `cwd`, `problem`, `path` and `shipped`. A `problem` is why that ritual is not firing,
+`deliver`, `cwd`, `mode`, `allowed_tools`, `mcp_config`, `when`, `problem`, `path` and
+`shipped`. A `problem` is why that ritual is not firing,
 and it is the answer to "why didn't it run?".
 
 That listing is the whole answer to what the user has scheduled - there is nowhere else on this
@@ -314,10 +323,12 @@ want, because it keeps the file. It takes the whole name and not a part of one, 
 the examples that ship with gensokyo: those are not the user's files and an update would put
 them back, so pausing one is what deleting it comes down to.
 
-To change what a ritual does, edit its file at the `path` the JSON gives - `add` refuses a name
-that already exists rather than overwriting somebody's file. Never edit one whose `shipped` is
-true: that file is the install's, and an update puts it back. `enable` and `disable` make the
-user's own copy of it first; for any other change, `ritual add` the same name, which shadows it.
+To change what a ritual does, show the user the change to make in its file at the `path` the
+JSON gives: your file tools are refused anywhere in gensokyo's config dir, because what a ritual,
+probe or MCP config there says runs later with nobody watching. `add` refuses a name that already
+exists rather than overwriting somebody's file. A `shipped` one is the install's, and an update
+puts it back: `disable` makes the user's own copy of it first; for any other change, `ritual
+add` the same name, which shadows it and arrives paused.
 
 ## What it cannot do yet, and must not be promised
 

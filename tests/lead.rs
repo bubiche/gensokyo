@@ -295,6 +295,72 @@ fn helpers_are_capped_cannot_summon_and_belong_to_their_lead_alone() {
 }
 
 #[test]
+fn a_helper_works_in_its_leads_mode_or_narrower_and_is_let_only_read() {
+    let d = daemon("mode", &[]);
+    let r = d
+        .req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Reimu", "mode": "acceptEdits"}));
+    let lead = r["resident"].clone();
+    d.stub(&lead["id"], "ready");
+    let new = |args: &[&str]| {
+        let mut a = vec!["new", "--json", "--name", args[0]];
+        a.extend(&args[1..]);
+        inside(&d, &lead, &a)
+    };
+    let mode = |r: &Output| {
+        let r: Value = serde_json::from_str(&out(r)).unwrap();
+        let args = d.stub(&r["id"], "args");
+        args.split(" --permission-mode ").nth(1).map(|m| m.split(' ').next().unwrap().to_string())
+    };
+    for wide in ["bypassPermissions", "auto", "dontAsk"] {
+        let o = new(&["Cirno", "-p", wide]);
+        let want =
+            format!("a helper works in your mode (acceptEdits) or a narrower one, so not {wide}");
+        assert!(err(&o).contains(&want), "{wide}: {}", err(&o));
+    }
+    // None named is the lead's own, never the user's defaultMode.
+    let o = new(&["Marisa"]);
+    assert_eq!(mode(&o).as_deref(), Some("acceptEdits"), "{}", err(&o));
+    let o = new(&["Sanae", "-p", "plan"]);
+    assert_eq!(mode(&o).as_deref(), Some("plan"), "{}", err(&o));
+
+    for t in ["Bash", "Edit", "Read(x),Bash", "Read(x) Bash", "mcp__x__read", "Read(a)(b)"] {
+        let o = new(&["Cirno", "--allowed-tools", t]);
+        assert!(
+            err(&o).contains("may be let use only Read, Glob, Grep, WebSearch, WebFetch"),
+            "{t}: {}",
+            err(&o)
+        );
+    }
+    let o = new(&[
+        "Chen",
+        "--allowed-tools",
+        "Grep",
+        "--allowed-tools",
+        "WebFetch(domain:example.com)",
+    ]);
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Rituals run and resume at the user's hand.
+    let o = inside(&d, &lead, &["ritual", "run", "tea"]);
+    assert!(err(&o).contains("the user runs and resumes rituals"), "{}", err(&o));
+    let mut s = std::os::unix::net::UnixStream::connect(d.socket()).unwrap();
+    let mut me = common::hello("cli");
+    me["resident"] = lead["id"].clone();
+    let enable = json!({"t": "ritual", "id": 3, "verb": "enable", "name": "tea"});
+    writeln!(s, "{me}\n{enable}").unwrap();
+    let mut lines = std::io::BufRead::lines(std::io::BufReader::new(s));
+    let r = watch_for(&mut lines, |v| v["id"] == 3);
+    assert!(r["error"].as_str().unwrap_or_default().contains("the user runs and resumes"), "{r}");
+
+    // The user's own summon is theirs to make.
+    let wide = json!({"mode": "bypassPermissions", "allowed_tools": ["Bash"]});
+    let mut r = json!({"t": "summon", "id": 8, "cwd": d.dir, "name": "Youmu"});
+    r.as_object_mut().unwrap().extend(wide.as_object().unwrap().clone());
+    let r = d.req(r);
+    assert_eq!(r["t"], "summoned", "{r}");
+}
+
+#[test]
 fn a_helpers_turn_rings_only_when_its_lead_will_not_collect_it() {
     let d = daemon("bell", &[]);
     let lead = summon(&d, "Reimu");

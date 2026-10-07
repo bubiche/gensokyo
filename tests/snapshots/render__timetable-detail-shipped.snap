@@ -8,6 +8,7 @@ expression: modal_box(&m).backend()
 "│ next      paused                                     │"
 "│ target    new                                        │"
 "│ in        ~/dev/mozart                               │"
+"│ mode      your settings' default                     │"
 "│ last ran  never                                      │"
 "│ An example gensokyo ships: pause it, or edit a copy. │"
 "│ [run now r] [resume p] [back esc]                    │"

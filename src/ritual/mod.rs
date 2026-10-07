@@ -588,6 +588,18 @@ pub fn when(t: i64, tz: &TimeZone) -> String {
     }
 }
 
+/// What each run may do without asking, as label and value: shown before one is resumed.
+pub fn powers(i: &RitualInfo) -> Vec<(&'static str, String)> {
+    let mode = i.mode.clone().unwrap_or_else(|| "your settings' default".into());
+    let mut v = vec![("mode", mode)];
+    if !i.allowed_tools.is_empty() {
+        v.push(("tools", i.allowed_tools.join(", ")));
+    }
+    v.extend(i.mcp_config.clone().map(|m| ("mcp", m)));
+    v.extend(i.when.clone().map(|w| ("probe", w)));
+    v
+}
+
 /// The ritual as the timetable shows it. The next fire only for one that will fire.
 pub fn info(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust, dir: &Dir) -> RitualInfo {
     let checked = check(r, now, tz, trust);
@@ -609,6 +621,10 @@ pub fn info(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust, dir: &Dir) -> Ri
         deliver: r.deliver.clone(),
         cwd: r.cwd.clone(),
         description: r.description.clone(),
+        mode: r.mode.clone(),
+        allowed_tools: r.allowed_tools.clone(),
+        mcp_config: r.mcp_config.clone(),
+        when: r.when.clone(),
         problem,
         path: r.path.to_string_lossy().into_owned(),
         shipped: r.shipped,

@@ -51,6 +51,17 @@ impl Env {
     }
 
     fn command(&self, cwd: &Path, program: &str, args: &[&str], stdin: &str) -> Output {
+        self.command_env(cwd, program, args, stdin, &[])
+    }
+
+    fn command_env(
+        &self,
+        cwd: &Path,
+        program: &str,
+        args: &[&str],
+        stdin: &str,
+        env: &[(&str, &str)],
+    ) -> Output {
         let mut c = Command::new(program);
         c.args(args)
             .current_dir(cwd)
@@ -66,7 +77,8 @@ impl Env {
             .env("EDITOR", "true")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .envs(env.iter().copied());
         let mut child = c.spawn().unwrap();
         child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
         child.wait_with_output().unwrap()
@@ -74,6 +86,12 @@ impl Env {
 
     fn run(&self, args: &[&str]) -> Output {
         self.run_in(&self.path("trusted"), args, "")
+    }
+
+    /// From inside a resident, as its Bash tool runs it.
+    fn inside(&self, args: &[&str]) -> Output {
+        let (exe, cwd) = (env!("CARGO_BIN_EXE_gensokyo"), self.path("trusted"));
+        self.command_env(&cwd, exe, args, "", &[("GENSOKYO_RESIDENT", "r-1")])
     }
 
     fn mine(&self, name: &str) -> PathBuf {
@@ -249,6 +267,43 @@ fn enabling_a_shipped_example_makes_it_the_users_own() {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
     let stamp = d.stamp().unwrap();
     assert!(stamp % 60 == 0 && (now.as_secs() as i64 - stamp) < 120, "{stamp}");
+}
+
+#[test]
+fn a_residents_ritual_arrives_paused_and_only_the_user_resumes_it() {
+    let e = Env::new("resident");
+    let add = |extra: &[&str]| {
+        let mut a = vec!["ritual", "add", "--name", "tea", "--prompt", "Tea.", "--schedule"];
+        a.extend(["@daily", "--mode", "bypassPermissions", "--allowed-tools", "Bash"]);
+        a.extend(extra);
+        e.inside(&a)
+    };
+    std::fs::write(e.path("home/mcp.json"), "{}").unwrap();
+    let o = add(&["--mcp-config", e.path("home/mcp.json").to_str().unwrap()]);
+    assert!(!o.status.success() && err(&o).contains("is not in"), "{}", err(&o));
+    std::fs::write(e.path("config/mcp.json"), "{}").unwrap();
+    let o = add(&["--mcp-config", e.path("config/mcp.json").to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("paused: the user resumes it"), "{}", out(&o));
+    let text = std::fs::read_to_string(e.mine("tea")).unwrap();
+    assert!(text.contains("enabled: false"), "{text}");
+
+    let o = e.inside(&["ritual", "enable", "tea"]);
+    assert!(!o.status.success() && err(&o).contains("the user resumes a ritual"), "{}", err(&o));
+    let o = e.inside(&["ritual", "edit", "tea"]);
+    assert!(!o.status.success() && err(&o).contains("file is the user's"), "{}", err(&o));
+    assert!(e.inside(&["ritual", "disable", "tea"]).status.success());
+
+    // The user sees what it may do where they turn it on.
+    let o = e.run(&["ritual", "enable", "tea"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("  mode       bypassPermissions\n  tools      Bash\n"), "{}", out(&o));
+    assert!(out(&o).contains("  mcp        "), "{}", out(&o));
+    let r = e.list().into_iter().find(|r| r["name"] == "tea").unwrap();
+    assert_eq!(
+        (&r["mode"], &r["allowed_tools"]),
+        (&"bypassPermissions".into(), &serde_json::json!(["Bash"]))
+    );
 }
 
 #[test]

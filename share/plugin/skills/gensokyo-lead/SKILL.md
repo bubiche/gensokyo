@@ -41,9 +41,12 @@ BRIEF
 ```
 
 It prints one JSON object (`id`, `name`, `slot`, `owner`, `turns`, `needs`, …). Keep the name.
-`--allowed-tools` (again for each) lets it use a tool without asking. It is refused when you
-already have 5 helpers, when you are a helper, and in a directory Claude Code was never trusted
-in: tell the user to open Claude Code there once and accept, or pick a directory they trust.
+A helper works in your permission mode unless you name a narrower one with `-p` (`plan` <
+`default` < `acceptEdits` < `auto` < `bypassPermissions`), and `--allowed-tools` (again for each)
+lets it use only `Read`, `Glob`, `Grep`, `WebSearch` or `WebFetch` without asking; it asks the
+user for anything else. Wider is refused, and so is a summon when you already have 5 helpers,
+when you are a helper, and in a directory Claude Code was never trusted in: tell the user to
+open Claude Code there once and accept, or pick a directory they trust.
 
 **Separate checkouts.** Two helpers editing one working tree collide. Give each its own:
 `gensokyo new <repo dir> --worktree <name> --name <helper>` makes (or reuses)

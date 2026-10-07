@@ -499,6 +499,12 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
              size them (SendMessage reaches another resident)"
                 .into(),
         ),
+        Request::Ritual { verb: proto::RitualVerb::Run | proto::RitualVerb::Enable, name } => {
+            Some(format!(
+                "the user runs and resumes rituals, after reading what {name} may do; tell them \
+                 it is ready"
+            ))
+        }
         Request::Close { who }
         | Request::Banish { who }
         | Request::Recall { who }

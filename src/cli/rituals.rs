@@ -242,6 +242,13 @@ fn add(o: Add) -> Result<(), String> {
     (a.catch_up, a.headless, a.disabled) = (o.catch_up, o.headless, o.disabled);
     (a.when, a.quiet, a.deliver, a.worktree) = (o.when, o.quiet, o.deliver, o.worktree);
     a.allowed_tools = o.allowed_tools.iter().flat_map(|v| crate::frontmatter::items(v)).collect();
+    // A resident's ritual waits for the user to read what it may do and resume it.
+    if resident() {
+        a.disabled = true;
+        if let Some(m) = &a.mcp_config {
+            in_config(m).map_err(|e| format!("ritual add: {e}"))?;
+        }
+    }
     let share = share();
     let (_, report) = ritual::add(
         &a,
@@ -258,10 +265,32 @@ fn add(o: Add) -> Result<(), String> {
             None => println!("{l}"),
         }
     }
+    if resident() {
+        println!("  paused: the user resumes it once they have read what it may do");
+    }
     Ok(())
 }
 
-/// The next fire, or why there is none, after a ritual changed.
+/// Whether this runs inside a resident, as its Bash tool runs it.
+fn resident() -> bool {
+    std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|v| !v.is_empty())
+}
+
+/// An MCP config a resident names must be one the user put in the config dir: the servers in
+/// it start with every run.
+fn in_config(m: &str) -> Result<(), String> {
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).map_err(|e| format!("{m}: {e}"));
+    let (file, dir) = (real(std::path::Path::new(&paths::expand(m)))?, real(&paths::config_dir())?);
+    match file.starts_with(&dir) {
+        true => Ok(()),
+        false => Err(format!(
+            "--mcp-config: {m} is not in {}; ask the user to put the config there",
+            paths::short(&dir.to_string_lossy())
+        )),
+    }
+}
+
+/// What its runs may do, and the next fire or why there is none, after a ritual changed.
 fn report(path: &std::path::Path) {
     let slug = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
     let Ok(r) = found(&slug) else { return };
@@ -270,6 +299,10 @@ fn report(path: &std::path::Path) {
     }
     let (now, tz) = (now(), TimeZone::system());
     let i = ritual::info(&r, now, &tz, &Trust::load(), &Dir::of(&r.slug));
+    // What each run may do without asking, where the user turns it on.
+    for (k, v) in ritual::powers(&i) {
+        println!("  {k:<9}  {v}");
+    }
     match (&i.problem, i.enabled, i.next_fire_local) {
         (Some(p), ..) => println!("  not firing: {p}"),
         (None, false, _) => {
@@ -295,6 +328,12 @@ fn mine(r: &Ritual) -> Result<std::path::PathBuf, String> {
 
 fn toggle(on: bool, name: &str) -> Result<(), String> {
     let verb = if on { "enable" } else { "disable" };
+    if on && resident() {
+        return Err(format!(
+            "ritual enable: the user resumes a ritual, after reading what {name} may do; tell \
+             them it is ready (gensokyo ritual enable {name})"
+        ));
+    }
     let r = found(name).map_err(|e| format!("ritual {verb}: {e}"))?;
     let lines = ritual::toggle(&r, on, now(), &ritual::mine_dir())
         .map_err(|e| format!("ritual {verb}: {e}"))?;
@@ -400,6 +439,11 @@ fn terminal(verb: &str) -> Result<(), String> {
 }
 
 fn edit(name: &str) -> Result<(), String> {
+    if resident() {
+        return Err("ritual edit: a ritual's file is the user's; show them the change to make, \
+                    or add a new one (it arrives paused)"
+            .into());
+    }
     terminal("edit")?;
     let r = found(name).map_err(|e| format!("ritual edit: {e}"))?;
     let path = mine(&r).map_err(|e| format!("ritual edit: {e}"))?;

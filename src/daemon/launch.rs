@@ -81,8 +81,18 @@ pub fn settings(p: &Paths, id: &str, cwd: &Path) -> String {
         },
         "statusLine": status,
         "sandbox": {"network": {"allowUnixSockets": [p.socket]}},
+        "permissions": {"deny": config_rules()},
     })
     .to_string()
+}
+
+/// No file tool writes in gensokyo's config dir: a ritual, probe or MCP config there runs later
+/// with whatever it says, so it is the user's to write. `gensokyo ritual add` still can, paused.
+/// `//` starts an absolute path in a rule; Edit's rules hold for every tool that writes files.
+fn config_rules() -> Vec<String> {
+    let dir = crate::paths::config_dir();
+    let real = std::fs::canonicalize(&dir).ok().filter(|r| *r != dir);
+    [Some(dir), real].into_iter().flatten().map(|d| format!("Edit(/{}/**)", d.display())).collect()
 }
 
 pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {

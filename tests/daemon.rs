@@ -86,6 +86,9 @@ fn summon_launches_claude_with_our_argv_and_env() {
     assert_eq!(status, format!("'{BIN}' _statusline '{}'", id.as_str().unwrap()));
     let real = std::fs::canonicalize(d.socket()).unwrap();
     assert_eq!(settings["sandbox"]["network"]["allowUnixSockets"], json!([real]));
+    // No file tool writes a ritual, probe or MCP config: they run later with what they say.
+    let deny = json!(format!("Edit(/{}/**)", d.dir.join("conf").display()));
+    assert!(settings["permissions"]["deny"].as_array().unwrap().contains(&deny), "{settings}");
 
     let env = d.stub(&id, "env");
     let var = |k: &str| env.lines().find_map(|l| l.strip_prefix(&format!("{k}=")));

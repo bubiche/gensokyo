@@ -367,6 +367,12 @@ pub struct RitualInfo {
     pub deliver: String,
     pub cwd: Option<String>,
     pub description: Option<String>,
+    /// What each run may do without asking: its permission mode, its allowed tools, its MCP
+    /// config, and the probe the daemon runs before each fire, as written.
+    pub mode: Option<String>,
+    pub allowed_tools: Vec<String>,
+    pub mcp_config: Option<String>,
+    pub when: Option<String>,
     /// Why it cannot fire, when something is wrong with it.
     pub problem: Option<String>,
     pub path: String,

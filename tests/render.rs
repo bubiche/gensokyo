@@ -188,6 +188,9 @@ fn rituals() -> Vec<RitualInfo> {
     v[0].last_run = Some(NOW - 47_000);
     v[0].last = Some("ran (due 2026-09-21 09:05)".into());
     v[0].running = true;
+    v[0].mode = Some("acceptEdits".into());
+    v[0].allowed_tools = vec!["mcp__claude_ai_Slack__*".into(), "Read".into()];
+    v[0].when = Some("gh-prs".into());
     v[2].headless = true;
     (v[3].shipped, v[3].schedule) = (true, "0 2 * * *".into());
     v[4].schedule = "0 0 30 2 *".into();

@@ -19,9 +19,10 @@
 #                             /clear starts a new session id (the files below keep the first)
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
 # SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
-# prompt (the one on the command line too), a permission Notification on /perm (the registry
-# says `waiting` until /esc, which dismisses it and ends the turn with no Stop, as Esc or a
-# denial does), AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer.
+# prompt (the one on the command line too), each naming the --permission-mode it was started
+# with (else default) as Claude Code names the mode it is in, a permission Notification on /perm
+# (the registry says `waiting` until /esc, which dismisses it and ends the turn with no Stop, as
+# Esc or a denial does), AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer.
 # /fail is a prompt whose turn ends in StopFailure (an API error); /hang one with no Stop at
 # all, whose idle_prompt Notification comes $STUB_IDLE seconds later (default 2); /flood <n>
 # one whose answer is <n> bytes; /busy <s> one whose tools fire PreToolUse every 0.2 s for <s>
@@ -141,14 +142,15 @@ fi
 
 # interactive
 ORIG_ARGS=$*
-id='' name=stub prompt='' resume='' hook_cmd=''
+id='' name=stub prompt='' resume='' hook_cmd='' mode=default
 while [ $# -gt 0 ]; do
   case $1 in
     --session-id) id=$2; shift ;;
     --resume) id=$2; resume=1; shift ;;
     --name) name=$2; shift ;;
     --settings) hook_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_hook\)".*/\1/p'); shift ;;
-    --plugin-dir|--append-system-prompt|--model|--effort|--permission-mode|--mcp-config) shift ;;
+    --permission-mode) mode=$2; shift ;;
+    --plugin-dir|--append-system-prompt|--model|--effort|--mcp-config) shift ;;
     --) shift; prompt=$*; break ;;
     *) ;;
   esac
@@ -206,9 +208,9 @@ echo "env TERM=${TERM:-} COLORTERM=${COLORTERM:-} TERM_PROGRAM=${TERM_PROGRAM:-}
 echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
 if [ -n "$resume" ]; then fire SessionStart ', "source": "resume"'; else fire SessionStart ', "source": "startup"'; fi
 if [ -n "$prompt" ]; then
-  fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$prompt")\""
+  fire UserPromptSubmit ", \"permission_mode\": \"$mode\", \"prompt\": \"$(json_str "$prompt")\""
   echo "> $prompt"; submitted "$prompt"
-  [ -n "${STUB_HOLD:-}" ] || fire Stop ', "permission_mode": "default", "last_assistant_message": "done"'
+  [ -n "${STUB_HOLD:-}" ] || fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "done"'
 fi
 
 # Bracketed paste, because a spell card depends on it: a paste is wrapped in \033[200~ and
@@ -251,9 +253,9 @@ $more"
       # terminator. What this stub checks is the part that can go wrong silently - that the
       # card arrives whole.
       printf '%s%s\n' "$typed" "$pasted" | sed 's/^/> /'
-      fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$typed$pasted")\""
+      fire UserPromptSubmit ", \"permission_mode\": \"$mode\", \"prompt\": \"$(json_str "$typed$pasted")\""
       # Mid-turn it is queued behind the turn, which goes on: no Stop of its own.
-      [ -f "$STUB_STATE/$id.turn" ] || fire Stop ', "permission_mode": "default", "last_assistant_message": "pasted"'
+      [ -f "$STUB_STATE/$id.turn" ] || fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "pasted"'
       pasted=''
       continue ;;
   esac
@@ -279,21 +281,21 @@ $more"
     /perm) printf 'waiting\n' > "$STUB_STATE/$session.status"
            fire Notification ', "notification_type": "permission_prompt", "message": "Claude needs your permission"'; echo "asked permission" ;;
     /esc) printf 'idle\n' > "$STUB_STATE/$session.status"; echo "dismissed" ;;
-    /fail) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/fail"'; echo "> /fail"; submitted "$line"
+    /fail) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/fail"'; echo "> /fail"; submitted "$line"
            fire StopFailure ', "error": "rate_limit", "error_details": "429"'; echo "API Error: rate limited" ;;
-    /hang) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/hang"'; echo "> /hang"; submitted "$line"
+    /hang) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/hang"'; echo "> /hang"; submitted "$line"
            ( sleep "${STUB_IDLE:-2}"; fire Notification ', "notification_type": "idle_prompt", "message": "Claude is waiting for your input"' ) & ;;
     /flood\ *) n=${line#/flood }
-               fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/flood"'; echo "> $line"; submitted "$line"
-               fire Stop ", \"permission_mode\": \"default\", \"last_assistant_message\": \"flood $n\\n$(head -c "$n" /dev/zero | tr '\0' x)\""
+               fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/flood"'; echo "> $line"; submitted "$line"
+               fire Stop ", \"permission_mode\": \"$mode\", \"last_assistant_message\": \"flood $n\\n$(head -c "$n" /dev/zero | tr '\0' x)\""
                echo "flooded $n" ;;
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
-    /busy\ *) fire UserPromptSubmit ', "permission_mode": "default", "prompt": "/busy"'; echo "> $line"; submitted "$line"
+    /busy\ *) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/busy"'; echo "> $line"; submitted "$line"
              : > "$STUB_STATE/$id.turn"
              ( n=$(( ${line#/busy } * 5 )); while [ $n -gt 0 ]; do n=$((n - 1)); sleep 0.2
                fire PreToolUse ', "tool_name": "Bash", "tool_input": {}'; done; rm -f "$STUB_STATE/$id.turn" ) & ;;
-    /finish) fire Stop ', "permission_mode": "default", "last_assistant_message": "finished"'; echo "finished" ;;
+    /finish) fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "finished"'; echo "finished" ;;
     # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
     # exec can take longer than the daemon's hold on a loaded runner.
     /sync\ 0) printf '%s[?2026hSYNC-MID\n' "$esc"; n=0; while [ $n -lt 3000 ]; do n=$((n + 1)); done
@@ -302,9 +304,9 @@ $more"
                printf 'SYNC-END\n%s[?2026l' "$esc" ;;
     /rename\ *) name=${line#/rename }; printf '%s\n' "$name" > "$STUB_STATE/$id.name"
                 write_entry "$session" "$name" '"idle"'; printf '%s]2;✳ %s\007' "$esc" "$name"; echo "renamed to $name" ;;
-    *) fire UserPromptSubmit ", \"permission_mode\": \"default\", \"prompt\": \"$(json_str "$line")\""
+    *) fire UserPromptSubmit ", \"permission_mode\": \"$mode\", \"prompt\": \"$(json_str "$line")\""
        echo "> $line"; submitted "$line"
-       fire Stop ", \"permission_mode\": \"default\", \"last_assistant_message\": \"echo: $(json_str "$line")\"" ;;
+       fire Stop ", \"permission_mode\": \"$mode\", \"last_assistant_message\": \"echo: $(json_str "$line")\"" ;;
   esac
 done
 exit 0

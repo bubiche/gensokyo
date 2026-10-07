@@ -127,7 +127,7 @@ fn new_from_a_resident_takes_a_long_prompt_and_its_tools_and_answers_in_json() {
         "--allowed-tools",
         "Read",
         "--allowed-tools",
-        "Bash(git log:*)",
+        "WebFetch(domain:example.com)",
         "--json",
     ]);
     c.env("GENSOKYO_SOCKET", d.socket()).env("GENSOKYO_RESIDENT", a["id"].as_str().unwrap());
@@ -140,14 +140,17 @@ fn new_from_a_resident_takes_a_long_prompt_and_its_tools_and_answers_in_json() {
     assert_eq!((&r["name"], &r["slot"]), (&json!("Sanae"), &json!(2)));
     assert_eq!(d.list()[1]["id"], r["id"]);
     let args = d.stub(&r["id"], "args");
-    assert!(args.contains("--allowedTools Read Bash(git log:*) --session-id"), "{args}");
+    assert!(
+        args.contains("--allowedTools Read WebFetch(domain:example.com) --session-id"),
+        "{args}"
+    );
     assert!(args.ends_with("-- -first line\nsecond line\n\n"), "{args:?}");
     // Recalled, it keeps them.
     d.cli(&["banish", "Sanae"]);
     d.cli(&["resume", "Sanae"]);
     wait(|| d.stub(&r["id"], "args").contains("--resume"), "the recall's args");
     let args = d.stub(&r["id"], "args");
-    assert!(args.contains("--allowedTools Read Bash(git log:*) --resume"), "{args}");
+    assert!(args.contains("--allowedTools Read WebFetch(domain:example.com) --resume"), "{args}");
 }
 
 #[test]

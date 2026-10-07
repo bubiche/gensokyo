@@ -210,6 +210,34 @@ fn launch(
 /// The longest first prompt: it goes on claude's command line.
 const PROMPT_MOST: usize = 64 * 1024;
 
+/// Claude Code's permission modes, narrowest first: a helper's is never past its lead's.
+const MODES: [&str; 5] = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
+
+/// The tools a lead may let a helper use without asking: they read, and change nothing here.
+const READ_ONLY: [&str; 5] = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
+
+/// Whether rule `t` names one tool in `READ_ONLY`, bare or with one `(…)`: claude splits a
+/// list on commas and spaces, so `Read(x),Bash` is two rules.
+fn read_only(t: &str) -> bool {
+    let (name, rest) = t.split_once('(').unwrap_or((t, ""));
+    let inner = rest.strip_suffix(')');
+    READ_ONLY.contains(&name) && (rest.is_empty() || inner.is_some_and(|i| !i.contains(['(', ')'])))
+}
+
+/// The mode a resident works in: its hooks' word, else what it was launched with, else
+/// Claude Code's own default.
+fn mode_of(e: &Entry) -> String {
+    let launched = || flag(&e.rec.argv, "--permission-mode");
+    e.aware.mode.clone().or_else(launched).unwrap_or_else(|| "default".into())
+}
+
+/// Whether a helper may work in `mode` under a lead in `lead`: the lead's own, or one narrower.
+/// A mode not in `MODES` counts as the narrowest for a lead and is refused for a helper.
+fn mode_within(mode: &str, lead: &str) -> bool {
+    let at = |m: &str| MODES.iter().position(|x| *x == m);
+    mode == lead || at(mode).is_some_and(|m| m <= at(lead).unwrap_or(0))
+}
+
 /// How many live helpers one lead may have: config `HELPERS`.
 fn helpers_most() -> usize {
     crate::paths::config("HELPERS").and_then(|v| v.trim().parse().ok()).unwrap_or(5)
@@ -248,7 +276,11 @@ pub(super) fn summon(
     caller: Option<&str>,
 ) -> Result<proto::Resident, String> {
     may_summon(shrine, &s, caller, Path::new(&s.cwd))?;
-    let Summon { cwd, name, model, effort, mode, prompt, allowed_tools, .. } = s;
+    let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, .. } = s;
+    // Named, so a helper never starts in the user's defaultMode where that is wider.
+    if let Some(c) = caller.filter(|_| mode.is_none()) {
+        mode = shrine.borrow().entries.iter().find(|e| e.rec.id == c).map(mode_of);
+    }
     let mut extra = Vec::new();
     if !allowed_tools.is_empty() {
         // Variadic: `launch::argv` puts a flag after it.
@@ -322,6 +354,20 @@ pub(super) fn may_summon(
             ));
         }
         room(&sh, c)?;
+        let lead = mode_of(me);
+        if let Some(m) = s.mode.as_deref().filter(|m| !mode_within(m, &lead)) {
+            return Err(format!(
+                "a helper works in your mode ({lead}) or a narrower one, so not {m}; the user \
+                 can summon one in {m}"
+            ));
+        }
+        if let Some(t) = s.allowed_tools.iter().find(|t| !read_only(t)) {
+            return Err(format!(
+                "allowed tools: a helper you summon may be let use only {} without asking, so \
+                 not {t}; it asks for the rest, or the user summons it",
+                READ_ONLY.join(", ")
+            ));
+        }
     }
     if caller.is_some() && dir.is_dir() && !super::rituals::trust(shrine).trusted(dir) {
         return Err(format!(

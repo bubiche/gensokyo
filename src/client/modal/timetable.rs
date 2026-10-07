@@ -128,6 +128,9 @@ fn detail(m: &Model, r: &RitualInfo, w: usize) -> Vec<Row> {
     if let Some(c) = &r.cwd {
         rows.push(field("in", &tilde(c, &m.home)));
     }
+    for (k, v) in crate::ritual::powers(r) {
+        rows.extend(wrapped(&format!("{k:<9} {v}"), w, Style::new()));
+    }
     let last = r.last_run.map_or("never".into(), |t| ago(m.now - t) + " ago");
     rows.push(field("last ran", &last));
     if let Some(l) = &r.last {

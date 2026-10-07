@@ -196,8 +196,10 @@ needs a reply, and list the open questions.
 
 The shortest way to one is to ask a resident: *"every weekday at 9:05 check Slack for messages
 to me and summarize them"*. Its `gensokyo-ritual` skill says back what it is about to schedule,
-where, and what it will need permission for, and writes the file once you agree. "Pause that"
-and "what have I got scheduled?" work the same way.
+where, and what it will need permission for, and writes the file once you agree. It arrives
+paused: resume it with `gensokyo ritual enable` or the timetable, both of which show what each
+run may do without asking (mode, tools, MCP config, probe). "Pause that" and "what have I got
+scheduled?" work the same way.
 
 - **`target`**: `new` (the default) is a fresh session per fire. `persistent` keeps one session
   for the ritual: the first fire starts it and every later fire is typed into it, recalling it
@@ -301,8 +303,9 @@ gensokyo ritual remove standup       # the file, its notes and its journal, for 
 skill runs. `gensokyo ritual list --json` is the listing for scripts.
 
 `Ctrl-] t` is the **timetable**: every ritual with when it fires next; pick one for its
-schedule, its last run, what is wrong with it if anything, and run now, pause or resume, and
-remove (which asks). The ritual that fires next is always on the sidebar's `⏲` line.
+schedule, its last run, what each run may do without asking, what is wrong with it if
+anything, and run now, pause or resume, and remove (which asks). The ritual that fires next is
+always on the sidebar's `⏲` line.
 
 Three examples ship paused in `share/rituals/`: `slack-morning`, `nightly-checks` and
 `inbox-zero`. `gensokyo ritual edit slack-morning` makes a copy of yours and opens it; each
@@ -402,11 +405,15 @@ Run from inside a resident, these have a resident's rights rather than yours. Re
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
 It can close, banish, recall, `wait` on or `read` only its own helpers, and it can't `quit` or
-`restart`. It can't type into, show or resize any screen either: the screens and keyboards are
-yours. A card it casts at `all` leaves it out, and the helpers of other residents. Its `new`
-refuses a directory Claude Code was never trusted in, because nobody would be there to answer
-the trust dialog. The daemon runs as you, so these rights keep a resident from slips, not from
-setting out to get round them.
+`restart`. A helper it summons works in its permission mode or a narrower one, and may be let
+use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds
+arrives paused, and only you resume, run or `ritual edit` one; its MCP config must already be
+in the config dir. Its file tools are refused in the config dir, where rituals, probes and MCP
+configs run later with nobody watching. It can't type into, show or resize any screen either:
+the screens and keyboards are yours. A card it casts at `all` leaves it out, and the helpers of
+other residents. Its `new` refuses a directory Claude Code was never trusted in, because nobody
+would be there to answer the trust dialog. The daemon runs as you, so these rights keep a
+resident from slips, not from setting out to get round them.
 
 Under the commands is a socket (`run/gensokyo.sock`, one JSON object per line, `src/proto.rs`).
 It is not an interface: its protocol changes between builds, and a client speaking another

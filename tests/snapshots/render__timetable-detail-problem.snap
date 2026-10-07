@@ -8,6 +8,7 @@ expression: modal_box(&m).backend()
 "│ next      paused                                                    │"
 "│ target    new                                                       │"
 "│ in        ~/dev/mozart                                              │"
+"│ mode      your settings' default                                    │"
 "│ last ran  never                                                     │"
 "│ schedule: 0 0 30 2 * never comes round (a date that does not exist, │"
 "│ like 30 February)                                                   │"

@@ -64,6 +64,11 @@ pub struct Record {
     #[serde(default)]
     pub told_gone: bool,
     pub launched: i64,
+    /// The claude it last ran as: its pid and when that started (`pty::start_id`). After a
+    /// crash, what tells the next daemon that it is still running, and never another process
+    /// that has the pid since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<(i32, u64)>,
     pub departed: Option<i64>,
     pub exit: Option<i32>,
     pub signal: Option<i32>,

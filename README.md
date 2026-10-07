@@ -107,6 +107,10 @@ was summoned with; `Ctrl-] r` lists everyone who has departed, this run or an ea
 `Ctrl-] q` asks every resident to `/exit` and stops the daemon; the next `gensokyo` offers them
 all back under recall. Each of these is also a command, for scripts (below).
 
+When the daemon itself crashes, the next one (launchd's, or the next `gensokyo`'s) brings
+everyone back into their own conversations, their turns cut off, and the first client to open
+is told so. A second crash within 10 minutes of that leaves them departed, to recall by hand.
+
 ## When a resident needs you
 
 Every resident is launched with `--settings` carrying a few hooks and a status line (they merge

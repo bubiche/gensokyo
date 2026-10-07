@@ -3,6 +3,7 @@
 pub mod aware;
 mod branch;
 pub mod cards;
+mod crash;
 mod headless;
 mod ingest;
 mod keep;

@@ -452,6 +452,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         told: (0, 0),
         told_gone: false,
         launched: store::now(),
+        pid: running_as(&handle),
         departed: None,
         exit: None,
         signal: None,
@@ -522,6 +523,7 @@ pub(super) fn recall(
     rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
     (rec.program, rec.argv, rec.told_gone) = (program, argv, false);
     (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
+    rec.pid = running_as(&handle);
     let _ = sh.store.restore(&rec);
     log(
         json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
@@ -537,6 +539,11 @@ pub(super) fn recall(
     }
     touch(&sh);
     Ok(r)
+}
+
+/// The process a resident runs as, for its record.
+fn running_as(h: &Handle) -> Option<(i32, u64)> {
+    pty::start_id(h.pid).map(|t| (h.pid, t))
 }
 
 /// Tells every `watch`er that the shrine changed.

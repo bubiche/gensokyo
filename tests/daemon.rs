@@ -273,22 +273,6 @@ fn a_second_daemon_leaves_quietly() {
 }
 
 #[test]
-fn a_restart_retires_records_left_by_the_last_daemon() {
-    let d = Daemon::new("restart", &[]);
-    std::fs::create_dir_all(d.dir.join("residents")).unwrap();
-    let rec = json!({"id": "old", "session": "old", "name": "Cirno", "slot": 3, "cwd": "/",
-                     "program": "claude", "argv": [], "launched": 1});
-    std::fs::write(d.dir.join("residents/old.json"), rec.to_string()).unwrap();
-    d.cli(&["list"]);
-    assert!(d.list().is_empty());
-    let moved: Value =
-        serde_json::from_str(&std::fs::read_to_string(d.dir.join("departed/old.json")).unwrap())
-            .unwrap();
-    assert_eq!(moved["name"], "Cirno");
-    assert!(moved["departed"].is_i64());
-}
-
-#[test]
 fn protocol_errors() {
     let d = Daemon::start("proto", &[]);
     let talk = |lines: &str| raw(&d, lines);

@@ -58,13 +58,18 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
 }
 
 /// A `residents` event now and whenever the shrine changes after, the timetable now and
-/// whenever it changes, and every `notify` and `notice`.
+/// whenever it changes, a crash's notice nobody has had yet, and every `notify` and `notice`.
 pub(super) async fn watch(shrine: Shared, out: Out) {
     let (mut rx, mut notices) = {
         let sh = shrine.borrow();
         (sh.changed.subscribe(), sh.notices.subscribe())
     };
     if !send(&out, &rituals::listing(&shrine, 0)).await {
+        return;
+    }
+    if let Some(text) = super::crash::unseen()
+        && !send(&out, &Reply::Notice { text }).await
+    {
         return;
     }
     loop {

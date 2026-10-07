@@ -12,7 +12,7 @@ use super::rituals;
 use super::shrine::{
     SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
 };
-use super::store::{self, Store};
+use super::store::Store;
 use super::stream::{self, send, send_written, view, writer};
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request};
@@ -97,16 +97,8 @@ async fn serve(store: Store) -> std::process::ExitCode {
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     let ino = std::fs::metadata(&path).map(|m| m.ino()).unwrap_or(0);
     let exe = std::env::current_exe().unwrap_or_else(|_| "gensokyo".into());
-    // Nobody from before this start is still running: their masters closed with that daemon.
-    for r in store.load() {
-        match r {
-            Ok(mut r) => {
-                r.departed.get_or_insert(store::now());
-                let _ = store.retire(&r);
-            }
-            Err(e) => log(json!({"ev": "record", "error": e})),
-        }
-    }
+    // Nobody from before this start is still running once this is done.
+    let left = super::crash::leftovers(&store).await;
     store.sweep();
     let shrine = Rc::new(RefCell::new(Shrine {
         entries: Vec::new(),
@@ -131,7 +123,8 @@ async fn serve(store: Store) -> std::process::ExitCode {
     // Hooks spooled while no daemon answered: a /clear before the last one stopped, say. Before
     // the first request, so a resume that started this daemon resumes the session it moved to.
     replay(&shrine, 0);
-    comeback(&shrine);
+    comeback(&shrine, &left.running);
+    super::crash::recover(&shrine, &left);
     super::headless::adopt(&shrine);
     tokio::task::spawn_local(supervise("registry poll", shrine.clone(), poll));
     tokio::task::spawn_local(supervise("ritual clock", shrine.clone(), rituals::clock));
@@ -169,13 +162,18 @@ async fn serve(store: Store) -> std::process::ExitCode {
 
 /// Whoever `gensokyo restart` found in the last daemon, recalled in its order: before the
 /// clock's first tick, which would otherwise start a missed ritual run in a kept session's place.
-/// The file goes first, so a recall that brings the daemon down is not tried again.
-fn comeback(shrine: &Shared) {
+/// The file goes first, so a recall that brings the daemon down is not tried again. One whose
+/// old claude is still `running` is not resumed under it.
+fn comeback(shrine: &Shared, running: &HashSet<String>) {
     let path = paths::comeback_path();
     let Ok(ids) = std::fs::read_to_string(&path) else { return };
     let _ = std::fs::remove_file(&path);
     for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        match recall(shrine, id, None) {
+        let r = match running.contains(id) {
+            true => Err("its claude would not stop".into()),
+            false => recall(shrine, id, None),
+        };
+        match r {
             Ok(r) => log(json!({"ev": "comeback", "id": id, "name": r.name})),
             Err(e) => log(json!({"ev": "comeback", "id": id, "error": e})),
         }
@@ -556,6 +554,7 @@ fn refused(sh: &mut Shrine, who: &str, proto: u32, hooks_only: bool) {
 fn stop(shrine: &Shared, s: &Rc<Stop>) -> watch::Receiver<bool> {
     let left = s.left.subscribe();
     if !std::mem::replace(&mut shrine.borrow_mut().quitting, true) {
+        super::crash::stopping();
         log(json!({"ev": "stopping"}));
         let (shrine, s) = (shrine.clone(), s.clone());
         tokio::task::spawn_local(async move {

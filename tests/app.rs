@@ -1078,3 +1078,40 @@ fn the_tab_title_is_the_resident_on_screen_and_its_own_title_set_only_on_a_chang
     a.retitle();
     assert_eq!(hosted(&mut a), "\x1b]0;Reimu · a ]0;pwned  b\x1b\\");
 }
+
+#[test]
+fn a_sidebar_too_short_for_everyone_keeps_the_one_on_screen_and_counts_the_rest() {
+    let names = ["Reimu", "Marisa", "Sakuya", "Youmu", "Sanae", "Remilia"];
+    let names = names.iter().chain(&["Alice", "Patchouli", "Cirno", "Aya", "Suika", "Yukari"]);
+    let mut all: Vec<Resident> = names.enumerate().map(|(i, n)| resident(i as u8 + 1, n)).collect();
+    all.iter_mut().skip(9).for_each(|r| r.slot = None);
+    all[1].state = State::Awaits;
+    let mut a = app();
+    daemon(&mut a, Reply::Residents { residents: all });
+    let area = Rect::new(0, 0, 120, 16);
+    let side = |a: &mut App| {
+        let mut buf = Buffer::empty(area);
+        a.paint(area, &mut buf);
+        let cells: Vec<&str> = buf.content.iter().map(|c| c.symbol()).collect();
+        cells.chunks(120).map(|r| r[..25].concat()).collect::<Vec<_>>()
+    };
+    let has = |rows: &[String], s: &str| rows.iter().position(|l| l.contains(s));
+    // Reimu on screen: the top of the list, and a count of the rest below.
+    let rows = side(&mut a);
+    assert!(has(&rows, "1 ○ Reimu").is_some(), "{rows:#?}");
+    assert!(has(&rows, "↑").is_none());
+    assert!(has(&rows, "↓ ").is_some_and(|y| !rows[y].contains("needs you")), "{rows:#?}");
+    // Cirno on screen: in view, with Marisa, who needs you, counted among those above.
+    host(&mut a, b"\x1d9");
+    let rows = side(&mut a);
+    assert!(has(&rows, "9 ○ Cirno").is_some(), "{rows:#?}");
+    assert!(has(&rows, "1 ○ Reimu").is_none());
+    let y = has(&rows, "more, 1 needs you").expect("the line above");
+    assert!(rows[y].contains('↑'), "{rows:#?}");
+    assert!(has(&rows, "↓ 3 more").is_some(), "{rows:#?}");
+    // A click on it shows her.
+    sent(&mut a);
+    host(&mut a, format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", y + 1, y + 1).as_bytes());
+    assert_eq!(a.m.focused.as_deref(), Some("id-Marisa"));
+    assert!(has(&side(&mut a), "Marisa").is_some());
+}

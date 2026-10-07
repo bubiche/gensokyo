@@ -127,8 +127,10 @@ is told so. A second crash within 10 minutes of that leaves them departed, to re
 Every resident is launched with `--settings` carrying a few hooks and a status line (they merge
 with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a resident is
 doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished turn you
-have not seen, `✧` a question it asked. A resident that needs you is gold. When it is not the
-one on screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
+have not seen, `✧` a question it asked. A resident that needs you is gold. When there are more
+than the sidebar has room for, it keeps the one on screen in view and says how many are above
+and below (gold when one of those needs you; a click shows it). When it is not the one on
+screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
 (OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
 
 The status line reports feed the rest: each sidebar line shows the model and context used, the

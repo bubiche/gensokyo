@@ -390,12 +390,30 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             buf.set_stringn(inner.x, y + i as u16, l, w, style);
         }
     }
-    let order = drawn(&m.residents);
+    let mut order = drawn(&m.residents);
     // Each one's branch on a dim row below it, while every row fits.
     let branches = order.iter().filter(|(i, _)| m.residents[*i].branch.is_some()).count();
     let room = bottom.saturating_sub(inner.y + 1) as usize;
     let two = order.len() + branches <= room;
+    // More than fit: as many as do around the one on screen, and a line for those above and
+    // one for those below.
+    let (mut above, mut below) = (Vec::new(), Vec::new());
+    if order.len() > room {
+        let on = |(i, _): &(usize, bool)| Some(&m.residents[*i].id) == m.focused.as_ref();
+        let f = order.iter().position(on).unwrap_or(0);
+        let mut n = room.saturating_sub(1).max(1);
+        if window(order.len(), f, n).start > 0 && window(order.len(), f, n).end < order.len() {
+            n = room.saturating_sub(2).max(1);
+        }
+        let shown = window(order.len(), f, n);
+        below = order.split_off(shown.end);
+        above = order.drain(..shown.start).collect();
+    }
     let mut y = inner.y;
+    if !above.is_empty() && y + 1 < bottom {
+        more(buf, Rect { y, height: 1, ..inner }, "↑", &above, m, hits);
+        y += 1;
+    }
     for (i, helper) in order {
         let r = &m.residents[i];
         if y + 1 >= bottom {
@@ -448,6 +466,33 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         buf.set_stringn(inner.x + pad as u16, y, format!("⎇ {b}"), w - pad, under);
         hits.push(line, Hit::Resident(i));
         y += 1;
+    }
+    if !below.is_empty() && y + 1 < bottom {
+        more(buf, Rect { y, height: 1, ..inner }, "↓", &below, m, hits);
+    }
+}
+
+/// The line for residents the sidebar has no room for: how many, gold with how many of them
+/// need you. A click shows the first that does, else the nearest.
+fn more(
+    buf: &mut Buffer,
+    line: Rect,
+    arrow: &str,
+    hidden: &[(usize, bool)],
+    m: &Model,
+    hits: &mut HitMap,
+) {
+    let needs: Vec<usize> =
+        hidden.iter().map(|h| h.0).filter(|&i| m.residents[i].state.needs_you()).collect();
+    let (text, style) = match needs.len() {
+        0 => (format!("{arrow} {} more", hidden.len()), DIM),
+        1 => (format!("{arrow} {} more, 1 needs you", hidden.len()), GOLD),
+        n => (format!("{arrow} {} more, {n} need you", hidden.len()), GOLD),
+    };
+    buf.set_stringn(line.x, line.y, text, line.width as usize, style);
+    let near = if arrow == "↑" { hidden.last() } else { hidden.first() };
+    if let Some(i) = needs.first().copied().or(near.map(|h| h.0)) {
+        hits.push(line, Hit::Resident(i));
     }
 }
 

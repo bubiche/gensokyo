@@ -6,7 +6,7 @@ mod common;
 use common::base64;
 use std::path::{Path, PathBuf};
 
-use gensokyo::vt::{Color, FOUND, Frame, Key, KeyEvent, Mods, Pointer, Style, Vt};
+use gensokyo::vt::{self, Color, FOUND, Frame, Key, KeyEvent, Mods, Pointer, Style, Vt};
 
 fn shift_enter() -> KeyEvent {
     KeyEvent::press(Key::Enter, Mods::SHIFT)
@@ -121,6 +121,88 @@ fn style_runs_and_cursor() {
     assert_eq!(f.cursor, Some((1, 1)));
     vt.feed(b"\x1b[?25l");
     assert_eq!(vt.frame().cursor, None);
+}
+
+/// The linked runs: row, column, text and link.
+fn links(f: &Frame) -> Vec<(usize, u16, String, String)> {
+    let runs = f.rows.iter().enumerate().flat_map(|(y, r)| r.iter().map(move |r| (y, r)));
+    runs.filter_map(|(y, r)| Some((y, r.col, r.text.clone(), r.link.clone()?))).collect()
+}
+
+#[test]
+fn a_link_the_child_marks_is_on_each_of_its_cells_across_a_soft_wrap() {
+    let mut vt = Vt::new(10, 3);
+    vt.feed(b"ab\x1b]8;;https://example.com\x1b\\linked \x1b[1mtext\x1b[0m\x1b]8;;\x1b\\ c");
+    let ex = "https://example.com".to_string();
+    assert_eq!(
+        links(&vt.frame()),
+        [
+            (0, 2, "linked ".into(), ex.clone()),
+            (0, 9, "t".into(), ex.clone()),
+            (1, 0, "ext".into(), ex.clone())
+        ]
+    );
+    assert_eq!(vt.frame().text(), ["ablinked t", "ext c", ""]);
+    assert_eq!(vt.frame().rows[1][1].text, " c");
+    // As Claude Code writes them: an id, and BEL to end each.
+    vt.feed(b"\r\n\x1b]8;id=ab1;https://example.org/page\x07here\x1b]8;;\x07");
+    assert_eq!(links(&vt.frame())[3], (2, 0, "here".into(), "https://example.org/page".into()));
+}
+
+#[test]
+fn only_http_https_and_file_links_pass_and_nothing_that_could_end_an_escape() {
+    for ok in ["https://example.com", "HTTP://EXAMPLE.COM/a?b=c;d", "file:///Users/x/README.md"] {
+        assert_eq!(vt::link(ok), Some(ok));
+    }
+    for bad in [
+        "javascript:alert(1)",
+        "mailto:x@example.com",
+        "ftp://example.com",
+        "example.com",
+        "https://x\x1b]0;pwned\x07",
+        "https://x\x1b\\",
+        "https://x\x07",
+        "https://x\u{9b}0m",
+        "https://x\x7f",
+        "https://x\ny",
+    ] {
+        assert_eq!(vt::link(bad), None, "{bad:?}");
+    }
+    let long = format!("https://example.com/{}", "a".repeat(2048 - 20));
+    assert_eq!(vt::link(&long), Some(long.as_str()));
+    assert_eq!(vt::link(&format!("{long}a")), None);
+    // Through the emulator: other schemes and over-long links come out as plain text. Ghostty
+    // itself drops an OSC of more than 2048 bytes, `8;;` included.
+    let mut vt = Vt::new(80, 4);
+    let fits = &long[..2000];
+    vt.feed(b"\x1b]8;;javascript:alert(1)\x1b\\js\x1b]8;;\x1b\\ ");
+    vt.feed(format!("\x1b]8;;{long}{long}\x1b\\long\x1b]8;;\x1b\\ ").as_bytes());
+    vt.feed(format!("\x1b]8;;{fits}\x1b\\fits\x1b]8;;\x1b\\").as_bytes());
+    let f = vt.frame();
+    assert_eq!(f.text()[0], "js long fits");
+    assert_eq!(links(&f), [(0, 8, "fits".into(), fits.into())]);
+    // An escape inside the link ends it: whatever comes out is clean.
+    vt.feed(b"\r\n\x1b]8;;https://x\x1b]0;pwned\x07a\x1b]8;;\x1b\\");
+    vt.feed(b"\r\n\x1b]8;;https://y\x1b\\\x1b]2;t\x1b\\b\x1b]8;;\x1b\\");
+    for (_, _, _, l) in links(&vt.frame()) {
+        assert_eq!(vt::link(&l), Some(l.as_str()));
+    }
+}
+
+#[test]
+fn the_title_the_child_sets_is_one_clean_line_of_at_most_200_characters() {
+    let mut vt = Vt::new(40, 4);
+    assert_eq!(vt.modes().title, "");
+    vt.feed("\x1b]0;✳ Fix the bug\x07".as_bytes());
+    assert_eq!(vt.modes().title, "✳ Fix the bug");
+    vt.feed(b"\x1b]2;two\x1b\\");
+    assert_eq!(vt.modes().title, "two");
+    vt.feed("\x1b]2;a\u{9b}b\x7fc\x1b\\".as_bytes());
+    assert_eq!(vt.modes().title, "a b c");
+    vt.feed(format!("\x1b]2;{}\x07", "x".repeat(300)).as_bytes());
+    assert_eq!(vt.modes().title, "x".repeat(200));
+    vt.feed(b"\x1b]2;\x07");
+    assert_eq!(vt.modes().title, "");
 }
 
 #[test]

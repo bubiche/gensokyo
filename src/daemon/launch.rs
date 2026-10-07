@@ -214,6 +214,11 @@ pub fn env(
         env.retain(|(k, _)| !["LC_ALL", "LC_CTYPE", "LANG"].iter().any(|n| k == n));
         env.push(("LANG".into(), "en_US.UTF-8".into()));
     }
+    // Claude Code marks links (OSC 8) only in a terminal it knows has them, and ours passes
+    // them on to the host. A value of the user's own stands.
+    if get(&env, "FORCE_HYPERLINK").is_none() {
+        env.push(("FORCE_HYPERLINK".into(), "1".into()));
+    }
     env.extend([
         ("PATH".into(), path),
         ("TERM".into(), "xterm-256color".into()),

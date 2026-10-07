@@ -102,14 +102,14 @@ struct Sent {
 
 /// The screen now against what the viewer has: a whole frame for a first screen or a new size,
 /// the rows that changed otherwise, nothing when nothing did.
-fn next(who: &str, sent: Option<&Sent>, frame: &Frame, modes: Modes) -> Option<Reply> {
+fn next(who: &str, sent: Option<&Sent>, frame: &Frame, modes: &Modes) -> Option<Reply> {
     let rev = sent.map_or(0, |s| s.rev);
     let who = who.to_string();
     match sent {
         Some(s) if s.frame.cols == frame.cols && s.frame.rows.len() == frame.rows.len() => {
             let rows = frame.damage(&s.frame);
             let moved = s.frame.cursor != frame.cursor || s.frame.back != frame.back;
-            (!rows.is_empty() || moved || s.modes != modes).then(|| {
+            (!rows.is_empty() || moved || s.modes != *modes).then(|| {
                 let rows = rows.into_iter().map(|y| (y as u16, frame.rows[y].clone()));
                 Reply::Damage {
                     who,
@@ -117,13 +117,13 @@ fn next(who: &str, sent: Option<&Sent>, frame: &Frame, modes: Modes) -> Option<R
                     rev: rev + 1,
                     rows: rows.collect(),
                     cursor: frame.cursor,
-                    modes,
+                    modes: modes.clone(),
                     back: frame.back,
                     history: frame.history,
                 }
             })
         }
-        _ => Some(Reply::Frame { who, rev: rev + 1, frame: frame.clone(), modes }),
+        _ => Some(Reply::Frame { who, rev: rev + 1, frame: frame.clone(), modes: modes.clone() }),
     }
 }
 
@@ -148,7 +148,7 @@ pub(super) async fn view(
         }
         changes.borrow_and_update();
         let (frame, modes) = (h.frame_for(me), h.modes());
-        if let Some(r) = next(&who, sent.as_ref(), &frame, modes) {
+        if let Some(r) = next(&who, sent.as_ref(), &frame, &modes) {
             if !send_written(&out, &r).await {
                 return;
             }

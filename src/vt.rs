@@ -45,6 +45,12 @@ const XCPR: &[u8] = b"\x1b[?6n";
 /// What a search found is drawn in, over the child's own style: the client's gold.
 pub const FOUND: Style = Style { fg: Color::Palette(0), bg: Color::Palette(3), attrs: 0 };
 
+/// The longest link passed on, in bytes: a longer one is dropped whole.
+const LINK_MOST: usize = 2048;
+
+/// The longest title passed on, in characters.
+pub const TITLE_MOST: usize = 200;
+
 /// What ends a word for a double click: Ghostty's own boundaries. A blank or any other space
 /// ends one too, such as the no-break space Claude Code writes after its marks (❯, ⏺, ⎿).
 const BOUNDARIES: &[char] = &[
@@ -222,6 +228,7 @@ impl Vt {
             paste: self.mode(2004),
             focus: self.mode(1004),
             alt: self.mode(1049) || self.mode(1047) || self.mode(47),
+            title: crate::tele::clean(self.term.title().unwrap_or_default(), TITLE_MOST),
         }
     }
 
@@ -547,14 +554,19 @@ impl Vt {
                 if picked(rows.len(), x) || wide && picked(rows.len(), x + 1) {
                     style.attrs ^= Style::INVERSE;
                 }
+                let link = match cell.raw_cell().unwrap().has_hyperlink().unwrap() {
+                    true => uri(&self.term, x, rows.len() as u32),
+                    false => None,
+                };
                 let g: String = cell.graphemes().unwrap().into_iter().collect();
                 let text = if g.is_empty() { " " } else { &g };
                 match runs.last_mut() {
-                    Some(r) if r.style == style => r.text.push_str(text),
-                    _ => runs.push(Run { col: x, style, text: text.to_string() }),
+                    Some(r) if r.style == style && r.link == link => r.text.push_str(text),
+                    _ => runs.push(Run { col: x, style, text: text.to_string(), link }),
                 }
             }
-            if let Some(r) = runs.last_mut().filter(|r| r.style == Style::default()) {
+            let plain = |r: &&mut Run| r.style == Style::default() && r.link.is_none();
+            if let Some(r) = runs.last_mut().filter(plain) {
                 r.text.truncate(r.text.trim_end_matches(' ').len());
             }
             runs.retain(|r| !r.text.is_empty());
@@ -606,8 +618,25 @@ impl Vt {
     }
 }
 
+/// The link on cell `x`, `y` of the view, if `link` lets it through.
+fn uri(term: &Terminal<'_, '_>, x: u16, y: u32) -> Option<String> {
+    let cell = term.grid_ref(Point::Viewport(PointCoordinate { x, y })).ok()?;
+    // One that does not fit is an error, and dropped.
+    let mut buf = [0u8; LINK_MOST];
+    let n = cell.hyperlink_uri(&mut buf).ok()?;
+    link(std::str::from_utf8(&buf[..n]).ok()?).map(str::to_owned)
+}
+
+/// `uri` if it may go to the host terminal as a link: http, https or file, at most `LINK_MOST`
+/// bytes, and no control character, which could end the sequence carrying it.
+pub fn link(uri: &str) -> Option<&str> {
+    let scheme = uri.split_once(':')?.0;
+    let known = ["http", "https", "file"].iter().any(|s| scheme.eq_ignore_ascii_case(s));
+    (known && uri.len() <= LINK_MOST && !uri.chars().any(char::is_control)).then_some(uri)
+}
+
 /// The child's terminal modes the client acts on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modes {
     /// Kitty keyboard flags.
     pub kitty: u8,
@@ -621,6 +650,9 @@ pub struct Modes {
     pub focus: bool,
     /// The alternate screen.
     pub alt: bool,
+    /// The window title it set (OSC 0 or 2), on one line and cut to `TITLE_MOST`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
 }
 
 /// The screen at one moment, as rows of style runs.
@@ -651,13 +683,16 @@ impl Frame {
     }
 }
 
-/// Cells sharing one style, starting at column `col`. A wide character counts two columns and
-/// appears once in `text`.
+/// Cells sharing one style and link, starting at column `col`. A wide character counts two
+/// columns and appears once in `text`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Run {
     pub col: u16,
     pub style: Style,
     pub text: String,
+    /// What the child marked it a link to (OSC 8), when `link` lets it through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

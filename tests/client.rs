@@ -111,6 +111,7 @@ impl Client {
                 tokio::time::timeout(Duration::from_millis(50), self.pty.read(&mut buf)).await
             {
                 self.vt.feed(&buf[..n]);
+                self.seen.extend_from_slice(&buf[..n]);
             }
         }
     }
@@ -694,4 +695,47 @@ async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrol
         c.send(b"\x1dd").await;
         assert!(c.exit().await.success());
     }
+}
+
+/// Where `needle` first is in `hay`.
+fn at(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_link_the_resident_marks_is_a_link_on_the_host_and_the_title_names_her() {
+    let dir = state("link");
+    let _quit = Quit(dir.clone());
+    let mut c = reimu(&dir).await;
+    // The host's own title is kept first, then hers is set: her name, then the title she set.
+    let push = at(&c.seen, b"\x1b[22;0t").expect("the title kept");
+    assert!(push < at(&c.seen, b"\x1b]0;").expect("a title set"));
+    assert_eq!(c.vt.modes().title, "Reimu · ✳ Reimu");
+
+    c.send(b"/link https://example.com/x here\r").await;
+    let t = Instant::now();
+    let links = loop {
+        let fr = c.vt.frame();
+        let runs = fr.rows.iter().enumerate().flat_map(|(y, r)| r.iter().map(move |r| (y, r)));
+        let links: Vec<_> =
+            runs.filter_map(|(y, r)| Some((y, r.col, r.text.clone(), r.link.clone()?))).collect();
+        if !links.is_empty() {
+            break links;
+        }
+        assert!(t.elapsed() < Duration::from_secs(10), "no link on the host");
+        let t = Instant::now();
+        c.wait("a frame", |_| t.elapsed() > Duration::from_millis(50)).await;
+    };
+    let s = c.vt.frame().text().join("\n");
+    // Where the stub printed it: the grid's first column, the row after the line typed.
+    let (_, y) = find(&s, "/link https://example.com/x here");
+    assert_eq!(links, [(y as usize, 26, "here".into(), "https://example.com/x".into())], "{s}");
+    assert_eq!(grid_row(&s, y + 1), "here");
+    assert!(at(&c.seen, b"\x1b]8;;https://example.com/x\x1b\\").is_some());
+
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+    // And given back as the client leaves.
+    let pop = at(&c.seen, b"\x1b[23;0t").expect("the title given back");
+    assert!(c.seen[pop..].windows(4).all(|w| w != b"\x1b]0;"));
 }

@@ -12,14 +12,16 @@ use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use crate::cli;
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request, Resident};
-use crate::vt::Pointer;
+use crate::tele;
+use crate::vt::{self, Pointer};
 use ratatui::backend::CrosstermBackend;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption, CellWidth};
 use ratatui::crossterm::terminal;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Stdout, Write};
+use std::ops::Range;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -50,10 +52,11 @@ const DOUBLE: Duration = Duration::from_millis(500);
 /// Held past the grid's top or bottom edge, a drag moves the view a row this often.
 pub const EDGE: Duration = Duration::from_millis(30);
 
-/// Alternate screen, cursor hidden, focus reports, bracketed paste, a kitty entry of our own.
-const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
+/// The host's title kept, alternate screen, cursor hidden, focus reports, bracketed paste, a kitty
+/// entry of our own.
+const ENTER: &[u8] = b"\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
 const LEAVE: &[u8] =
-    b"\x1b[?2026l\x1b[<u\x1b[?2004l\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l";
+    b"\x1b[?2026l\x1b[<u\x1b[?2004l\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l\x1b[23;0t";
 /// Clicks and drags in SGR form. Not 1003 (every hover) unless the resident on screen asked.
 const CAPTURE_ON: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const CAPTURE_OFF: &[u8] = b"\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l";
@@ -311,6 +314,10 @@ pub struct App {
     desktop: bool,
     /// The shell command a selection is piped to.
     copy: String,
+    /// The host cells drawn as links in the last frame: row, columns, and where to.
+    linked: Vec<(u16, Range<u16>, String)>,
+    /// The host's title as last set.
+    titled: Option<String>,
 }
 
 impl App {
@@ -363,6 +370,8 @@ impl App {
             bell: c.bell,
             desktop: c.desktop,
             copy: c.copy,
+            linked: Vec::new(),
+            titled: None,
         }
     }
 
@@ -472,16 +481,20 @@ impl App {
         if self.m.rituals.as_ref().is_some_and(|r| !r.is_empty()) {
             self.m.today = jiff::Zoned::now().date().to_string();
         }
+        self.retitle();
         let b = term.backend_mut();
         b.write_all(&std::mem::take(&mut self.host))?;
         b.write_all(b"\x1b[?2026h")?;
+        let mut links = Vec::new();
         term.draw(|f| {
             self.paint(f.area(), f.buffer_mut());
+            links = self.links(f.area(), f.buffer_mut());
             if let Some(c) = render::cursor(&self.m, f.area()) {
                 f.set_cursor_position(c);
             }
         })?;
         let b = term.backend_mut();
+        b.write_all(&links)?;
         b.write_all(b"\x1b[?2026l")?;
         b.flush()?;
         Ok(())
@@ -495,6 +508,69 @@ impl App {
         if (g.width, g.height) != self.size && g.width > 0 && g.height > 0 {
             self.size = (g.width, g.height);
             self.send(Request::Resize { cols: g.width, rows: g.height });
+        }
+    }
+
+    /// The links in the resident's grid, to write once ratatui has drawn `buf`: each run the
+    /// child marked a link to somewhere `vt::link` lets through is printed again inside OSC 8,
+    /// as `buf` holds it, where nothing is drawn over the grid. The host keeps a link on a cell
+    /// until the cell is written, so one that held a link last time and holds none now is
+    /// printed again bare. The cursor is put back where it was.
+    pub fn links(&mut self, area: Rect, buf: &Buffer) -> Vec<u8> {
+        let g = render::grid_rect(area);
+        let open = |x, y| matches!(self.hits.at(x, y), Some((_, Hit::Grid)));
+        let mut spans = Vec::new();
+        let rows = self.m.screen.iter().flat_map(|fr| fr.rows.iter().take(g.height as usize));
+        for (y, row) in (g.y..).zip(rows) {
+            for run in row {
+                let Some(uri) = run.link.as_deref().and_then(vt::link) else { continue };
+                let x0 = g.x.saturating_add(run.col);
+                let x1 = x0.saturating_add(render::width(&run.text)).min(g.right());
+                let mut x = x0;
+                while x < x1 {
+                    let from = x;
+                    while x < x1 && open(x, y) {
+                        x += 1;
+                    }
+                    if x > from {
+                        spans.push((y, from..x, uri.to_string()));
+                    }
+                    x += 1;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (y, xs, _) in self.linked.iter().filter(|s| !spans.contains(s)) {
+            reprint(&mut out, buf, *y, xs.clone());
+        }
+        for (y, xs, uri) in &spans {
+            out.extend(format!("\x1b]8;;{uri}\x1b\\").bytes());
+            reprint(&mut out, buf, *y, xs.clone());
+            out.extend(b"\x1b]8;;\x1b\\");
+        }
+        self.linked = spans;
+        match out.is_empty() {
+            true => out,
+            false => [b"\x1b7".as_slice(), &out, b"\x1b8"].concat(),
+        }
+    }
+
+    /// The host's title follows the resident on screen: its name, then the title it set itself
+    /// while its screen shows. Set only when it changes.
+    pub fn retitle(&mut self) {
+        let own = match self.live().is_some() && self.m.screen.is_some() {
+            true => tele::clean(&self.m.modes.title, vt::TITLE_MOST),
+            false => String::new(),
+        };
+        let title = match self.focused() {
+            Some(r) if own.is_empty() => r.name.clone(),
+            Some(r) => format!("{} · {own}", r.name),
+            None => "gensokyo".into(),
+        };
+        let title = tele::clean(&title, 2 * vt::TITLE_MOST);
+        if self.titled.as_ref() != Some(&title) {
+            self.host.extend(format!("\x1b]0;{title}\x1b\\").bytes());
+            self.titled = Some(title);
         }
     }
 
@@ -1159,6 +1235,28 @@ struct Held {
     sent: (u16, u16),
     /// Past the grid's top edge (true) or its bottom.
     past: Option<bool>,
+}
+
+/// Cells `xs` of row `y` printed again as ratatui printed them from `buf`: a wide character
+/// over its two cells, and none that would run past `xs`.
+fn reprint(out: &mut Vec<u8>, buf: &Buffer, y: u16, xs: Range<u16>) {
+    use ratatui::backend::Backend;
+    let mut cells = Vec::new();
+    let mut skip = 0u16;
+    for x in xs.clone().filter(|&x| buf.area.contains(Position::new(x, y))) {
+        let c = &buf[(x, y)];
+        if skip > 0 || c.diff_option == CellDiffOption::Skip {
+            skip = skip.saturating_sub(1);
+            continue;
+        }
+        let w = c.cell_width().max(1);
+        if x + w > xs.end {
+            break;
+        }
+        skip = w - 1;
+        cells.push((x, y, c));
+    }
+    let _ = CrosstermBackend::new(out).draw(cells.into_iter());
 }
 
 /// The host's size, from the tty itself.

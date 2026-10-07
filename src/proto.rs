@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 9;
+pub const PROTO: u32 = 10;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {

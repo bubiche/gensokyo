@@ -4,8 +4,10 @@
 use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
+use gensokyo::client::render::grid_rect;
 use gensokyo::proto::{Card, Reply, Resident, RitualInfo, State};
-use gensokyo::vt::{Frame, Modes, Run, Style};
+use gensokyo::vt::{Frame, Modes, Run, Style, Vt};
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -72,7 +74,8 @@ fn shrine() -> App {
         &mut a,
         Reply::Residents { residents: vec![resident(1, "Reimu"), resident(2, "Marisa")] },
     );
-    let rows = vec![vec![Run { col: 0, style: Style::default(), text: "hello".into() }]];
+    let rows =
+        vec![vec![Run { col: 0, style: Style::default(), text: "hello".into(), link: None }]];
     let frame = Frame { cols: 80, rows, cursor: None, ..Frame::default() };
     daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 1, frame, modes: Modes::default() });
     sent(&mut a);
@@ -592,7 +595,7 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
 #[test]
 fn damage_updates_the_screen_and_a_missed_frame_asks_for_the_whole_again() {
     let mut a = shrine();
-    let row = |t: &str| vec![Run { col: 0, style: Style::default(), text: t.into() }];
+    let row = |t: &str| vec![Run { col: 0, style: Style::default(), text: t.into(), link: None }];
     let damage = |base, rev, t: &str| Reply::Damage {
         who: "id-Reimu".into(),
         base,
@@ -860,4 +863,166 @@ fn a_click_while_an_answer_is_on_its_way_leaves_it_bound_for_the_clipboard() {
     assert_eq!(said(&a), None);
     daemon(&mut a, Reply::Done { id: read, message: "the whole answer".into() });
     assert_eq!(said(&a), Some("copied Reimu's last answer, 16 characters"));
+}
+
+/// A host terminal fed what the client writes for each frame: ratatui's changes, then the links.
+struct Host {
+    vt: Vt,
+    buf: Buffer,
+}
+
+impl Host {
+    fn new() -> Host {
+        Host { vt: Vt::new(120, 40), buf: Buffer::empty(Rect::new(0, 0, 120, 40)) }
+    }
+
+    /// One frame drawn: the bytes `links` gave.
+    fn draw(&mut self, a: &mut App) -> Vec<u8> {
+        let area = self.buf.area;
+        let mut buf = Buffer::empty(area);
+        a.paint(area, &mut buf);
+        let links = a.links(area, &buf);
+        let mut out = Vec::new();
+        CrosstermBackend::new(&mut out).draw(self.buf.diff(&buf).into_iter()).unwrap();
+        out.extend(&links);
+        self.vt.feed(&out);
+        self.buf = buf;
+        links
+    }
+
+    /// The host's linked runs: row, column, text and link.
+    fn links(&mut self) -> Vec<(usize, u16, String, String)> {
+        let f = self.vt.frame();
+        let runs = f.rows.iter().enumerate().flat_map(|(y, r)| r.iter().map(move |r| (y, r)));
+        runs.filter_map(|(y, r)| Some((y, r.col, r.text.clone(), r.link.clone()?))).collect()
+    }
+}
+
+/// Reimu's screen: `runs` on row 2, each a text and maybe a link, and `title` set.
+fn screen_of(a: &mut App, runs: &[(&str, Option<&str>)], style: Style, title: &str) {
+    let mut col = 0;
+    let row = runs.iter().map(|(text, link)| {
+        let r = Run { col, style, text: text.to_string(), link: link.map(String::from) };
+        col += text.chars().count() as u16;
+        r
+    });
+    let rows = vec![vec![], vec![], row.collect()];
+    let frame = Frame { cols: 80, rows, cursor: Some((0, 0)), ..Frame::default() };
+    let modes = Modes { title: title.into(), ..Modes::default() };
+    daemon(a, Reply::Frame { who: "id-Reimu".into(), rev: 1, frame, modes });
+}
+
+#[test]
+fn a_link_is_drawn_again_inside_osc_8_over_its_own_cells_and_the_cursor_put_back() {
+    let mut a = shrine();
+    let mut h = Host::new();
+    let url = "https://example.com";
+    let ex = Some(url);
+    screen_of(&mut a, &[("see ", None), ("example", ex), (" end", None)], Style::default(), "");
+    let out = h.draw(&mut a);
+    let g = grid_rect(Rect::new(0, 0, 120, 40));
+    let at = (g.y as usize + 2, g.x + 4);
+    assert_eq!(h.links(), [(at.0, at.1, "example".into(), url.into())]);
+    assert!(out.starts_with(b"\x1b7\x1b]8;;https://example.com\x1b\\"), "{out:?}");
+    assert!(out.ends_with(b"\x1b]8;;\x1b\\\x1b8"));
+    assert!(h.vt.frame().text()[at.0].contains("see example end"));
+    // Every frame, as the selection draws it.
+    let picked = Style { attrs: Style::INVERSE, ..Style::default() };
+    screen_of(&mut a, &[("see ", None), ("example", ex), (" end", None)], picked, "");
+    let out = h.draw(&mut a);
+    assert!(!out.is_empty());
+    assert_eq!(h.links(), [(at.0, at.1, "example".into(), url.into())]);
+    let row = h.vt.frame().rows[at.0].clone();
+    assert!(row.iter().any(|r| r.text == "example" && r.style.attrs & Style::INVERSE != 0));
+}
+
+#[test]
+fn a_link_that_goes_away_is_drawn_again_bare_and_none_shows_under_a_modal() {
+    let mut a = shrine();
+    let mut h = Host::new();
+    let ex = Some("https://example.com");
+    screen_of(&mut a, &[("see ", None), ("example", ex)], Style::default(), "");
+    h.draw(&mut a);
+    assert_eq!(h.links().len(), 1);
+    // The same text, no longer a link: ratatui writes nothing, the links do.
+    screen_of(&mut a, &[("see example", None)], Style::default(), "");
+    let out = h.draw(&mut a);
+    assert_eq!(h.links(), []);
+    assert!(String::from_utf8_lossy(&out).contains("example"), "{out:?}");
+    assert!(!String::from_utf8_lossy(&out).contains("\x1b]8;;h"));
+    // Nothing more to say then.
+    assert_eq!(h.draw(&mut a), b"");
+    // A link the whole width of the grid's middle row, under the quit modal.
+    let x = "x".repeat(90);
+    let mut rows = vec![vec![]; 19];
+    let link = Some("https://x".to_string());
+    rows.push(vec![Run { col: 0, style: Style::default(), text: x, link }]);
+    let frame = Frame { cols: 93, rows, ..Frame::default() };
+    daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes: Modes::default() });
+    let linked = |h: &mut Host| h.links().iter().map(|l| l.2.len()).sum::<usize>();
+    h.draw(&mut a);
+    assert_eq!(linked(&mut h), 90);
+    host(&mut a, b"\x1dq");
+    assert!(matches!(a.m.modal, Some(Modal::Quit)));
+    h.draw(&mut a);
+    let links = h.links();
+    assert_eq!(links.len(), 2, "{links:?}");
+    assert!(links.iter().all(|l| l.2.chars().all(|c| c == 'x')));
+    assert!(linked(&mut h) < 90);
+    host(&mut a, b"\x1b");
+    h.draw(&mut a);
+    assert_eq!(linked(&mut h), 90);
+}
+
+#[test]
+fn a_link_that_could_break_out_of_its_escape_is_not_drawn() {
+    for bad in [
+        "https://x\x1b]0;pwned\x07",
+        "https://x\x1b\\\x1b]0;pwned\x07",
+        "https://x\x07",
+        "https://x\u{9c}",
+        "javascript:alert(1)",
+        "ftp://example.com",
+    ] {
+        let mut a = shrine();
+        screen_of(&mut a, &[("click", Some(bad))], Style::default(), "");
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        a.paint(area, &mut buf);
+        assert_eq!(a.links(area, &buf), b"", "{bad:?}");
+    }
+}
+
+/// The host bytes queued since the last call.
+fn hosted(a: &mut App) -> String {
+    String::from_utf8(std::mem::take(&mut a.host)).unwrap()
+}
+
+#[test]
+fn the_tab_title_is_the_resident_on_screen_and_its_own_title_set_only_on_a_change() {
+    let mut a = app();
+    a.retitle();
+    assert_eq!(hosted(&mut a), "\x1b]0;gensokyo\x1b\\");
+    let mut a = shrine();
+    a.retitle();
+    assert_eq!(hosted(&mut a), "\x1b]0;Reimu\x1b\\");
+    a.retitle();
+    assert_eq!(hosted(&mut a), "");
+    screen_of(&mut a, &[("hi", None)], Style::default(), "✳ Fix the bug");
+    hosted(&mut a);
+    a.retitle();
+    assert_eq!(hosted(&mut a), "\x1b]0;Reimu · ✳ Fix the bug\x1b\\");
+    a.retitle();
+    assert_eq!(hosted(&mut a), "");
+    // Another resident, before its screen comes: its name alone.
+    host(&mut a, b"\x1d2");
+    hosted(&mut a);
+    a.retitle();
+    assert_eq!(hosted(&mut a), "\x1b]0;Marisa\x1b\\");
+    // A title cannot end the sequence that carries it.
+    host(&mut a, b"\x1d1");
+    screen_of(&mut a, &[("hi", None)], Style::default(), "a\x1b]0;pwned\x07\u{9c}b");
+    hosted(&mut a);
+    a.retitle();
+    assert_eq!(hosted(&mut a), "\x1b]0;Reimu · a ]0;pwned  b\x1b\\");
 }

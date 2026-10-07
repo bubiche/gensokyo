@@ -67,8 +67,18 @@ fn frame(cols: u16, rows: u16) -> Frame {
     let rows = (0..rows)
         .map(|y| {
             vec![
-                Run { col: 0, style: st(Color::Palette(2)), text: format!("line {y:02}") },
-                Run { col: 12, style: st(Color::Default), text: "~".repeat((y as usize) % 20) },
+                Run {
+                    col: 0,
+                    style: st(Color::Palette(2)),
+                    text: format!("line {y:02}"),
+                    link: None,
+                },
+                Run {
+                    col: 12,
+                    style: st(Color::Default),
+                    text: "~".repeat((y as usize) % 20),
+                    link: None,
+                },
             ]
         })
         .collect();
@@ -572,9 +582,9 @@ fn runs_land_at_their_columns() {
     m.screen = Some(Frame {
         cols: 93,
         rows: vec![vec![
-            Run { col: 0, style: Style::default(), text: "ab".into() },
-            Run { col: 5, style: red, text: "日x".into() },
-            Run { col: 9, style: rgb, text: "z".into() },
+            Run { col: 0, style: Style::default(), text: "ab".into(), link: None },
+            Run { col: 5, style: red, text: "日x".into(), link: None },
+            Run { col: 9, style: rgb, text: "z".into(), link: None },
         ]],
         cursor: None,
         ..Frame::default()

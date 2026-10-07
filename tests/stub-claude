@@ -16,6 +16,7 @@
 #                             /sync <s> draws SYNC-MID, waits <s> seconds, then SYNC-END, all in
 #                             one synchronized-output block (2026); /sync 0 waits a moment
 #                             /mouse turns on mouse reporting (1000, SGR 1006)
+#                             /link <uri> <text> prints <text> as a link to <uri> (OSC 8)
 #                             /clear starts a new session id (the files below keep the first)
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
 # SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
@@ -281,6 +282,7 @@ $more"
     # Claude Code's input line before any hook or the registry tells of it.
     /cover\ *) (sleep "${line#/cover }"; printf '\r%s[2KDo you want to proceed?' "$esc") & ;;
     /mouse) printf '%s[?1000h%s[?1006h' "$esc" "$esc"; echo "mouse on" ;;
+    /link\ *) set -- ${line#/link }; printf '%s]8;;%s%s\\%s%s]8;;%s\\\n' "$esc" "$1" "$esc" "$2" "$esc" "$esc" ;;
     /clear) rm -f "$STUB_STATE/$session.json"; session=$(uuidgen | tr 'A-Z' 'a-z')
             write_entry "$session" "$name" '"idle"'; fire SessionStart ', "source": "clear"'; echo "cleared" ;;
     /perm) printf 'waiting\n' > "$STUB_STATE/$session.status"

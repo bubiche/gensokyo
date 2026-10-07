@@ -97,6 +97,7 @@ fn summon_launches_claude_with_our_argv_and_env() {
     assert_eq!(var("ITERM_SESSION_ID"), None);
     assert_eq!(var("CLAUDE_CONFIG_DIR"), Some(d.dir.join("claude").to_str().unwrap()));
     assert_eq!((var("TERM"), var("COLORTERM")), (Some("xterm-256color"), Some("truecolor")));
+    assert_eq!(var("FORCE_HYPERLINK"), Some("1"));
     assert_eq!(var("GENSOKYO_RESIDENT"), id.as_str());
     assert_eq!(var("GENSOKYO_SOCKET").map(PathBuf::from), Some(real));
     let bin = Path::new(BIN).parent().unwrap().to_str().unwrap();
@@ -125,6 +126,21 @@ fn summon_launches_claude_with_our_argv_and_env() {
         assert!(e["error"].as_str().unwrap().contains(why), "{e}");
     }
     assert_eq!(d.list().len(), 2);
+}
+
+#[test]
+fn a_resident_marks_links_unless_the_user_said_otherwise() {
+    use gensokyo::daemon::launch;
+    let (bin, sock) = (Path::new("/bin"), Path::new("/s"));
+    let forced = |base: Vec<(&str, &str)>| -> Vec<String> {
+        let base = base.into_iter().map(|(k, v)| (k.into(), v.into()));
+        let env = launch::env(base, "id", bin, sock);
+        let f = env.iter().filter(|(k, _)| k == "FORCE_HYPERLINK");
+        f.map(|(_, v)| v.to_string_lossy().into_owned()).collect()
+    };
+    assert_eq!(forced(vec![("HOME", "/h")]), ["1"]);
+    assert_eq!(forced(vec![("FORCE_HYPERLINK", "0")]), ["0"]);
+    assert_eq!(forced(vec![("FORCE_HYPERLINK", "1"), ("TERM_PROGRAM", "iTerm.app")]), ["1"]);
 }
 
 #[test]

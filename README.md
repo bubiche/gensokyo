@@ -107,7 +107,10 @@ row at a time (the wheel moves faster), and the selection stays on its text whil
 Lines the terminal wrapped are copied joined; the resident's own line breaks stay, and each
 line's trailing blanks go. Each client's selection is its own. A resident that turned the mouse
 on for itself gets the clicks and drags instead. `Ctrl-] y` copies the resident's last answer
-(what `gensokyo read` reports), or says why there is none.
+(what `gensokyo read` reports), or says why there is none. The links Claude prints (http, https
+and file ones) stay links, so iTerm2 opens them with a Cmd-click, and the tab's title names the
+resident on screen and what Claude titled its task; the old title comes back when the client
+leaves.
 
 A resident that has left — `/exit`, a banish, a crash — stays in the sidebar as departed, with
 `[recall r]` and `[close x]`. Recall brings it back into its own conversation with the flags it

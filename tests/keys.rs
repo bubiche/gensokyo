@@ -192,8 +192,8 @@ fn mouse_follows_the_child_mode() {
     assert_eq!(at(m(35, true), sgr(1003)), raw(b"\x1b[<35;6;9M"));
     // X10 encoding without 1006: a release names no button.
     let x10 = Modes { mouse: 1000, ..Modes::default() };
-    assert_eq!(at(m(0, true), x10), raw(b"\x1b[M &)"));
-    assert_eq!(at(m(16, false), x10), raw(b"\x1b[M3&)"), "Ctrl kept on release");
+    assert_eq!(at(m(0, true), x10.clone()), raw(b"\x1b[M &)"));
+    assert_eq!(at(m(16, false), x10.clone()), raw(b"\x1b[M3&)"), "Ctrl kept on release");
     assert_eq!(keys::mouse(&m(0, true), 224, 1, &x10), Forward::Drop);
     assert_eq!(keys::mouse(&m(0, true), 223, 1, &x10), raw(&[0x1b, b'[', b'M', 32, 255, 33]));
 }

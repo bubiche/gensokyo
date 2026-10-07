@@ -244,6 +244,7 @@ pub(super) fn read(
     shrine: &Shared,
     who: &str,
     screen: bool,
+    bare: bool,
     caller: Option<&str>,
 ) -> Result<String, String> {
     let mut sh = shrine.borrow_mut();
@@ -264,6 +265,18 @@ pub(super) fn read(
         collect(&mut sh, c, &rec.id, Some(Until::Done));
     }
     let name = &rec.name;
+    if bare {
+        return match (a.ended, a.text) {
+            (Ended::Interrupted, _) => Err(format!(
+                "{name}'s last turn was cut short, at a dialog or by a restart: no answer to copy"
+            )),
+            (Ended::Failed, _) => {
+                Err(format!("{name}'s last turn stopped on an API error: no answer to copy"))
+            }
+            (_, None) => Err(format!("{name}'s last turn ended with no answer kept")),
+            (_, Some(text)) => Ok(text),
+        };
+    }
     let text = a.text.unwrap_or_else(|| {
         match a.ended {
             Ended::Stop | Ended::Unreported => "(its turn ended with no answer kept)",

@@ -337,8 +337,8 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 waits.push(task.abort_handle());
                 None
             }
-            Request::Read { who, screen } => Some(
-                lead::read(&shrine, &who, screen, caller.as_deref())
+            Request::Read { who, screen, bare } => Some(
+                lead::read(&shrine, &who, screen, bare, caller.as_deref())
                     .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
             Request::Rituals => Some(rituals::listing(&shrine, id)),
@@ -378,11 +378,17 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::View { who } => match live(&shrine, &who) {
                 Ok((rid, _, h)) => {
                     viewing.take().inspect(AbortHandle::abort);
+                    // Viewed again after a missed frame, the selection stays.
+                    let was = shrine.borrow().views.get(&me).and_then(|v| v.0.clone());
+                    if was.as_ref() != Some(&rid) {
+                        unselect(&shrine, me);
+                    }
                     let task = tokio::task::spawn_local(view(
                         shrine.clone(),
                         h,
                         rid.clone(),
                         out.clone(),
+                        me,
                         !viewed,
                     ));
                     viewing = Some(task.abort_handle());
@@ -394,6 +400,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             },
             Request::Unview => {
                 viewing.take().inspect(AbortHandle::abort);
+                unselect(&shrine, me);
                 set_view(&|v| v.0 = None);
                 None
             }
@@ -410,7 +417,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 None
             }
             Request::Input { who, bytes, key } => {
-                input(&shrine, &who, bytes, key).await.err().map(fail)
+                input(&shrine, me, &who, bytes, key).await.err().map(fail)
             }
             Request::Scroll { who, rows } => match live(&shrine, &who) {
                 Ok((_, _, h)) => {
@@ -430,6 +437,13 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 }
                 Err(e) => Some(fail(e)),
             },
+            Request::Select { who, how, x, y } => match live(&shrine, &who) {
+                Ok((_, _, h)) => h
+                    .select(me, how, x, y)
+                    .filter(|t| !t.is_empty())
+                    .map(|message| Reply::Done { id, message }),
+                Err(e) => Some(fail(e)),
+            },
             Request::Resize { cols, rows } => {
                 resize(&shrine, cols, rows);
                 None
@@ -446,7 +460,15 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
     for t in [watching, viewing].into_iter().flatten().chain(waits) {
         t.abort();
     }
+    unselect(&shrine, me);
     shrine.borrow_mut().views.remove(&me);
+}
+
+/// Connection `me`'s selection gone, from whichever resident it was made on.
+fn unselect(shrine: &Shared, me: u64) {
+    for h in shrine.borrow().entries.iter().filter_map(|e| e.handle.as_ref()) {
+        h.unselect(me);
+    }
 }
 
 /// The peer runs as us. `getpeereid` alone: tokio's `peer_cred` also asks for the pid, which
@@ -460,6 +482,7 @@ fn same_user(s: &UnixStream) -> bool {
 
 async fn input(
     shrine: &Shared,
+    me: u64,
     who: &str,
     mut bytes: Vec<u8>,
     key: Option<proto::Key>,
@@ -479,9 +502,11 @@ async fn input(
             e.aware.typed(&bytes);
         }
     }
-    // A focus report is the terminal's, not typing: it leaves the view where it is.
+    // A focus report is the terminal's, not typing: it leaves the view where it is, and what
+    // this client has selected.
     if !matches!(bytes.as_slice(), b"\x1b[I" | b"\x1b[O") {
         h.to_live();
+        h.unselect(me);
     }
     match tokio::time::timeout(INPUT_WAIT, h.input(&bytes)).await {
         Ok(true) => Ok(()),
@@ -504,6 +529,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         | Request::View { .. }
         | Request::Scroll { .. }
         | Request::Search { .. }
+        | Request::Select { .. }
         | Request::Focus { .. }
         | Request::Resize { .. } => Some(
             "the screens and keyboards are the user's: a resident does not type into, show or \

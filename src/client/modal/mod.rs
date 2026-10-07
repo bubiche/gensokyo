@@ -73,6 +73,8 @@ fn help() -> (String, Vec<Row>) {
     rows.push(Row::text("Nobody on screen, or a departed one: the keys alone."));
     rows.push(Row::text("Scrolled back: j k a row, b f a screen, g the top, q home."));
     rows.push(Row::text("Search: / back, ? on, then n more the same way, N the other."));
+    rows.push(Row::text("Drag to copy, past an edge to scroll; double-click a word."));
+    rows.push(Row::text("y copies the last answer of the resident on screen."));
     let legend: Vec<String> = [
         (State::Busy, "busy"),
         (State::Awaits, "needs you"),

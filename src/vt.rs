@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Write;
 use std::ops::BitOr;
 use std::rc::Rc;
@@ -19,7 +20,8 @@ use std::rc::Rc;
 use libghostty_vt::fmt::{Format, Formatter, FormatterOptions};
 use libghostty_vt::key::{self, Encoder, KittyKeyFlags, OptionAsAlt};
 use libghostty_vt::render::{CellIterator, RowIterator};
-use libghostty_vt::screen::{CellWide, Screen, TrackedGridRef};
+use libghostty_vt::screen::{Cell, CellWide, Row, Screen, TrackedGridRef};
+use libghostty_vt::selection::{FormatOptions, Selection};
 use libghostty_vt::style::{RgbColor, StyleColor, Underline};
 use libghostty_vt::terminal::{
     ColorScheme, ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode,
@@ -43,6 +45,15 @@ const XCPR: &[u8] = b"\x1b[?6n";
 /// What a search found is drawn in, over the child's own style: the client's gold.
 pub const FOUND: Style = Style { fg: Color::Palette(0), bg: Color::Palette(3), attrs: 0 };
 
+/// What ends a word for a double click: Ghostty's own boundaries. A blank ends one too.
+const BOUNDARIES: &[char] = &[
+    ' ', '\t', '\'', '"', '│', '`', '|', ':', ';', ',', '(', ')', '[', ']', '{', '}', '<', '>', '$',
+];
+
+/// A cell by row, counted from the oldest kept, and column: in that order, so cells compare in
+/// reading order.
+type At = (u32, u16);
+
 pub struct Vt {
     term: Terminal<'static, 'static>,
     replies: Rc<RefCell<Vec<u8>>>,
@@ -55,6 +66,37 @@ pub struct Vt {
     /// What the last search found: its first cell, which moves with the text as output comes
     /// and old rows go, and how many columns it covers.
     found: Option<(TrackedGridRef, u16)>,
+    /// Each viewer's own selection, by the viewer's number.
+    picks: HashMap<u64, Pick>,
+}
+
+/// A viewer's selection: the cell pressed and the cell under the pointer, each kept on its text
+/// as output comes and old rows go, on the screen it was made on.
+struct Pick {
+    screen: Screen,
+    click: TrackedGridRef,
+    head: TrackedGridRef,
+    /// Begun with a double click: whole words at either end.
+    words: bool,
+    /// The pointer has left the cell pressed; a single click selects nothing.
+    moved: bool,
+}
+
+/// What a viewer's pointer did in the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pointer {
+    /// The left button went down: a new selection, empty until the pointer moves.
+    Press,
+    /// The second press of a double click: the word there.
+    Double,
+    /// The pointer moved with the button held.
+    Drag,
+    /// Held past the top or the bottom edge: the view a row back or on, then a drag.
+    Back,
+    On,
+    /// The button came up: the selection stays, and its text is given.
+    Release,
 }
 
 impl Vt {
@@ -95,6 +137,7 @@ impl Vt {
             encoder: Encoder::new().unwrap(),
             xcpr: 0,
             found: None,
+            picks: HashMap::new(),
         }
     }
 
@@ -139,7 +182,13 @@ impl Vt {
 
     /// Scrolled back, the view stays as far from the live screen as it was: a new viewer's
     /// nudge resizes by a row and back, and would move everyone's view otherwise.
+    ///
+    /// Every viewer's selection goes first: Ghostty keeps a blank row holding a selection's end
+    /// from being trimmed as the screen shrinks, so a selection would move everyone's rows.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        if (cols.max(1), rows.max(1)) != self.size() {
+            self.picks.clear();
+        }
         let back = self.scrolled().0;
         self.term.resize(cols.max(1), rows.max(1), 0, 0).unwrap();
         let now = self.scrolled().0;
@@ -274,6 +323,141 @@ impl Vt {
         (s, cols - s)
     }
 
+    /// What `viewer`'s pointer did at cell `x`, `y` of the view (clamped to it). A release
+    /// gives the selection's text: soft-wrapped rows joined, the child's own line breaks kept,
+    /// each line's trailing blanks dropped. The selection stays until the next press or
+    /// `unselect`, drawn only in `frame_for` that viewer.
+    pub fn select(&mut self, viewer: u64, how: Pointer, x: u16, y: u16) -> Option<String> {
+        let (cols, rows) = self.size();
+        let at =
+            Point::Viewport(PointCoordinate { x: x.min(cols - 1), y: u32::from(y.min(rows - 1)) });
+        let screen = self.term.active_screen().unwrap();
+        if let Pointer::Press | Pointer::Double = how {
+            let (click, head) =
+                (self.term.track_grid_ref(at).ok()?, self.term.track_grid_ref(at).ok()?);
+            let words = how == Pointer::Double;
+            self.picks.insert(viewer, Pick { screen, click, head, words, moved: false });
+            return None;
+        }
+        // A selection on the other screen waits for it to come back.
+        let p = self.picks.get_mut(&viewer).filter(|p| p.screen == screen)?;
+        match how {
+            Pointer::Back => self.term.scroll_viewport(ScrollViewport::Delta(-1)),
+            Pointer::On => self.term.scroll_viewport(ScrollViewport::Delta(1)),
+            Pointer::Release => return self.picked(viewer).and_then(|(a, b)| self.text(a, b)),
+            _ => {}
+        }
+        p.head.set(&mut self.term, at).ok()?;
+        let place = |r: &TrackedGridRef| r.point(PointSpace::Screen).ok().flatten();
+        p.moved |= place(&p.head) != place(&p.click);
+        None
+    }
+
+    /// `viewer`'s selection gone; whether it had one.
+    pub fn unselect(&mut self, viewer: u64) -> bool {
+        self.picks.remove(&viewer).is_some()
+    }
+
+    /// The first and last cells of `viewer`'s selection, in reading order and both in, while it
+    /// is on the screen showing and its text is still kept.
+    fn picked(&self, viewer: u64) -> Option<(At, At)> {
+        let p = self.picks.get(&viewer)?;
+        if self.term.active_screen().ok()? != p.screen {
+            return None;
+        }
+        let at =
+            |r: &TrackedGridRef| r.point(PointSpace::Screen).ok().flatten().map(|c| (c.y, c.x));
+        let (c, h) = (at(&p.click)?, at(&p.head)?);
+        let (a, b) = (c.min(h), c.max(h));
+        if !p.words {
+            return p.moved.then_some((a, b));
+        }
+        let word = self.word(c);
+        let a = self.word(a).map_or(a, |w| w.0);
+        let b = self.word(b).map_or(b, |w| w.1);
+        (a != b || word.is_some()).then_some((a, b))
+    }
+
+    /// The text from `a` to `b`, both in: soft-wrapped rows joined, the child's own line breaks
+    /// kept, and each line's trailing blanks dropped.
+    fn text(&self, a: At, b: At) -> Option<String> {
+        // Begun on the blank a wide character left at a row's end as it went on to the next,
+        // Ghostty leaves that row out, line break and all.
+        let head = self.cell(a).and_then(|c| c.1.wide().ok());
+        let a = if head == Some(CellWide::SpacerHead) { (a.0 + 1, 0) } else { a };
+        if a > b {
+            return Some(String::new());
+        }
+        let cell = |(y, x): At| self.term.grid_ref(Point::Screen(PointCoordinate { x, y })).ok();
+        let sel = Selection::new(cell(a)?, cell(b)?, false);
+        let opts = FormatOptions::new().with_emit_format(Format::Plain).with_selection(&sel);
+        let text = self.term.format_selection_alloc(None, opts).ok()??;
+        // A line per row, joined here by each row's own wrap: Ghostty's unwrap also goes by the
+        // next row's, which Claude Code's redraws leave on rows that follow on from nothing.
+        let mut lines = vec![String::new()];
+        for (y, row) in (a.0..).zip(String::from_utf8_lossy(&text).split('\n')) {
+            if y > a.0 && !self.wrapped(y - 1) {
+                lines.push(String::new());
+            }
+            lines.last_mut()?.push_str(row);
+        }
+        // Claude Code leaves a no-break space after its marks (❯, ⏺, ⎿).
+        Some(lines.iter().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n"))
+    }
+
+    /// A kept cell's row and the cell.
+    fn cell(&self, (y, x): At) -> Option<(Row, Cell)> {
+        let r = self.term.grid_ref(Point::Screen(PointCoordinate { x, y })).ok()?;
+        Some((r.row().ok()?, r.cell().ok()?))
+    }
+
+    /// Whether row `y` wrapped: it goes on in the next.
+    fn wrapped(&self, y: u32) -> bool {
+        self.cell((y, 0)).and_then(|c| c.0.is_wrapped().ok()).unwrap_or(false)
+    }
+
+    /// The word around a cell, as Ghostty reads words, except that a wide character is taken
+    /// whole: a run of characters that are all boundaries or all not, on across soft wraps.
+    /// None on a blank.
+    fn word(&self, at: At) -> Option<(At, At)> {
+        let cols = self.size().0;
+        // Whether a character is a boundary; None for a blank.
+        let kind = |at: At| {
+            let c = self.cell(at)?.1;
+            let ch = char::from_u32(c.codepoint().ok()?)?;
+            c.has_text().ok()?.then(|| BOUNDARIES.contains(&ch))
+        };
+        // A wide character's second cell, or the blank left at the end of a row it did not
+        // fit, which belong to the character before.
+        let spacer = |at: At| {
+            let w = self.cell(at).and_then(|c| c.1.wide().ok());
+            matches!(w, Some(CellWide::SpacerTail | CellWide::SpacerHead))
+        };
+        let step = |(y, x): At, back: bool| match (back, x) {
+            (true, 0) => (y > 0 && self.wrapped(y - 1)).then(|| (y - 1, cols - 1)),
+            (true, _) => Some((y, x - 1)),
+            (false, _) if x + 1 < cols => Some((y, x + 1)),
+            (false, _) => self.wrapped(y).then_some((y + 1, 0)),
+        };
+        let at = if spacer(at) && at.1 > 0 { (at.0, at.1 - 1) } else { at };
+        let want = kind(at)?;
+        let mut ends = (at, at);
+        for back in [true, false] {
+            let mut p = at;
+            while let Some(q) = step(p, back) {
+                p = q;
+                if spacer(q) {
+                    continue;
+                }
+                if kind(q) != Some(want) {
+                    break;
+                }
+                if back { ends.0 = q } else { ends.1 = q }
+            }
+        }
+        Some(ends)
+    }
+
     /// Rows the view is scrolled back from the live screen, and rows of scrollback there are.
     /// A few nanoseconds, against a frame's couple of hundred microseconds.
     pub fn scrolled(&self) -> (u32, u32) {
@@ -296,6 +480,21 @@ impl Vt {
 
     /// The visible screen as style runs.
     pub fn frame(&mut self) -> Frame {
+        self.draw(None)
+    }
+
+    /// The visible screen as `viewer` sees it: its selection drawn reversed.
+    pub fn frame_for(&mut self, viewer: u64) -> Frame {
+        let picked = self.picked(viewer);
+        self.draw(picked)
+    }
+
+    fn draw(&mut self, picked: Option<(At, At)>) -> Frame {
+        let top = self.term.scrollbar().unwrap().offset as u32;
+        let picked = |y: usize, x: u16| {
+            let at = (top + y as u32, x);
+            picked.is_some_and(|(a, b)| a <= at && at <= b)
+        };
         // What a search found, where it shows: it belongs to the main screen, not the other.
         let found = match self.term.active_screen().unwrap() {
             Screen::Primary => self.found.as_ref(),
@@ -324,11 +523,16 @@ impl Vt {
                 if matches!(wide, CellWide::SpacerTail | CellWide::SpacerHead) {
                     continue;
                 }
-                let style = match cell.has_styling().unwrap() {
+                let mut style = match cell.has_styling().unwrap() {
                     _ if found.as_ref().is_some_and(|f| f.contains(&x)) => FOUND,
                     true => Style::from_ghostty(&cell.style().unwrap()),
                     false => Style::default(),
                 };
+                // A wide character is in when either of its cells is.
+                let wide = matches!(wide, CellWide::Wide);
+                if picked(rows.len(), x) || wide && picked(rows.len(), x + 1) {
+                    style.attrs ^= Style::INVERSE;
+                }
                 let g: String = cell.graphemes().unwrap().into_iter().collect();
                 let text = if g.is_empty() { " " } else { &g };
                 match runs.last_mut() {

@@ -189,7 +189,9 @@ pub fn main(args: &[String]) -> ExitCode {
         Cmd::Close { who } => say(request(Request::Close { who }, false)),
         Cmd::Broadcast { card, targets, with } => broadcast(card, targets, with),
         Cmd::Wait { who, any, until, timeout } => return wait(who, any, until, &timeout),
-        Cmd::Read { who, screen } => say(request(Request::Read { who, screen }, false)),
+        Cmd::Read { who, screen } => {
+            say(request(Request::Read { who, screen, bare: false }, false))
+        }
         Cmd::Ritual { cmd } => rituals::main(cmd),
         Cmd::Quit => match request(Request::Quit, false) {
             Err(Error::NotRunning) => Ok(()),

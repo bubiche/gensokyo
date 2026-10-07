@@ -112,6 +112,8 @@ pub enum Chord {
     ScrollBack,
     /// Look back through the resident's scrollback for something.
     Find,
+    /// The resident's last answer to the clipboard.
+    Copy,
     /// The next or the previous resident in the sidebar, round at the ends.
     Next,
     Prev,
@@ -164,6 +166,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'x' => Chord::Close,
         '[' => Chord::ScrollBack,
         '/' => Chord::Find,
+        'y' => Chord::Copy,
         'j' => Chord::Next,
         'k' => Chord::Prev,
         'a' => Chord::Awaiting,

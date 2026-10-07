@@ -3,7 +3,7 @@
 //! whoever shows the screen, on the same thread.
 
 use super::pty::{self, OwnedReadPty, OwnedWritePty, Size};
-use crate::vt::{Frame, KeyEvent, Modes, Vt};
+use crate::vt::{Frame, KeyEvent, Modes, Pointer, Vt};
 use std::cell::{Cell, RefCell};
 use std::os::unix::process::ExitStatusExt;
 use std::rc::Rc;
@@ -67,8 +67,23 @@ impl Handle {
         self.last_output.get()
     }
 
-    pub fn frame(&self) -> Frame {
-        self.vt.borrow_mut().frame()
+    /// The screen as `viewer` sees it, its own selection drawn.
+    pub fn frame_for(&self, viewer: u64) -> Frame {
+        self.vt.borrow_mut().frame_for(viewer)
+    }
+
+    /// `viewer`'s pointer in the screen (`Vt::select`); a release gives the selected text.
+    pub fn select(&self, viewer: u64, how: Pointer, x: u16, y: u16) -> Option<String> {
+        let text = self.vt.borrow_mut().select(viewer, how, x, y);
+        self.poke.notify_one();
+        text
+    }
+
+    /// `viewer`'s selection gone.
+    pub fn unselect(&self, viewer: u64) {
+        if self.vt.borrow_mut().unselect(viewer) {
+            self.poke.notify_one();
+        }
     }
 
     /// The live screen as text, however far back the view is: what a check on typed text reads.

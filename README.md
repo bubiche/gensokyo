@@ -72,6 +72,7 @@ what comes next:
 | `1`–`9` | the resident in that slot |
 | `[` | scroll back through the resident's scrollback |
 | `/` | search back through the resident's scrollback |
+| `y` | copy the resident's last answer |
 | `m` | mouse capture on or off |
 | `d` | detach: the client leaves, the residents keep running |
 | `q` | quit: every resident `/exit`s and the daemon stops |
@@ -99,7 +100,13 @@ yes-or-no ones.
 Everything is also a click: the sidebar's lines focus a resident, and every button carries the
 key that does the same thing (`[summon n]`). `[mouse: shrine m]` turns mouse capture off, which
 hands selection back to iTerm2; with it on, a drag in the resident's screen selects text and
-copies it with `pbcopy` (`GENSOKYO_COPY` names another command).
+copies it on release with `pbcopy` (`GENSOKYO_COPY` names another command), and a double click
+copies a word. Held past the screen's top or bottom edge, the drag moves through the scrollback a
+row at a time (the wheel moves faster), and the selection stays on its text while output comes.
+Lines the terminal wrapped are copied joined; the resident's own line breaks stay, and each
+line's trailing blanks go. Each client's selection is its own. A resident that turned the mouse
+on for itself gets the clicks and drags instead. `Ctrl-] y` copies the resident's last answer
+(what `gensokyo read` reports), or says why there is none.
 
 A resident that has left — `/exit`, a banish, a crash — stays in the sidebar as departed, with
 `[recall r]` and `[close x]`. Recall brings it back into its own conversation with the flags it

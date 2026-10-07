@@ -138,6 +138,7 @@ fn chord_after_the_leader() {
         ("x", Chord::Close),
         ("[", Chord::ScrollBack),
         ("/", Chord::Find),
+        ("y", Chord::Copy),
         ("j", Chord::Next),
         ("k", Chord::Prev),
         ("a", Chord::Awaiting),

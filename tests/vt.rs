@@ -6,7 +6,7 @@ mod common;
 use common::base64;
 use std::path::{Path, PathBuf};
 
-use gensokyo::vt::{Color, FOUND, Frame, Key, KeyEvent, Mods, Style, Vt};
+use gensokyo::vt::{Color, FOUND, Frame, Key, KeyEvent, Mods, Pointer, Style, Vt};
 
 fn shift_enter() -> KeyEvent {
     KeyEvent::press(Key::Enter, Mods::SHIFT)
@@ -552,4 +552,280 @@ fn replay_matches_the_terminal_at_every_mark() {
     assert_eq!(marks, 20);
     // So the replies were checked against Claude Code's modifyOtherKeys request at all.
     assert!(with_mok >= 3, "{with_mok} recordings send modifyOtherKeys");
+}
+
+/// Viewer 1's drag from one cell of the view to another, released: what it copies.
+fn pick(vt: &mut Vt, (x0, y0): (u16, u16), (x1, y1): (u16, u16)) -> Option<String> {
+    vt.select(1, Pointer::Press, x0, y0);
+    vt.select(1, Pointer::Drag, x1, y1);
+    vt.select(1, Pointer::Release, x1, y1)
+}
+
+/// Viewer 1's double click on a cell: what it copies.
+fn double(vt: &mut Vt, x: u16, y: u16) -> Option<String> {
+    vt.select(1, Pointer::Double, x, y);
+    vt.select(1, Pointer::Release, x, y)
+}
+
+/// The reversed runs of a frame: row, column and text.
+fn reversed(f: &Frame) -> Vec<(usize, u16, String)> {
+    let runs = f.rows.iter().enumerate().flat_map(|(y, r)| r.iter().map(move |r| (y, r)));
+    let runs = runs.filter(|(_, r)| r.style.attrs & Style::INVERSE != 0);
+    runs.map(|(y, r)| (y, r.col, r.text.trim_end().to_string())).collect()
+}
+
+#[test]
+fn a_selection_joins_soft_wraps_keeps_line_breaks_and_drops_trailing_blanks() {
+    let mut vt = Vt::new(10, 5);
+    vt.feed(b"abcdefghijklm   \r\nxy   \r\n\r\nzz");
+    let all = Some("abcdefghijklm\nxy\n\nzz");
+    assert_eq!(pick(&mut vt, (0, 0), (1, 4)).as_deref(), all);
+    // Backwards is the same selection, and past the text is the same text.
+    assert_eq!(pick(&mut vt, (9, 4), (0, 0)).as_deref(), all);
+    assert_eq!(pick(&mut vt, (3, 0), (1, 1)).as_deref(), Some("defghijkl"));
+    // Blanks where a row wrapped are in the line.
+    let mut vt = Vt::new(10, 3);
+    vt.feed(b"abcdefgh  ij");
+    assert_eq!(pick(&mut vt, (0, 0), (9, 1)).as_deref(), Some("abcdefgh  ij"));
+}
+
+#[test]
+fn wide_characters_marks_and_the_blanks_of_tabs_and_cursor_moves_copy_as_shown() {
+    let mut vt = Vt::new(12, 4);
+    vt.feed("one two\r\n日本 e\u{301}\x1b[2;9Hx\r\nthree\r\na\tb".as_bytes());
+    assert_eq!(pick(&mut vt, (4, 0), (2, 2)).as_deref(), Some("two\n日本 e\u{301}  x\nthr"));
+    // Either half of a wide character takes it whole, drawn and copied.
+    assert_eq!(pick(&mut vt, (1, 1), (2, 1)).as_deref(), Some("日本"));
+    assert_eq!(reversed(&vt.frame_for(1)), [(1, 0, "日本".into())]);
+    assert_eq!(pick(&mut vt, (3, 1), (6, 1)).as_deref(), Some("本 e\u{301}"));
+    assert_eq!(pick(&mut vt, (0, 3), (8, 3)).as_deref(), Some("a       b"));
+    // Nothing but blanks copies nothing.
+    assert_eq!(pick(&mut vt, (9, 2), (11, 2)).unwrap_or_default(), "");
+    // Begun on the blank a wide character left at a row's end: the lines after still break.
+    let mut vt = Vt::new(10, 4);
+    vt.feed("123456789中x\r\nnext".as_bytes());
+    assert_eq!(pick(&mut vt, (9, 0), (3, 2)).as_deref(), Some("中x\nnext"));
+    assert_eq!(pick(&mut vt, (0, 0), (3, 2)).as_deref(), Some("123456789中x\nnext"));
+}
+
+#[test]
+fn a_double_click_takes_a_word_with_wide_characters_whole_and_on_across_a_wrap() {
+    let mut vt = Vt::new(40, 4);
+    vt.feed("see src/client/app.rs: 中文字 cafe\u{301}\r\n".as_bytes());
+    assert_eq!(double(&mut vt, 10, 0).as_deref(), Some("src/client/app.rs"));
+    // On the second cell of a wide character, as on the first.
+    assert_eq!(double(&mut vt, 26, 0).as_deref(), Some("中文字"));
+    assert_eq!(double(&mut vt, 23, 0).as_deref(), Some("中文字"));
+    assert_eq!(double(&mut vt, 32, 0).as_deref(), Some("cafe\u{301}"));
+    assert_eq!(double(&mut vt, 21, 0).as_deref(), Some(":"));
+    // A blank is no word.
+    assert_eq!(double(&mut vt, 38, 0), None);
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+
+    let mut vt = Vt::new(10, 4);
+    vt.feed("hello wonderfulness\r\n123456789中x".as_bytes());
+    assert_eq!(double(&mut vt, 2, 1).as_deref(), Some("wonderfulness"));
+    // The wide character that did not fit leaves a blank at the row's end, inside the word.
+    assert_eq!(double(&mut vt, 1, 3).as_deref(), Some("123456789中x"));
+
+    // Dragged on from a double click, whole words at both ends.
+    let mut vt = Vt::new(20, 2);
+    vt.feed(b"one two three four");
+    vt.select(1, Pointer::Double, 5, 0);
+    vt.select(1, Pointer::Drag, 9, 0);
+    assert_eq!(vt.select(1, Pointer::Release, 9, 0).as_deref(), Some("two three"));
+    vt.select(1, Pointer::Double, 5, 0);
+    vt.select(1, Pointer::Drag, 1, 0);
+    assert_eq!(vt.select(1, Pointer::Release, 1, 0).as_deref(), Some("one two"));
+}
+
+#[test]
+fn a_selection_keeps_to_its_text_as_output_comes() {
+    let mut vt = Vt::new(20, 5);
+    vt.feed(b"line 0\r\nline 1\r\nline 2\r\nline 3\r\n");
+    vt.select(1, Pointer::Press, 0, 1);
+    vt.select(1, Pointer::Drag, 5, 2);
+    assert_eq!(reversed(&vt.frame_for(1)), [(1, 0, "line 1".into()), (2, 0, "line 2".into())]);
+    // Two rows of output scroll the screen: the selection goes up with its text.
+    vt.feed(b"line 4\r\nline 5\r\n");
+    assert_eq!(reversed(&vt.frame_for(1)), [(0, 0, "line 2".into())]);
+    assert_eq!(vt.select(1, Pointer::Release, 5, 2).as_deref(), Some("line 1\nline 2"));
+    // The pointer moving again takes the row under it now.
+    vt.select(1, Pointer::Drag, 5, 1);
+    assert_eq!(vt.select(1, Pointer::Release, 5, 1).as_deref(), Some("line 1\nline 2\nline 3"));
+}
+
+#[test]
+fn held_past_an_edge_the_view_moves_a_row_at_a_time_and_the_selection_with_it() {
+    let mut vt = Vt::new(20, 5);
+    for i in 0..30 {
+        vt.feed(format!("line {i}\r\n").as_bytes());
+    }
+    // From the end of the last line, up past the top: ten rows back.
+    vt.select(1, Pointer::Press, 6, 3);
+    for _ in 0..10 {
+        vt.select(1, Pointer::Back, 0, 0);
+    }
+    assert_eq!(vt.scrolled().0, 10);
+    let want: Vec<String> = (16..30).map(|i| format!("line {i}")).collect();
+    assert_eq!(reversed(&vt.frame_for(1)).len(), 5);
+    assert_eq!(vt.select(1, Pointer::Release, 0, 0), Some(want.join("\n")));
+    // And on past the bottom, back to the live screen and no further.
+    for _ in 0..12 {
+        vt.select(1, Pointer::On, 3, 2);
+    }
+    assert_eq!(vt.scrolled().0, 0);
+    assert_eq!(vt.select(1, Pointer::Release, 3, 2).as_deref(), Some("e 28\nline 29"));
+}
+
+#[test]
+fn each_viewer_sees_and_copies_only_its_own_selection() {
+    let mut vt = Vt::new(20, 2);
+    vt.feed(b"alpha beta");
+    // A click alone selects nothing.
+    vt.select(1, Pointer::Press, 1, 0);
+    assert_eq!(vt.select(1, Pointer::Release, 1, 0), None);
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+    vt.select(1, Pointer::Press, 0, 0);
+    vt.select(1, Pointer::Drag, 4, 0);
+    vt.select(2, Pointer::Press, 6, 0);
+    vt.select(2, Pointer::Drag, 9, 0);
+    assert_eq!(reversed(&vt.frame_for(1)), [(0, 0, "alpha".into())]);
+    assert_eq!(reversed(&vt.frame_for(2)), [(0, 6, "beta".into())]);
+    assert_eq!(reversed(&vt.frame()), []);
+    assert_eq!(vt.select(2, Pointer::Release, 9, 0).as_deref(), Some("beta"));
+    assert!(vt.unselect(1));
+    assert!(!vt.unselect(1));
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+    assert_eq!(vt.select(1, Pointer::Release, 4, 0), None);
+}
+
+#[test]
+fn a_selection_on_one_screen_waits_while_the_other_shows() {
+    let mut vt = Vt::new(20, 4);
+    vt.feed(b"main text\r\n");
+    vt.select(1, Pointer::Press, 0, 0);
+    vt.select(1, Pointer::Drag, 3, 0);
+    vt.feed(b"\x1b[?1049h\x1b[Hfull screen");
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+    assert_eq!(vt.select(1, Pointer::Release, 3, 0), None);
+    vt.feed(b"\x1b[?1049l");
+    assert_eq!(reversed(&vt.frame_for(1)), [(0, 0, "main".into())]);
+    assert_eq!(vt.select(1, Pointer::Release, 3, 0).as_deref(), Some("main"));
+    // The full-screen program's own screen selects too, and has no scrollback to move through.
+    vt.feed(b"\x1b[?1049h\x1b[Hfull screen");
+    assert_eq!(pick(&mut vt, (0, 0), (3, 0)).as_deref(), Some("full"));
+    vt.select(1, Pointer::Back, 3, 0);
+    assert_eq!(vt.scrolled(), (0, 0));
+    assert_eq!(vt.select(1, Pointer::Release, 3, 0).as_deref(), Some("full"));
+}
+
+#[test]
+fn a_selection_whose_rows_are_gone_copies_nothing() {
+    let mut vt = Vt::new(200, 10);
+    let pad = "x".repeat(150);
+    let feed = |vt: &mut Vt, from: usize, to: usize| {
+        let b: String = (from..to).map(|i| format!("line {i} {pad}\r\n")).collect();
+        vt.feed(b.as_bytes());
+    };
+    feed(&mut vt, 0, 7000);
+    vt.scroll(Some(i32::MIN));
+    let first = pick(&mut vt, (0, 0), (5, 1)).unwrap();
+    assert!(first.starts_with("line ") && first.ends_with("\nline 1"), "{first:?}");
+    feed(&mut vt, 7000, 10000);
+    assert_eq!(vt.select(1, Pointer::Release, 5, 1), None);
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+}
+
+#[test]
+fn the_whole_screen_of_a_recorded_claude_code_session_copies_as_its_rows_read() {
+    use libghostty_vt::screen::CellWide;
+    use libghostty_vt::terminal::{Options, Point, PointCoordinate};
+    let mut names: Vec<String> = std::fs::read_dir(fixtures())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| (n.starts_with("a1-") || n.starts_with("a3-")) && n.ends_with(".jsonl"))
+        .collect();
+    names.sort();
+    let (mut screens, mut wraps) = (0, 0);
+    for name in &names {
+        let evs = read(&fixtures().join(name));
+        let Some(&Event::Start { cols, rows }) = evs.first() else { continue };
+        let mut vt = Vt::new(cols, rows);
+        // The same output in a bare libghostty terminal, read cell by cell: what is on screen
+        // and which rows only wrapped.
+        let opts = Options { cols, rows, max_scrollback: 10_000_000 };
+        let mut term = libghostty_vt::Terminal::new(opts).unwrap();
+        for ev in &evs {
+            match ev {
+                Event::Out(b) => {
+                    vt.feed(b);
+                    term.vt_write(b);
+                }
+                Event::Resize { cols, rows } => {
+                    vt.resize(*cols, *rows);
+                    term.resize(*cols, *rows, 0, 0).unwrap();
+                }
+                Event::Mark(_) => {
+                    let (cols, rows) = vt.size();
+                    let mut text = String::new();
+                    for y in 0..u32::from(rows) {
+                        let at = |x| term.grid_ref(Point::Viewport(PointCoordinate { x, y }));
+                        // A blank cell is a space when something follows it on its row.
+                        let (mut buf, mut blanks) = (['\0'; 16], 0);
+                        for x in 0..cols {
+                            let g = at(x).unwrap();
+                            let wide = g.cell().unwrap().wide().unwrap();
+                            if matches!(wide, CellWide::SpacerTail | CellWide::SpacerHead) {
+                                continue;
+                            }
+                            match g.graphemes(&mut buf).unwrap() {
+                                0 => blanks += 1,
+                                n => {
+                                    text.extend(std::iter::repeat_n(' ', blanks));
+                                    text.extend(&buf[..n]);
+                                    blanks = 0;
+                                }
+                            }
+                        }
+                        match at(0).unwrap().row().unwrap().is_wrapped().unwrap() {
+                            true => wraps += 1,
+                            false => text.push('\n'),
+                        }
+                    }
+                    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+                    let want = lines.join("\n").trim_end_matches('\n').to_string();
+                    let got = pick(&mut vt, (0, 0), (cols - 1, rows - 1)).unwrap_or_default();
+                    assert_eq!(got, want, "{name}");
+                    // And each row on its own reads as the frame shows it.
+                    let shown = vt.frame().text();
+                    for (y, row) in shown.iter().enumerate().filter(|(_, r)| !r.is_empty()) {
+                        let got = pick(&mut vt, (0, y as u16), (cols - 1, y as u16));
+                        assert_eq!(got.as_deref(), Some(row.as_str()), "{name} row {y}");
+                    }
+                    screens += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(screens, 20);
+    // So rows were joined at all.
+    assert!(wraps >= 5, "{wraps} soft-wrapped rows");
+}
+
+#[test]
+fn a_selection_lets_go_before_the_screen_changes_size_and_moves_no_rows() {
+    let mut vt = Vt::new(20, 10);
+    vt.feed(b"one\r\ntwo\r\nthree");
+    // Dragged on past the text to a blank row, which Ghostty would keep as the screen shrinks.
+    vt.select(1, Pointer::Press, 0, 1);
+    vt.select(1, Pointer::Drag, 5, 8);
+    vt.resize(20, 10);
+    assert_eq!(reversed(&vt.frame_for(1)).len(), 8);
+    vt.resize(20, 5);
+    assert_eq!(vt.scrolled(), (0, 0));
+    assert_eq!(vt.frame().text()[..3], ["one", "two", "three"]);
+    assert_eq!(reversed(&vt.frame_for(1)), []);
+    assert_eq!(vt.select(1, Pointer::Release, 5, 3), None);
 }

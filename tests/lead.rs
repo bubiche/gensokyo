@@ -232,6 +232,24 @@ fn turns_answers_and_owner_survive_a_recall_and_a_restart() {
 }
 
 #[test]
+fn a_bare_read_is_the_last_answer_alone_or_why_there_is_none() {
+    let d = daemon("bare", &[("STUB_IDLE", "1")]);
+    summon(&d, "Reimu");
+    let bare = || d.req(json!({"t": "read", "id": 3, "who": "Reimu", "bare": true}));
+    assert_eq!(bare()["error"], "Reimu has not finished a turn yet");
+    input(&d, "Reimu", "hello there");
+    wait(|| me(&d, "Reimu")["turns"] == 1, "its turn");
+    let r = bare();
+    assert_eq!((&r["t"], &r["message"]), (&json!("done"), &json!("echo: hello there")));
+    input(&d, "Reimu", "/fail");
+    wait(|| me(&d, "Reimu")["turns"] == 2, "the failed turn");
+    assert_eq!(bare()["error"], "Reimu's last turn stopped on an API error: no answer to copy");
+    input(&d, "Reimu", "/hang");
+    wait(|| me(&d, "Reimu")["turns"] == 3, "the turn idle_prompt ended");
+    assert_eq!(bare()["error"], "Reimu's last turn ended with no answer kept");
+}
+
+#[test]
 fn a_departed_helper_can_still_be_read_and_only_by_its_lead_or_the_user() {
     let d = daemon("read", &[]);
     let lead = summon(&d, "Reimu");
@@ -511,6 +529,12 @@ fn a_helper_closed_mid_turn_reports_that_turn_cut_short_not_the_one_before() {
     );
     let o = inside(&d, &lead, &["read", "Marisa"]);
     assert!(out(&o).contains("turn 2 (interrupted)"), "{}", out(&o));
+    // The answer alone, for the user's clipboard: there is none.
+    let r = d.req(json!({"t": "read", "id": 3, "who": "Marisa", "bare": true}));
+    assert_eq!(
+        r["error"],
+        "Marisa's last turn was cut short, at a dialog or by a restart: no answer to copy"
+    );
     // A restart does not count it a second time.
     let o = d.command(&["restart"]).stdin(Stdio::null()).output().unwrap();
     assert!(o.status.success(), "{}", err(&o));

@@ -12,6 +12,7 @@ use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
 use crate::cli;
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request, Resident};
+use crate::vt::Pointer;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::terminal;
@@ -42,6 +43,12 @@ const TYPING: Duration = Duration::from_secs(1);
 
 /// A yes this soon after the key before is part of a burst, not an answer (`q` then Enter).
 const ANSWER: Duration = Duration::from_millis(250);
+
+/// A second press on the same cell this soon after the first is a double click.
+const DOUBLE: Duration = Duration::from_millis(500);
+
+/// Held past the grid's top or bottom edge, a drag moves the view a row this often.
+pub const EDGE: Duration = Duration::from_millis(30);
 
 /// Alternate screen, cursor hidden, focus reports, bracketed paste, a kitty entry of our own.
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[>0u\x1b[?u";
@@ -170,6 +177,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         let held = framer.deadline().map(|d| start + Duration::from_secs_f64(d / 1000.0));
         let next_draw = dirty.then_some(drawn + FRAME);
         let expires = app.expires();
+        let edge = app.edge();
         tokio::select! {
             b = input.recv() => match b {
                 Some(b) => {
@@ -192,6 +200,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
             _ = tokio::time::sleep_until(expires.unwrap_or(start).into()), if expires.is_some() => {
                 app.expire(Instant::now());
             }
+            _ = tokio::time::sleep_until(edge.unwrap_or(start).into()), if edge.is_some() => app.tick(),
             _ = winch.recv() => term.resize(host_area()).map_err(err)?,
             _ = hup.recv() => break Ok("the terminal hung up".into()),
             _ = sigterm.recv() => break Ok("terminated".into()),
@@ -255,8 +264,14 @@ pub struct App {
     any_motion: bool,
     /// The focused resident's frame number, for damage.
     rev: u64,
-    /// A left press in the grid, which may become a selection: the grid then, and the cell.
-    drag: Option<(ratatui::layout::Rect, (u16, u16))>,
+    /// A left press in the grid, held.
+    held: Option<Held>,
+    /// When a drag held past the grid's edge next moves the view.
+    edge: Option<Instant>,
+    /// The last left press in the grid that was not a double click's second: when, and where.
+    pressed: Option<(Instant, (u16, u16))>,
+    /// The request whose `done` carries text to copy, and what the text is.
+    copying: Option<(u64, String)>,
     /// The grid size last sent.
     size: (u16, u16),
     /// Everyone, departed included, from the last `list --all`.
@@ -322,7 +337,10 @@ impl App {
             set_kitty: 0,
             any_motion: false,
             rev: 0,
-            drag: None,
+            held: None,
+            edge: None,
+            pressed: None,
+            copying: None,
             size: (0, 0),
             all: Vec::new(),
             lists: HashMap::new(),
@@ -424,7 +442,8 @@ impl App {
             return;
         }
         (self.m.focused, self.homing) = (id, false);
-        (self.m.screen, self.m.selection, self.m.find) = (None, None, None);
+        (self.m.screen, self.m.find) = (None, None);
+        (self.held, self.edge, self.pressed) = (None, None, None);
         match self.live() {
             Some(who) => self.send(Request::View { who }),
             None => self.send(Request::Unview),
@@ -553,7 +572,10 @@ impl App {
                     false => self.focus(Some(resident.id)),
                 }
             }
-            Reply::Done { message, .. } => self.say(Say::Info, message),
+            Reply::Done { id, message } => match self.copying.take_if(|c| c.0 == id) {
+                Some((_, what)) => self.copy(message, &what),
+                None => self.say(Say::Info, message),
+            },
             Reply::Error { id, error } => {
                 if Some(id) == self.quit {
                     self.gone = None;
@@ -616,6 +638,7 @@ impl App {
         } else if self.live().is_none() {
             // Departed while on screen: the departed screen, and the host back to plain keys.
             (self.m.screen, self.m.find) = (None, None);
+            (self.held, self.edge) = (None, None);
             self.modes();
         } else {
             self.back(was);
@@ -654,7 +677,6 @@ impl App {
                 return;
             }
             _ => {
-                self.m.selection = None;
                 let now = self.clock();
                 self.before = self.typed.replace(now);
             }
@@ -850,26 +872,46 @@ impl App {
         let (col, row) = (ev.col.saturating_sub(1), ev.row.saturating_sub(1));
         // Left, with no motion or wheel bits (modifiers aside).
         let left = ev.button & 0b0110_0011 == 0;
+        let wheel = ev.button & 64 != 0;
+        // A press while one is held: its release was lost (outside the window, say).
         if left && ev.press {
-            (self.drag, self.m.selection) = (None, None);
+            (self.held, self.edge) = (None, None);
         }
-        if let Some((g, anchor)) = self.drag {
-            // The drag stays in the grid wherever the pointer goes.
-            let head = (col.clamp(g.x, g.right() - 1) - g.x, row.clamp(g.y, g.bottom() - 1) - g.y);
-            if ev.press && (head != anchor || self.m.selection.is_some()) {
-                self.m.selection = Some((anchor, head));
-            } else if !ev.press {
-                self.drag = None;
-                match self.m.selection {
-                    Some((a, b)) if a != b => self.copy(a, b),
-                    _ => self.m.selection = None,
-                }
+        if let Some(h) = self.held.as_mut().filter(|_| !wheel) {
+            // The drag stays in the grid wherever the pointer goes; past its top or bottom
+            // edge, the view moves a row every `EDGE` while it is held there.
+            let g = h.grid;
+            h.at = (col.clamp(g.x, g.right() - 1) - g.x, row.clamp(g.y, g.bottom() - 1) - g.y);
+            let past = match row {
+                r if r < g.y => Some(true),
+                r if r >= g.bottom() => Some(false),
+                _ => None,
+            };
+            let (at, moved) = (h.at, std::mem::replace(&mut h.sent, h.at) != h.at);
+            h.past = past;
+            if !ev.press {
+                (self.held, self.edge) = (None, None);
+                let what = String::new();
+                self.copying = self.select(Pointer::Release, at).map(|id| (id, what));
+                return;
+            }
+            self.edge = match past {
+                Some(_) => self.edge.or(Some(self.clock() + EDGE)),
+                None => None,
+            };
+            if moved {
+                self.select(Pointer::Drag, at);
             }
             return;
         }
         match self.hits.at(col, row) {
-            Some((r, Hit::Grid)) if left && ev.press && self.m.modes.mouse == 0 => {
-                self.drag = Some((r, (col - r.x, row - r.y)));
+            Some((g, Hit::Grid)) if left && ev.press && self.m.modes.mouse == 0 => {
+                let (at, now) = ((col - g.x, row - g.y), self.clock());
+                let double = self.pressed.is_some_and(|(t, c)| c == at && now - t < DOUBLE);
+                // A third press is a single click again.
+                self.pressed = (!double).then_some((now, at));
+                self.select(if double { Pointer::Double } else { Pointer::Press }, at);
+                self.held = Some(Held { grid: g, at, sent: at, past: None });
             }
             Some((r, Hit::Grid)) => {
                 if let Some(who) = self.live() {
@@ -881,12 +923,38 @@ impl App {
             Some((_, h)) if ev.press && ev.button & 0b1110_0011 == 0 => self.click(h),
             _ => {}
         }
+        // The wheel while a drag is held: the selection follows the pointer onto the rows it
+        // brought.
+        if let Some(at) = self.held.as_ref().filter(|_| wheel).map(|h| h.at) {
+            self.select(Pointer::Drag, at);
+        }
     }
 
-    /// The selection's text to `$GENSOKYO_COPY` (a shell command; `pbcopy` by default).
-    fn copy(&mut self, a: (u16, u16), b: (u16, u16)) {
-        let Some(fr) = &self.m.screen else { return };
-        let text = render::selected_text(fr, a, b);
+    /// What the pointer did in the resident's grid, for the daemon to select by.
+    fn select(&mut self, how: Pointer, (x, y): (u16, u16)) -> Option<u64> {
+        let who = self.live()?;
+        Some(self.send(Request::Select { who, how, x, y }))
+    }
+
+    /// When a drag held past the grid's edge next moves the view, on the clock.
+    pub fn edge(&self) -> Option<Instant> {
+        self.edge
+    }
+
+    /// The view a row further, back past the top edge or on past the bottom, once it is time.
+    pub fn tick(&mut self) {
+        let Some(h) = self.held.as_ref().filter(|_| self.edge.is_some_and(|t| t <= self.clock()))
+        else {
+            return;
+        };
+        let (how, at) = (if h.past == Some(true) { Pointer::Back } else { Pointer::On }, h.at);
+        self.edge = Some(self.clock() + EDGE);
+        self.select(how, at);
+    }
+
+    /// `text` to `$GENSOKYO_COPY` (a shell command; `pbcopy` by default): a selection, or
+    /// `what` it is.
+    fn copy(&mut self, text: String, what: &str) {
         let child = std::process::Command::new("/bin/sh")
             .args(["-c", &self.copy])
             // pbcopy reads bytes in the locale's encoding, and a bare environment has none.
@@ -904,7 +972,11 @@ impl App {
                     }
                     let _ = child.wait();
                 });
-                self.say(Say::Info, format!("copied {n} characters"));
+                let say = match what {
+                    "" => format!("copied {n} characters"),
+                    w => format!("copied {w}, {n} characters"),
+                };
+                self.say(Say::Info, say);
             }
             Err(e) => self.say(Say::Error, format!("copy: {e}")),
         }
@@ -1034,9 +1106,28 @@ impl App {
             }
             Chord::Find if self.live().is_some() => self.find(true),
             Chord::Find => {}
+            Chord::Copy => match self.focused() {
+                Some(r) => {
+                    let (who, what) = (r.id.clone(), format!("{}'s last answer", r.name));
+                    let id = self.send(Request::Read { who, screen: false, bare: true });
+                    self.copying = Some((id, what));
+                }
+                None => self.say(Say::Info, "nobody is on screen"),
+            },
             Chord::Cancel | Chord::Unbound => {}
         }
     }
+}
+
+/// A left press in the resident's grid, while the button is held.
+struct Held {
+    /// The grid when it was pressed.
+    grid: Rect,
+    /// The cell under the pointer, held to the grid, and the last one the daemon was sent.
+    at: (u16, u16),
+    sent: (u16, u16),
+    /// Past the grid's top edge (true) or its bottom.
+    past: Option<bool>,
 }
 
 /// The host's size, from the tty itself.

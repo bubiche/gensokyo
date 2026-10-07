@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 pub const SIDEBAR_W: u16 = 25;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
-pub(super) const CHORDS: [(&str, &str); 17] = [
+pub(super) const CHORDS: [(&str, &str); 18] = [
     ("n", "summon"),
     ("c", "cast"),
     ("b", "banish"),
@@ -29,6 +29,7 @@ pub(super) const CHORDS: [(&str, &str); 17] = [
     ("a", "needs you"),
     ("[", "scroll"),
     ("/", "search"),
+    ("y", "copy last"),
     ("1-9", "slot"),
     ("m", "mouse"),
     ("d", "detach"),
@@ -49,9 +50,6 @@ pub struct Model {
     pub modal: Option<Modal>,
     /// Mouse capture: chrome is clickable. Off leaves selection to the host terminal.
     pub capture: bool,
-    /// Our own selection in the grid: where the drag began and where it is, (column, row) in
-    /// grid cells, both included.
-    pub selection: Option<((u16, u16), (u16, u16))>,
     /// The leader was pressed and the next key is ours.
     pub leader: bool,
     /// A search through the scrollback: from its prompt until the view goes home.
@@ -261,13 +259,6 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
         Some(_) => {
             if let Some(fr) = &m.screen {
                 grid(fr, g, buf);
-            }
-            if let Some((a, b)) = m.selection {
-                for (y, xs) in spans(a, b, g.width).take_while(|(y, _)| *y < g.height) {
-                    for x in xs.start..xs.end.min(g.width) {
-                        buf[(g.x + x, g.y + y)].modifier.toggle(Modifier::REVERSED);
-                    }
-                }
             }
             hits.push(g, Hit::Grid);
         }
@@ -497,50 +488,6 @@ fn grid(fr: &Frame, g: Rect, buf: &mut Buffer) {
             );
         }
     }
-}
-
-/// A selection from `a` to `b` in reading order, as a terminal's is (not a rectangle): the
-/// cells of each row it covers.
-pub fn spans(
-    a: (u16, u16),
-    b: (u16, u16),
-    cols: u16,
-) -> impl Iterator<Item = (u16, std::ops::Range<u16>)> {
-    let (s, e) = if (a.1, a.0) <= (b.1, b.0) { (a, b) } else { (b, a) };
-    (s.1..=e.1).map(move |y| {
-        let start = if y == s.1 { s.0 } else { 0 };
-        (y, start..if y == e.1 { e.0 + 1 } else { cols })
-    })
-}
-
-/// The text of a selection: trailing blanks dropped from each row, and one line per row (the
-/// frame does not say which rows only wrapped). A wide character is in when either of its
-/// cells is.
-pub fn selected_text(fr: &Frame, a: (u16, u16), b: (u16, u16)) -> String {
-    let mut lines = Vec::new();
-    for (y, xs) in spans(a, b, fr.cols) {
-        let (mut line, mut x) = (String::new(), 0);
-        for run in fr.rows.get(y as usize).into_iter().flatten() {
-            // Cells no run covers are blank.
-            for gap in x..run.col {
-                if xs.contains(&gap) {
-                    line.push(' ');
-                }
-            }
-            x = run.col;
-            for ch in run.text.chars() {
-                let w = ratatui::text::Span::raw(ch.encode_utf8(&mut [0; 4]) as &str).width();
-                // A combining mark sits in the cell before it.
-                let at = if w == 0 { x.saturating_sub(1) } else { x };
-                if at < xs.end && at + w.max(1) as u16 > xs.start {
-                    line.push(ch);
-                }
-                x += w as u16;
-            }
-        }
-        lines.push(line.trim_end().to_string());
-    }
-    lines.join("\n")
 }
 
 /// A resident's style as ratatui's.

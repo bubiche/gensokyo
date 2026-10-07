@@ -1,7 +1,7 @@
 //! The client's App without a terminal: host bytes and daemon lines in, the requests it queues
 //! for the socket, the bytes it has for the host, and its model out.
 
-use gensokyo::client::app::{App, Config};
+use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::proto::{Card, Reply, Resident, RitualInfo, State};
@@ -671,4 +671,136 @@ fn in_a_git_repository_summon_asks_for_a_worktree_and_enter_works_right_there() 
     );
     assert_eq!(said(&a), Some(note), "the note is the user's to see");
     std::fs::remove_dir_all(&repo).unwrap();
+}
+
+/// A mouse report in SGR form: button, column and row (1-based), and press or release.
+fn sgr(a: &mut App, b: u8, x: u16, y: u16, press: bool) {
+    let end = if press { 'M' } else { 'm' };
+    host(a, format!("\x1b[<{b};{x};{y}{end}").as_bytes());
+}
+
+/// Reimu on screen at 120x40: her grid's first cell is column 27, row 2 in SGR terms.
+fn gridded() -> App {
+    let mut a = shrine();
+    let area = Rect::new(0, 0, 120, 40);
+    a.paint(area, &mut Buffer::empty(area));
+    sent(&mut a);
+    a
+}
+
+/// The pointer requests sent: what, and the grid cell.
+fn picks(out: &[Value]) -> Vec<(&str, u64, u64)> {
+    let selects = out.iter().filter(|r| r["t"] == "select");
+    selects
+        .map(|r| (r["how"].as_str().unwrap(), r["x"].as_u64().unwrap(), r["y"].as_u64().unwrap()))
+        .collect()
+}
+
+#[test]
+fn a_drag_in_the_grid_is_the_daemons_to_select_and_what_it_answers_is_copied() {
+    let mut a = gridded();
+    sgr(&mut a, 0, 27, 2, true);
+    sgr(&mut a, 32, 30, 3, true);
+    // The same cell again says nothing new; over the sidebar it is held to the grid.
+    sgr(&mut a, 32, 30, 3, true);
+    sgr(&mut a, 32, 10, 3, true);
+    sgr(&mut a, 0, 10, 3, false);
+    let out = sent(&mut a);
+    assert_eq!(picks(&out), [("press", 0, 0), ("drag", 3, 1), ("drag", 0, 1), ("release", 0, 1)]);
+    assert!(out.iter().all(|r| r["t"] == "select" && r["who"] == "id-Reimu"), "{out:?}");
+    // The release's answer is copied; any other `done` is said.
+    let id = out[3]["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Done { id, message: "two\nlines".into() });
+    assert_eq!(said(&a), Some("copied 9 characters"));
+    daemon(&mut a, Reply::Done { id, message: "news".into() });
+    assert_eq!(said(&a), Some("news"));
+    // With the resident's own mouse mode on, the press is the resident's.
+    let modes = Modes { mouse: 1000, sgr: true, ..Modes::default() };
+    let frame = Frame { cols: 80, rows: vec![], ..Frame::default() };
+    daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes });
+    sgr(&mut a, 0, 27, 2, true);
+    assert_eq!(kinds(&sent(&mut a)), ["input"]);
+}
+
+#[test]
+fn a_second_press_on_the_same_cell_soon_after_is_a_double_click_and_a_third_a_single() {
+    let mut a = gridded();
+    let click = |a: &mut App, x: u16| {
+        sgr(a, 0, x, 5, true);
+        sgr(a, 0, x, 5, false);
+    };
+    click(&mut a, 30);
+    click(&mut a, 30);
+    click(&mut a, 30);
+    a.later(Duration::from_millis(600));
+    click(&mut a, 30);
+    a.later(Duration::from_millis(400));
+    click(&mut a, 30);
+    click(&mut a, 31);
+    let out = sent(&mut a);
+    let presses: Vec<&str> =
+        picks(&out).into_iter().map(|p| p.0).filter(|h| *h != "release").collect();
+    assert_eq!(presses, ["press", "double", "press", "press", "double", "press"]);
+}
+
+#[test]
+fn held_past_the_grids_edge_a_drag_moves_the_view_on_the_clock_until_it_comes_back() {
+    let mut a = gridded();
+    sgr(&mut a, 0, 40, 20, true);
+    // Over the box's top border, past the grid's top edge: held to its first row.
+    sgr(&mut a, 32, 40, 1, true);
+    assert_eq!(picks(&sent(&mut a)), [("press", 13, 18), ("drag", 13, 0)]);
+    assert!(a.edge().is_some());
+    a.tick();
+    assert_eq!(sent(&mut a), Vec::<Value>::new(), "not yet");
+    a.later(EDGE);
+    a.tick();
+    a.later(EDGE);
+    a.tick();
+    assert_eq!(picks(&sent(&mut a)), [("back", 13, 0), ("back", 13, 0)]);
+    // Past the bottom edge, on toward the live screen.
+    sgr(&mut a, 32, 41, 40, true);
+    a.later(EDGE);
+    a.tick();
+    assert_eq!(picks(&sent(&mut a)), [("drag", 14, 37), ("on", 14, 37)]);
+    // Back inside, it stops.
+    sgr(&mut a, 32, 41, 20, true);
+    assert!(a.edge().is_none());
+    a.later(EDGE);
+    a.tick();
+    assert_eq!(picks(&sent(&mut a)), [("drag", 14, 18)]);
+    // So does a release past the edge.
+    sgr(&mut a, 32, 41, 1, true);
+    sgr(&mut a, 0, 41, 1, false);
+    assert!(a.edge().is_none());
+    a.later(EDGE);
+    a.tick();
+    assert_eq!(picks(&sent(&mut a)), [("drag", 14, 0), ("release", 14, 0)]);
+}
+
+#[test]
+fn the_wheel_while_a_drag_is_held_scrolls_and_the_selection_follows_the_pointer() {
+    let mut a = gridded();
+    sgr(&mut a, 0, 40, 20, true);
+    sgr(&mut a, 64, 40, 20, true);
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["select", "scroll", "select"]);
+    assert_eq!(picks(&out), [("press", 13, 18), ("drag", 13, 18)]);
+}
+
+#[test]
+fn leader_y_copies_the_last_answer_or_says_why_it_cannot() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dy");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["read"]);
+    assert_eq!((&out[0]["who"], &out[0]["bare"]), (&json!("id-Reimu"), &json!(true)));
+    let id = out[0]["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Done { id, message: "the answer".into() });
+    assert_eq!(said(&a), Some("copied Reimu's last answer, 10 characters"));
+    host(&mut a, b"\x1dy");
+    let id = sent(&mut a)[0]["id"].as_u64().unwrap();
+    let error = "Reimu has not finished a turn yet".to_string();
+    daemon(&mut a, Reply::Error { id, error: error.clone() });
+    assert_eq!(said(&a), Some(error.as_str()));
 }

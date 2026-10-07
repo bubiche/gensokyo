@@ -664,50 +664,6 @@ fn tiny_screens_do_not_panic() {
 }
 
 #[test]
-fn a_selection_reads_in_order_and_trims_each_row() {
-    let row = |runs: &[(u16, &str)]| -> Vec<Run> {
-        let run = |&(col, t): &(u16, &str)| Run { col, style: Style::default(), text: t.into() };
-        runs.iter().map(run).collect()
-    };
-    let fr = Frame {
-        cols: 12,
-        rows: vec![
-            row(&[(0, "one two    ")]),
-            // A wide character takes two cells, a combining mark none, and a gap is blank.
-            row(&[(0, "日本 e\u{301}"), (8, "x   ")]),
-            row(&[(0, "three       ")]),
-        ],
-        cursor: None,
-        ..Frame::default()
-    };
-    let text = |a, b| render::selected_text(&fr, a, b);
-    assert_eq!(text((4, 0), (2, 2)), "two\n日本 e\u{301}  x\nthr");
-    // Backwards is the same selection.
-    assert_eq!(text((2, 2), (4, 0)), text((4, 0), (2, 2)));
-    // Either half of a wide character takes it; the mark goes with its letter.
-    assert_eq!(text((1, 1), (2, 1)), "日本");
-    assert_eq!(text((5, 1), (5, 1)), "e\u{301}");
-    assert_eq!(text((9, 2), (11, 2)), "");
-}
-
-#[test]
-fn a_selection_is_reversed_in_the_grid_only() {
-    let mut m = shrine();
-    m.selection = Some(((90, 0), (3, 1)));
-    let mut buf = Buffer::empty(AREA);
-    render::render(&m, AREA, &mut buf);
-    let g = render::grid_rect(AREA);
-    let reversed = |x: u16, y: u16| buf[(x, y)].modifier.contains(Modifier::REVERSED);
-    let cells: Vec<(u16, u16)> = (0..AREA.height)
-        .flat_map(|y| (0..AREA.width).map(move |x| (x, y)))
-        .filter(|&(x, y)| reversed(x, y))
-        .collect();
-    let want: Vec<(u16, u16)> =
-        (90..g.width).map(|x| (g.x + x, g.y)).chain((0..4).map(|x| (g.x + x, g.y + 1))).collect();
-    assert_eq!(cells, want);
-}
-
-#[test]
 fn whoever_needs_you_is_gold_across_the_sidebar() {
     let m = aware();
     let mut buf = Buffer::empty(AREA);

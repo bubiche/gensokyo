@@ -127,9 +127,17 @@ fn next(who: &str, sent: Option<&Sent>, frame: &Frame, modes: Modes) -> Option<R
     }
 }
 
-/// Streams one resident's screen. Each is computed when the last has been written, against
-/// what this client was last sent, so a slow client skips screens rather than queueing them.
-pub(super) async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, mut nudge: bool) {
+/// Streams one resident's screen to connection `me`, its own selection drawn. Each is computed
+/// when the last has been written, against what this client was last sent, so a slow client
+/// skips screens rather than queueing them.
+pub(super) async fn view(
+    shrine: Shared,
+    h: Rc<Handle>,
+    who: String,
+    out: Out,
+    me: u64,
+    mut nudge: bool,
+) {
     let mut changes = h.changes();
     let mut sent: Option<Sent> = None;
     loop {
@@ -139,7 +147,7 @@ pub(super) async fn view(shrine: Shared, h: Rc<Handle>, who: String, out: Out, m
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         changes.borrow_and_update();
-        let (frame, modes) = (h.frame(), h.modes());
+        let (frame, modes) = (h.frame_for(me), h.modes());
         if let Some(r) = next(&who, sent.as_ref(), &frame, modes) {
             if !send_written(&out, &r).await {
                 return;

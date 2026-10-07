@@ -203,13 +203,13 @@ async fn summon_type_click_detach_reattach() {
     assert_eq!(c.reversed(), [(y as usize, "> hello".to_string())]);
     // Dragged back up and out over the sidebar, it stops at the grid's edge: rows in reading
     // order, and nothing of the sidebar.
-    let (_, top) = find(&s, "stub-claude Reimu");
+    let (_, top) = find(&s, "gensokyo on PATH");
     c.drag((x + 6, y), (1, top)).await;
     let grid = |l: &str| l.chars().skip(26).take(93).collect::<String>().trim_end().to_string();
     let rows: Vec<&str> = s.lines().skip(top as usize - 1).take((y - top + 1) as usize).collect();
     let want = rows.iter().map(|l| grid(l)).collect::<Vec<_>>().join("\n");
     c.wait("the second copy", |_| copied() == want).await;
-    assert!(want.starts_with("stub-claude Reimu") && !want.contains(['○', '│']), "{want:?}");
+    assert!(want.starts_with("gensokyo on PATH") && !want.contains(['○', '│']), "{want:?}");
     // A key clears it.
     c.send(b"x\x7f").await;
     let t = Instant::now();
@@ -521,6 +521,175 @@ async fn the_wheel_scrolls_back_for_every_client_and_a_letter_goes_home_and_on()
     c.wait("still back", back(3)).await;
     c.send(b"\x1b").await;
     c.wait("home at last", |s| !s.contains("esc returns")).await;
+    for mut c in [c, c2] {
+        c.send(b"\x1dd").await;
+        assert!(c.exit().await.success());
+    }
+}
+
+/// The sidebar's rows read as one line, so a message that wraps there can be matched.
+fn side(s: &str) -> String {
+    let rows = s.lines().map(|l| l.chars().skip(1).take(23).collect::<String>());
+    rows.map(|r| r.trim().to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// A grid row of a 120-column client's screen (1-based), trailing blanks dropped.
+fn grid_row(s: &str, y: u16) -> String {
+    let line = s.lines().nth(y as usize - 1).unwrap_or_default();
+    line.chars().skip(26).take(93).collect::<String>().trim_end().to_string()
+}
+
+impl Client {
+    /// One SGR mouse report: button, cell (1-based), press or release.
+    async fn mouse(&mut self, b: u8, (x, y): (u16, u16), press: bool) {
+        let end = if press { 'M' } else { 'm' };
+        self.send(format!("\x1b[<{b};{x};{y}{end}").as_bytes()).await;
+    }
+
+    /// Reads until the reversed rows, trimmed, are `want`, or fails after 10 s.
+    async fn picked(&mut self, want: &[(u16, &str)]) {
+        let t = Instant::now();
+        loop {
+            let got =
+                self.reversed().into_iter().map(|(y, s)| (y as u16, s.trim_end().to_string()));
+            let got: Vec<(u16, String)> = got.filter(|(_, s)| !s.is_empty()).collect();
+            if got.iter().map(|(y, s)| (*y, s.as_str())).eq(want.iter().copied()) {
+                return;
+            }
+            assert!(t.elapsed() < Duration::from_secs(10), "selected {got:?}, not {want:?}");
+            let t = Instant::now();
+            self.wait("a frame", |_| t.elapsed() > Duration::from_millis(50)).await;
+        }
+    }
+}
+
+/// Reimu, summoned from the CLI, on screen in a 120x40 client, reading her tty.
+async fn reimu(dir: &Path) -> Client {
+    cli(dir, &["new", "work", "-n", "Reimu"]);
+    let mut c = Client::spawn(dir, 120, 40);
+    c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
+    // A focused terminal, watching her: her finished turns ring nothing over the messages.
+    c.send(b"\x1b[I").await;
+    c.wait("the stub reading", |_| ready(dir) == 1).await;
+    let t = Instant::now();
+    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_drag_copies_soft_wraps_joined_line_breaks_kept_and_wide_characters_whole() {
+    let dir = state("copy");
+    let _quit = Quit(dir.clone());
+    let mut c = reimu(&dir).await;
+    let copied = || std::fs::read_to_string(dir.join("copied")).unwrap_or_default();
+
+    // Before any turn, there is no answer to copy.
+    c.send(b"\x1dy").await;
+    c.wait("no answer", |s| side(s).contains("Reimu has not finished a turn yet")).await;
+
+    // A line longer than the 93-column grid: the stub's echo of it wraps onto a second row.
+    let long: Vec<String> = (0..30).map(|i| format!("w{i:02}")).collect();
+    let long = long.join(" ");
+    c.send(format!("{long}\r").as_bytes()).await;
+    let s = c.wait("the long echo", |s| s.contains("> w00")).await;
+    let (x, y) = find(&s, "> w00");
+    assert!(grid_row(&s, y + 1).starts_with(" w23"), "{s}");
+    c.drag((x, y), (119, y + 1)).await;
+    let want = format!("> {long}");
+    c.wait("the long line, joined", |_| copied() == want).await;
+    c.wait("the message", |s| s.contains("copied 121 characters")).await;
+
+    // A double click: the word.
+    let w05 = (x + 2 + 5 * 4, y);
+    for press in [true, false, true, false] {
+        c.mouse(0, w05, press).await;
+    }
+    c.wait("the word", |_| copied() == "w05").await;
+    c.picked(&[(y, "w05")]).await;
+
+    // Two lines, each a line of its own.
+    c.send(b"one\r").await;
+    c.wait("one", |s| s.contains("> one")).await;
+    c.send(b"two\r").await;
+    let s = c.wait("two", |s| s.contains("> two")).await;
+    let (x, y) = find(&s, "> one");
+    c.drag((x, y), (x + 4, y + 2)).await;
+    c.wait("the two lines", |_| copied() == "> one\ntwo\n> two").await;
+
+    // Wide characters and a combining mark, whole, from either half of the first.
+    c.send("日本語 🍣 cafe\u{301}\r".as_bytes()).await;
+    let s = c.wait("the wide echo", |s| s.contains("> 日本語")).await;
+    let (x, y) = find(&s, "> 日本語");
+    c.drag((x, y), (119, y)).await;
+    c.wait("the wide line", |_| copied() == "> 日本語 🍣 cafe\u{301}").await;
+    c.drag((x + 3, y), (119, y)).await;
+    c.wait("from the second half", |_| copied() == "日本語 🍣 cafe\u{301}").await;
+
+    // Ctrl-] y: the last answer, as the stub gave it, once its turn is in.
+    let log = || std::fs::read_to_string(dir.join("daemon.log")).unwrap_or_default();
+    c.wait("four turns", |_| log().matches("\"event\":\"Stop\"").count() == 4).await;
+    c.send(b"\x1dy").await;
+    c.wait("the answer", |_| copied() == "echo: 日本語 🍣 cafe\u{301}").await;
+    c.wait("its message", |s| side(s).contains("copied Reimu's last answer")).await;
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrolls_back() {
+    let dir = state("drag");
+    let _quit = Quit(dir.clone());
+    let mut c = reimu(&dir).await;
+    let mut c2 = Client::spawn(&dir, 120, 40);
+    c2.wait("Reimu, twice", |s| s.contains("stub-claude Reimu")).await;
+    let t = Instant::now();
+    c2.wait("its nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    let copied = || std::fs::read_to_string(dir.join("copied")).unwrap_or_default();
+    let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
+    c.send(format!("\x1b[200~{}\x1b[201~\r", lines.join("\r")).as_bytes()).await;
+    let s = c.wait("the echo", |s| s.contains("> line59")).await;
+
+    // Held over three lines while the other client types: the rows move up, the selection
+    // with them, on this client's screen only.
+    let (x, y) = find(&s, "> line50");
+    c.mouse(0, (x, y), true).await;
+    c.mouse(32, (x + 7, y + 2), true).await;
+    let held = |y: u16| [(y, "> line50"), (y + 1, "> line51"), (y + 2, "> line52")];
+    c.picked(&held(y)).await;
+    c2.send(b"more\r").await;
+    c2.wait("the other client's line", |s| s.contains("> more")).await;
+    c.picked(&held(y - 2)).await;
+    c2.picked(&[]).await;
+    c.mouse(0, (x + 7, y + 2), false).await;
+    c.wait("the three lines", |_| copied() == "> line50\n> line51\n> line52").await;
+
+    // From the end of the last line, up past the grid's top edge: back a row at a time until
+    // the pointer comes back in, at the grid's first cell.
+    let s = c.wait("the other line here", |s| s.contains("> more")).await;
+    let (x, y) = find(&s, "> more");
+    c.mouse(0, (x + 5, y), true).await;
+    c.mouse(32, (27, 1), true).await;
+    c.wait("scrolled back", |s| s.contains("↑ ") && !s.contains("↑ 1 ")).await;
+    c.mouse(32, (27, 2), true).await;
+    let mut last = String::new();
+    let s = loop {
+        let t = Instant::now();
+        let s = c.wait("a moment", |_| t.elapsed() > Duration::from_millis(200)).await;
+        if s == last {
+            break s;
+        }
+        last = s;
+    };
+    let top = grid_row(&s, 2);
+    let k: usize = top.strip_prefix("> line").and_then(|n| n.parse().ok()).expect(&top);
+    c.mouse(0, (27, 2), false).await;
+    let mut want: Vec<String> = (k..60).map(|i| format!("> line{i}")).collect();
+    want.extend(["more".into(), "> more".into()]);
+    let want = want.join("\n");
+    c.wait("everything from there", |_| copied() == want).await;
+    // Every client scrolled with it; only this one shows the selection.
+    c2.wait("scrolled back there too", |s| grid_row(s, 2) == top).await;
+    c2.picked(&[]).await;
     for mut c in [c, c2] {
         c.send(b"\x1dd").await;
         assert!(c.exit().await.success());

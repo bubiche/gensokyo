@@ -1,13 +1,14 @@
 //! The wire protocol: one JSON object per line over a unix socket, both ways. A client says
 //! `hello` first and gets `welcome`; every other request carries an `id` its reply echoes.
-//! `watch`, `view`, `unview`, `input`, `scroll`, `search`, `resize`, `focus`, `hook` and
-//! `statusline` are answered only when they fail; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
+//! `watch`, `view`, `unview`, `input`, `scroll`, `search`, `select`, `resize`, `focus`, `hook`
+//! and `statusline` are answered only when they fail, except a `select` release with something
+//! selected, answered with `done` and its text; `wait` when its residents have news. `watch` also brings `rituals` at once and whenever the timetable changes. Events carry no `id` and go only to connections that asked for them
 //! (`watch`, `view`).
 
-use crate::vt::{Frame, Modes, Run};
+use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 8;
+pub const PROTO: u32 = 9;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -78,6 +79,15 @@ pub enum Request {
         #[serde(default)]
         back: bool,
     },
+    /// What the pointer did at cell `x`, `y` of the resident's screen as shown: this
+    /// connection's own selection, drawn in its frames alone and kept on its text as output
+    /// comes. A release with something selected is answered with `done` and its text.
+    Select {
+        who: String,
+        how: Pointer,
+        x: u16,
+        y: u16,
+    },
     /// The size of the client's grid: every live resident and every later summon takes it.
     /// The last client to say wins.
     Resize {
@@ -102,10 +112,13 @@ pub enum Request {
     /// they departed. Answered with `waited`, whether that came or the timeout did.
     Wait(Wait),
     /// A resident's last answer, kept past its departure; with `screen`, its live screen as text.
+    /// With `bare`, the answer's text alone, and an error when its last turn left none.
     Read {
         who: String,
         #[serde(default)]
         screen: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bare: bool,
     },
     /// The client's host terminal gained or lost focus. Until it first says, it has not.
     Focus {

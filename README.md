@@ -425,7 +425,9 @@ version of it is refused. Script against the commands.
   `GENSOKYO_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gensokyo`.
 - `~/.local/state/gensokyo/`: `residents/` and `departed/` (one JSON record each), `answers/`
   (each resident's last answer), `daemon.log`, `run/` (the socket and locks), and each ritual's
-  notes, journal and probe output. `GENSOKYO_STATE_DIR` moves it.
+  notes, journal and probe output. `GENSOKYO_STATE_DIR` moves it. `daemon.log` moves to
+  `daemon.log.1` past 5 MB. A departed record, and its answer, is forgotten once it is more than
+  30 days old and over 100 others have left since; a ritual keeps its newest 50 runs.
 
 ## Building and developing
 

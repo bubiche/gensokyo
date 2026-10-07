@@ -1330,3 +1330,35 @@ fn hooks_and_the_status_line_say_where_a_resident_works_and_the_newer_wins() {
     let after = next(&mut lines)["residents"].clone();
     assert_eq!(after[0]["branch"], "main", "{after}");
 }
+
+#[test]
+fn a_restart_sweeps_answers_whose_record_is_gone() {
+    let d = Daemon::new("answers", &[]);
+    for dir in ["departed", "answers"] {
+        std::fs::create_dir_all(d.dir.join(dir)).unwrap();
+    }
+    let rec = json!({"id": "kept", "session": "kept", "name": "Cirno", "slot": null, "cwd": "/",
+                     "program": "claude", "argv": [], "launched": 1, "departed": 2});
+    std::fs::write(d.dir.join("departed/kept.json"), rec.to_string()).unwrap();
+    for id in ["kept", "stray"] {
+        std::fs::write(d.dir.join(format!("answers/{id}.json")), "{}").unwrap();
+    }
+    d.cli(&["list"]);
+    assert!(d.dir.join("answers/kept.json").exists());
+    assert!(!d.dir.join("answers/stray.json").exists());
+}
+
+#[test]
+fn the_log_moves_aside_once_past_its_size() {
+    let d = Daemon::start("logsize", &[("GENSOKYO_LOG_BYTES", "2000")]);
+    // Each new asker in another protocol is one line.
+    for i in 0..40 {
+        talk(&d, 99, &format!("asker{i}"), &[]);
+    }
+    let old = std::fs::read_to_string(d.dir.join("daemon.log.1")).unwrap();
+    assert!(old.lines().all(|l| serde_json::from_str::<Value>(l).is_ok()), "{old}");
+    let now = std::fs::metadata(d.dir.join("daemon.log")).unwrap().len();
+    assert!(now < 2000, "{now} bytes");
+    talk(&d, 99, "last", &[]);
+    assert!(d.log().iter().any(|e| e["who"] == "last"), "{:?}", d.log());
+}

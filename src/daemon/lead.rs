@@ -69,9 +69,7 @@ pub(super) fn record(sh: &Shrine, who: &str) -> Option<Record> {
     if let Some(i) = here {
         return Some(sh.entries[i].rec.clone());
     }
-    let mut gone = sh.store.load_departed();
-    gone.retain(|r| r.id == who || r.name.eq_ignore_ascii_case(who));
-    gone.into_iter().max_by_key(|r| (r.id == who, r.departed))
+    sh.store.find_departed(who)
 }
 
 /// Whether `lead` is here, with a wait open that names `id` and counts its turns.

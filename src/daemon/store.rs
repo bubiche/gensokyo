@@ -14,6 +14,12 @@ use std::path::{Path, PathBuf};
 /// leaves one a run.
 pub const RUNS_KEPT: usize = 50;
 
+/// Departed records always kept, newest first, however old.
+pub const DEPARTED_KEPT: usize = 100;
+
+/// Past the newest `DEPARTED_KEPT`, a record departed longer ago than this goes.
+pub const DEPARTED_DAYS: i64 = 30;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     /// The resident's id and its first session id.
@@ -113,6 +119,7 @@ impl Store {
         if let Some(slug) = &r.ritual {
             self.trim(slug);
         }
+        self.cap();
         logged("retire", r, w)
     }
 
@@ -146,6 +153,78 @@ impl Store {
         self.gone().values().cloned().collect()
     }
 
+    /// The departed record `who` is the id of, else the newest called that.
+    pub fn find_departed(&self, who: &str) -> Option<Record> {
+        let gone = self.gone();
+        let named = gone.values().filter(|r| r.id == who || r.name.eq_ignore_ascii_case(who));
+        named.max_by_key(|r| (r.id == who, r.departed)).cloned()
+    }
+
+    /// At start: the departed past keeping, and answers whose record is gone.
+    pub fn sweep(&self) {
+        self.cap();
+        let gone = self.gone();
+        let files = std::fs::read_dir(self.root.join("answers")).into_iter().flatten().flatten();
+        for p in files.map(|e| e.path()) {
+            let id = p.file_stem().unwrap_or_default().to_string_lossy();
+            let here = self.residents().join(format!("{id}.json")).exists();
+            if p.extension().is_some_and(|x| x == "json") && !here && !gone.contains_key(&*id) {
+                let _ = remove(&p);
+            }
+        }
+    }
+
+    /// Departed records past the newest `DEPARTED_KEPT` and older than `DEPARTED_DAYS`, gone.
+    /// Never the session a persistent ritual keeps, nor a helper whose lead is still kept and
+    /// has not heard that it departed.
+    fn cap(&self) {
+        let old = now() - DEPARTED_DAYS * 86400;
+        let mut gone = self.gone();
+        let mut all: Vec<(Option<i64>, i64, &String)> =
+            gone.values().map(|r| (r.departed, r.launched, &r.id)).collect();
+        all.sort_by(|a, b| b.cmp(a));
+        let past: Vec<String> = all
+            .into_iter()
+            .skip(DEPARTED_KEPT)
+            .filter(|(d, l, _)| d.unwrap_or(*l) < old)
+            .map(|(.., id)| id.clone())
+            .collect();
+        let mut sessions = HashMap::new();
+        let mut dropped = 0;
+        for id in past {
+            let r = &gone[&id];
+            if let Some(slug) = &r.ritual {
+                let kept = sessions
+                    .entry(slug.clone())
+                    .or_insert_with(|| crate::ritual::Dir::at(&self.root, slug).session());
+                if kept.as_ref() == Some(&id) {
+                    continue;
+                }
+            }
+            if let Some(lead) = r.owner.as_deref().filter(|_| !r.told_gone) {
+                let here = self.residents().join(format!("{lead}.json")).exists();
+                if here || gone.contains_key(lead) {
+                    continue;
+                }
+            }
+            self.drop_record(&mut gone, &id, "cap");
+            dropped += 1;
+        }
+        if dropped > 0 {
+            log(json!({"ev": "departed", "dropped": dropped}));
+        }
+    }
+
+    /// A departed record gone for good, and its answer with it.
+    fn drop_record(&self, gone: &mut HashMap<String, Record>, id: &str, op: &str) {
+        gone.remove(id);
+        let w = remove(&self.departed().join(format!("{id}.json")))
+            .and_then(|()| remove(&self.answer(id)));
+        if let Err(e) = w {
+            log(json!({"ev": "record", "id": id, "op": op, "error": e.to_string()}));
+        }
+    }
+
     /// The oldest runs of ritual `slug` past `RUNS_KEPT`, gone. Never the session a persistent
     /// ritual keeps, however old.
     fn trim(&self, slug: &str) {
@@ -158,10 +237,7 @@ impl Store {
             .collect();
         runs.sort_by(|a, b| b.cmp(a));
         for (.., id) in runs.into_iter().skip(RUNS_KEPT) {
-            gone.remove(&id);
-            if let Err(e) = remove(&self.departed().join(format!("{id}.json"))) {
-                log(json!({"ev": "record", "id": id, "op": "trim", "error": e.to_string()}));
-            }
+            self.drop_record(&mut gone, &id, "trim");
         }
     }
 }

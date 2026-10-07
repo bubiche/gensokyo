@@ -107,6 +107,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
             Err(e) => log(json!({"ev": "record", "error": e})),
         }
     }
+    store.sweep();
     let shrine = Rc::new(RefCell::new(Shrine {
         entries: Vec::new(),
         store,

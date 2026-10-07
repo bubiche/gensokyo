@@ -640,10 +640,10 @@ fn notices_from_before_take_their_places_and_those_nobody_heard_are_said_once() 
     assert_eq!(said(&a), Some("2 notices while you were away: ^] h"));
     // Old news: no bell, nothing to the desktop.
     assert!(a.host.is_empty(), "{:?}", String::from_utf8_lossy(&a.host));
-    // One is counted too; none, not at all.
+    // One is said as it is; none, not at all.
     let mut a = shrine();
     daemon(&mut a, Reply::Notices { notices: vec![notice(30, "⏲ tea: not delivered", true)] });
-    assert_eq!(said(&a), Some("1 notice while you were away: ^] h"));
+    assert_eq!(said(&a), Some("⏲ tea: not delivered"));
     let mut a = shrine();
     daemon(&mut a, Reply::Notices { notices: vec![notice(30, "⏲ tea: not delivered", false)] });
     assert_eq!((said(&a), history(&a)), (None, vec!["⏲ tea: not delivered"]));

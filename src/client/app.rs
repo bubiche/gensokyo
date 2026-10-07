@@ -413,21 +413,23 @@ impl App {
     }
 
     /// The daemon's notices from before this client came, into the history in their places.
-    /// How many nobody has heard yet is said once.
+    /// One nobody has heard yet is said once; more, how many.
     fn notices(&mut self, notices: Vec<proto::Notice>) {
-        let missed = notices.iter().filter(|n| n.missed).count();
+        let missed: Vec<&proto::Notice> = notices.iter().filter(|n| n.missed).collect();
+        let text = match missed[..] {
+            [] => None,
+            [one] => Some(tele::clean(&one.text, proto::NOTICE_MOST)),
+            _ => Some(format!("{} notices while you were away: ^] h", missed.len())),
+        };
         for n in notices {
             let text = tele::clean(&n.text, proto::NOTICE_MOST);
             self.m.history.push((n.at, Message::new(Say::Notice, text)));
         }
         self.m.history.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         self.m.history.truncate(HISTORY);
-        let text = match missed {
-            0 => return,
-            1 => "1 notice while you were away: ^] h".into(),
-            n => format!("{n} notices while you were away: ^] h"),
-        };
-        self.show(Message::new(Say::Notice, text), ERROR_LIFE);
+        if let Some(text) = text {
+            self.show(Message::new(Say::Notice, text), ERROR_LIFE);
+        }
     }
 
     /// When the message on show runs out.

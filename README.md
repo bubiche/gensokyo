@@ -103,8 +103,8 @@ What the shrine has to say (a cast's reply, an error, a ritual's notice) shows a
 sidebar's buttons for a few seconds, and one too long for its five rows ends in `^] h`.
 `Ctrl-] h` is the history: every message since the client opened and the daemon's last 20
 notices, newest first, each in full with how long ago it came. `j`/`k`, the arrows and
-PgUp/PgDn scroll it; Esc, `q` or `h` close it. A client that opens after notices no client was
-there for says so once.
+PgUp/PgDn scroll it; Esc, `q` or `h` close it. A client that opens after a notice no client
+was there for shows it once (after several, how many).
 
 Everything is also a click: the sidebar's lines focus a resident, and every button carries the
 key that does the same thing (`[summon n]`). `[mouse: shrine m]` turns mouse capture off, which
@@ -128,8 +128,8 @@ all back under recall. Each of these is also a command, for scripts (below).
 
 When the daemon itself crashes, the next one (launchd's, or the next `gensokyo`'s) brings
 everyone back into their own conversations, their turns cut off, and the first client to open
-is told there is a notice in the history saying so. A second crash within 10 minutes of that
-leaves them departed, to recall by hand.
+is told so (and it stays in the history). A second crash within 10 minutes of that leaves them
+departed, to recall by hand.
 
 ## When a resident needs you
 

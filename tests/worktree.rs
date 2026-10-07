@@ -89,7 +89,12 @@ fn a_worktree_starts_from_the_fetched_default_and_is_reused_by_its_name() {
 #[test]
 fn a_branch_only_the_remote_has_is_tracked() {
     let (d, work) = setup("remote", "");
-    git(&work, &["push", "-q", "origin", "HEAD:refs/heads/review-me"]);
+    git(
+        &work,
+        &["push", "-q", "origin", "HEAD:refs/heads/review-me", "HEAD:refs/heads/x/review-me"],
+    );
+    // A clone that fetches only main, as a single-branch one does.
+    git(&work, &["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
     let r = summon(&d, &work, json!({"worktree": {"slug": "rev", "branch": "review-me"}}));
     assert_eq!(r["t"], "summoned", "{r}");
     let wt = work.join(".claude/worktrees/rev");
@@ -159,4 +164,51 @@ fn a_ritual_runs_in_its_worktree_in_the_same_subdirectory() {
     assert!(!work.join("app/.git").exists());
     let exclude = std::fs::read_to_string(work.join(".git/info/exclude")).unwrap();
     assert!(exclude.contains("/.claude/worktrees/"), "{exclude}");
+}
+
+#[test]
+fn names_that_git_would_read_as_options_are_refused() {
+    let (d, work) = setup("names", "");
+    // Run by a fetch from a local origin, were it read as an option.
+    let evil = "--upload-pack=touch${IFS}PWNED;git-upload-pack";
+    let r = summon(&d, &work, json!({"worktree": {"slug": "a", "branch": evil}}));
+    assert!(r["error"].as_str().unwrap().contains("cannot be a branch name"), "{r}");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "b", "branch": "a b"}}));
+    assert!(r["error"].as_str().unwrap().contains("a b cannot be a branch name"), "{r}");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "c", "base": "--lock"}}));
+    assert!(r["error"].as_str().unwrap().contains("--base --lock: no such commit"), "{r}");
+    // The default branch is the remote's to name.
+    let theirs = format!("refs/remotes/origin/{evil}");
+    git(&work, &["update-ref", &theirs, "HEAD"]);
+    git(&work, &["symbolic-ref", "refs/remotes/origin/HEAD", &theirs]);
+    let r = summon(&d, &work, json!({"worktree": {"slug": "e"}}));
+    assert!(r["error"].as_str().unwrap().contains("origin's default"), "{r}");
+    for dir in [&work, &d.dir, &d.dir.join("remote.git")] {
+        assert!(!dir.join("PWNED").exists(), "ran in {}", dir.display());
+    }
+}
+
+#[test]
+fn worktrees_go_under_the_main_checkout_and_broken_ones_are_refused() {
+    let (d, work) = setup("broken", "");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "a"}}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    // From inside a worktree: beside it, not in it.
+    let r = summon(&d, &work.join(".claude/worktrees/a"), json!({"worktree": {"slug": "b"}}));
+    assert_eq!(r["resident"]["cwd"], json!(work.join(".claude/worktrees/b")), "{r}");
+
+    // Its directory removed by hand, and still registered.
+    std::fs::remove_dir_all(work.join(".claude/worktrees/b")).unwrap();
+    for ask in [json!({"slug": "b"}), json!({"slug": "c", "branch": "b"})] {
+        let r = summon(&d, &work, json!({"worktree": ask}));
+        let e = r["error"].as_str().unwrap();
+        assert!(e.contains("worktrees/b is registered but its directory is gone"), "{r}");
+    }
+
+    // Cut off while git made it: still locked as it was while being made.
+    let half = work.join(".claude/worktrees/half");
+    let args = ["worktree", "add", "-q", "--lock", "--reason", "initializing", "-b", "half"];
+    git(&work, &[&args[..], &[half.to_str().unwrap()]].concat());
+    let r = summon(&d, &work, json!({"worktree": {"slug": "half"}}));
+    assert!(r["error"].as_str().unwrap().contains("its checkout was cut off"), "{r}");
 }

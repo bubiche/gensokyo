@@ -312,12 +312,15 @@ closes them. A resident it summons is its **helper**, and it the helper's **lead
 draws helpers under their lead with `└`.
 
 **Worktrees.** `gensokyo new <dir> --worktree <name>` summons into
-`<repo>/.claude/worktrees/<name>`, where Claude Code keeps its own, on branch `<name>` (with
+`<repo>/.claude/worktrees/<name>` under the main checkout (from inside another worktree too),
+where Claude Code keeps its own, on branch `<name>` (with
 `BRANCH_PREFIX` from the config in front, or `--branch`). An existing worktree of that name is
-reused. A branch only the remote has is checked out tracking it, to review a pull request; a new
+reused. A branch only the remote has is checked out tracking it, to review a pull request (a
+single-branch clone gets it added to `origin`'s fetched branches); a new
 one starts from the remote's default branch, fetched first, or `--base`. Started from a
 subdirectory of the repository, the resident works in the same one inside the worktree. A
-branch checked out elsewhere is refused. The summon dialog asks for a worktree after the name
+branch checked out elsewhere is refused, and so is a worktree whose directory is gone or whose
+checkout was cut off, with the git command that clears it. The summon dialog asks for a worktree after the name
 when the directory is in a git repository; leaving it empty works right there. gensokyo never
 removes a worktree: `git worktree remove` is yours. It does not use `claude --worktree`, whose
 `/exit` stops at a keep-or-remove question. A lead's skill gives each helper its own this way.

@@ -117,9 +117,12 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
     } else {
         let (mut back, mut not) = (Vec::new(), Vec::new());
         for r in &left.records {
+            // The session a spooled hook may have moved it on to since.
+            let gone = shrine.borrow().store.load_departed_id(&r.id);
+            let session = gone.map_or(r.session.clone(), |g| g.session);
             let why = if left.running.contains(&r.id) {
                 Err("its claude would not stop".to_string())
-            } else if !has_conversation(&r.session) {
+            } else if !has_conversation(&session) {
                 Err("no conversation to resume".to_string())
             } else {
                 recall(shrine, &r.id, None).map(|_| ())

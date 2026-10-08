@@ -786,6 +786,14 @@ impl Daemon {
         self.settle();
     }
 
+    /// The first fire's probe done, and its fire on its way: until then the ritual is still
+    /// probing, and a minute's tick skips its probe.
+    fn first_probe(&self) {
+        let said = |l: &Value| l["slug"] == "watch" && l["probe"].is_string();
+        wait(|| self.log().iter().any(said), "the first fire's probe");
+        assert_eq!(self.calls(), 1);
+    }
+
     fn calls(&self) -> usize {
         std::fs::read_to_string(self.dir.join("calls")).map_or(0, |c| c.lines().count())
     }
@@ -1070,7 +1078,7 @@ fn a_probed_fire_into_a_resident_still_starting_is_sent_once_and_measures_the_ne
         deliver: now\n---\nKeep the page current.\n";
     // Seen in a minute of its schedule, so it fires at once: the first time always does.
     d.ritual("watch", text);
-    wait(|| d.calls() == 1, "the first fire's probe");
+    d.first_probe();
 
     // Two more minutes of the change while the prompt waits for Sakuya: not probed, so not sent
     // again behind it.
@@ -1227,7 +1235,7 @@ fn a_held_probe_fire_types_the_newest_once_and_a_fire_by_hand_still_sends() {
     let text = "---\nschedule: \"* * * * *\"\ncwd: \"@cwd\"\nwhen: feed\ntarget: Sakuya\n---\n\
         Keep the page current.\n";
     d.ritual("watch", text);
-    wait(|| d.calls() == 1, "the first fire's probe");
+    d.first_probe();
     // The output changes while the fire is held: the probe runs on, and the newer one replaces it.
     std::fs::write(d.dir.join("feed"), "line-two\n").unwrap();
     d.minute(1);

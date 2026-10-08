@@ -99,6 +99,11 @@ pub struct Line {
     backslash: bool,
     /// Inside a bracketed paste, where everything is text.
     paste: bool,
+    /// An Enter went in after text, the user's or a card's: a prompt whose hook may not have
+    /// come yet.
+    sent: bool,
+    /// Typed since that Enter: its prompt hook, coming late, leaves this in the line.
+    after: bool,
 }
 
 /// One key's effect on the input line.
@@ -167,17 +172,27 @@ impl Line {
         let newline = std::mem::take(&mut self.backslash);
         match k {
             Key::Text(c) => {
-                if !self.draft {
+                // A new line's first key, or the first after an Enter that may have sent it.
+                if !self.draft || (self.sent && !self.after) {
                     self.command = matches!(c, '/' | '!');
                 }
-                (self.draft, self.backslash) = (true, c == '\\');
+                (self.draft, self.backslash, self.after) = (true, c == '\\', true);
             }
             // Whatever it brings back, only its own hook says it went.
-            Key::Recall => (self.draft, self.command) = (true, false),
-            Key::Clear => (self.draft, self.command) = (false, false),
+            Key::Recall => (self.draft, self.command, self.after) = (true, false, true),
+            Key::Clear => *self = Line { paste: self.paste, ..Line::default() },
             Key::Enter if self.command && !newline => (self.draft, self.command) = (false, false),
+            Key::Enter if self.draft && !newline => (self.sent, self.after) = (true, false),
             Key::Enter => {}
         }
+    }
+
+    /// A prompt went in. Only what was typed after the Enter that sent it is still there.
+    fn went_in(&mut self) {
+        *self = match (self.sent, self.after) {
+            (true, true) => Line { sent: false, ..*self },
+            _ => Line::default(),
+        };
     }
 }
 
@@ -226,7 +241,7 @@ impl Aware {
                 self.set(None, None);
                 self.running = true;
                 self.prompted = true;
-                self.line = Line::default();
+                self.line.went_in();
             }
             ("Stop", _) => {
                 self.set(Some(Pending::Stopped), text);
@@ -330,6 +345,7 @@ impl Aware {
     pub fn entered(&mut self, mark: u64, at: i64) {
         if let Some(t) = self.typing.as_mut().filter(|t| t.n == mark) {
             t.entered = Some(at);
+            (self.line.sent, self.line.after) = (true, false);
         }
     }
 

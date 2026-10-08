@@ -523,6 +523,36 @@ fn a_draft_is_kept_from_the_keys_to_the_next_prompt_and_never_typed_into_a_dialo
 }
 
 #[test]
+fn what_is_typed_after_a_prompt_is_sent_outlasts_that_prompts_late_hook() {
+    let draft = |a: &Aware| a.blocked().is_some_and(|b| b.contains("half typed"));
+    let prompt = |at| hook(json!({"hook_event_name": "UserPromptSubmit"}), at);
+    let mut a = Aware::default();
+    a.registry(Some(Registry::Idle), 1);
+    // The next prompt begun before the hook of the one sent lands: it is still in the line.
+    a.typed(b"one\r");
+    a.typed(b"tw");
+    a.hook(&prompt(2));
+    assert!(draft(&a));
+    a.typed(b"o\r");
+    a.hook(&prompt(3));
+    assert_eq!(a.blocked(), None);
+    // So is a key after a card's Enter, before the card's hook.
+    let m = a.mark();
+    a.entered(m, 4);
+    a.typed(b"m");
+    a.hook(&prompt(5));
+    assert!(draft(&a));
+    a.typed(b"\x03");
+    assert_eq!(a.blocked(), None);
+    // A command typed after the Enter runs, and Ctrl-C clears; either leaves nothing.
+    for keys in [&b"one\r/cost\r"[..], b"one\rtw\x03"] {
+        a.typed(keys);
+        a.hook(&prompt(6));
+        assert_eq!(a.blocked(), None, "{keys:?}");
+    }
+}
+
+#[test]
 fn a_remote_url_names_its_repo_by_the_path_after_the_host() {
     let cases = [
         ("git@github.com:acme/app.git", Some("acme/app")),

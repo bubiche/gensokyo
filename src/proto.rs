@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 13;
+pub const PROTO: u32 = 14;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -174,6 +174,14 @@ pub struct Hook {
     /// Where Claude works when the hook ran: it follows a `cd`, the launch dir does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+}
+
+impl Hook {
+    /// A session started after a compact or a `/clear`, which took the conversation: the
+    /// daemon answers it with `done`, what a lead should know of its helpers, or nothing.
+    pub fn briefs(&self) -> bool {
+        self.event == "SessionStart" && matches!(self.kind.as_deref(), Some("compact" | "clear"))
+    }
 }
 
 /// How a turn ended.

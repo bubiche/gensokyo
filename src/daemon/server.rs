@@ -420,8 +420,12 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 None
             }
             Request::Hook { resident, hook: h } => {
+                let briefs = h.briefs();
                 hook(&shrine, &resident, h);
-                None
+                briefs.then(|| {
+                    let message = lead::briefing(&shrine.borrow(), &resident);
+                    Reply::Done { id, message: message.unwrap_or_default() }
+                })
             }
             Request::Statusline { resident, telemetry } => {
                 statusline(&shrine, &resident, telemetry);

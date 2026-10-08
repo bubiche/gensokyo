@@ -8,7 +8,8 @@ description: Required when the user wants work split across other Claude Code se
 A **helper** is a resident you summon: a Claude Code session of its own in the shrine, in a
 directory you choose, that the user can see, watch and type into. You are its **lead**: you
 brief it, wait for it, read what it reports, follow up, and close it when it is done. Only you
-and the user may close, banish, recall, wait on or read your helpers.
+and the user may close, banish, recall, wait on or read your helpers. After a `/compact` or
+`/clear`, gensokyo lists your helpers back to you; `gensokyo list --json` has them any time.
 
 ## Helper or subagent
 

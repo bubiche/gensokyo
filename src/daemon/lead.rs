@@ -238,6 +238,47 @@ fn collect(sh: &mut Shrine, lead: &str, id: &str, until: Option<Until>) {
     }
 }
 
+/// What `lead` is told of its helpers when a compact or a `/clear` has taken its conversation:
+/// each one here, or departed without its lead told, where it works and what waits on the lead.
+/// It collects nothing, so the next `wait` still has the news; names and paths only, never a
+/// word a helper wrote.
+pub(super) fn briefing(sh: &Shrine, lead: &str) -> Option<String> {
+    let lines: Vec<String> = sh
+        .entries
+        .iter()
+        .filter(|e| e.rec.owner.as_deref() == Some(lead))
+        .filter(|e| e.handle.is_some() || !e.rec.told_gone)
+        .map(|e| {
+            let r = &e.rec;
+            let doing = match e.handle.as_ref().map(|_| e.aware.state()) {
+                None => "departed",
+                Some(State::Busy) => "working",
+                Some(State::Asked) => "asking the user a question",
+                Some(_) if e.aware.pending == Some(Pending::Awaits) => "at a dialog for the user",
+                Some(_) => "resting",
+            };
+            let dir = e.here.as_ref().map_or(&r.cwd, |(_, d)| d);
+            let branch = tele::git_branch(std::path::Path::new(dir));
+            let on = branch.map(|b| format!(" on branch {b}")).unwrap_or_default();
+            // Where it went is its own to say: one line, and not a long one.
+            let dir = tele::clean(dir, 200);
+            let unread = match r.turns > r.told.0 {
+                true => format!("; a turn you have not read: `gensokyo read {}`", r.name),
+                false => String::new(),
+            };
+            format!("- {}: {doing}, in {dir}{on}{unread}", r.name)
+        })
+        .collect();
+    (!lines.is_empty()).then(|| {
+        format!(
+            "Your conversation was compacted or cleared, but these helpers you summoned are still \
+             yours to wait on, read and close when their work is in (the `gensokyo-lead` \
+             skill):\n{}",
+            lines.join("\n")
+        )
+    })
+}
+
 /// `who`'s last answer, framed as its report; with `screen`, its live screen as text, which
 /// moves nobody's view. A lead reading its helper's answer has collected that turn.
 pub(super) fn read(

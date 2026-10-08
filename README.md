@@ -441,7 +441,10 @@ another session is the `gensokyo-peers` skill's to write, that standing schedule
 gensokyo's (Claude Code's own `CronCreate`, `CronList` and `CronDelete` are turned off for
 residents and headless runs), and that helpers are the `gensokyo-lead` skill's. A helper hears
 instead who its lead is, and that its last message is its report. A [role](#roles) and words of
-your own come after that paragraph, only when you ask for them. The three skills carry what a
+your own come after that paragraph, only when you ask for them. A lead whose conversation a
+`/compact` or `/clear` has just taken is told its helpers again, in one line each: its name,
+whether it is working, resting, at a dialog or departed, where it works, and whether a turn it
+ended has not been read. That is all: nothing a helper wrote, and nothing for anyone else. The three skills carry what a
 click cannot: `gensokyo-peers` writes an opening message that says who is asking, what is
 wanted, the round cap and the reply address; `gensokyo-ritual` turns "every weekday at 9:05"
 into a ritual file; `gensokyo-lead` briefs helpers, waits on them and reads their reports. Only

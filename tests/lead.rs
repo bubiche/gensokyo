@@ -272,6 +272,60 @@ fn a_departed_helper_can_still_be_read_and_only_by_its_lead_or_the_user() {
     assert!(err(&o).contains("has departed"), "{}", err(&o));
 }
 
+/// What `_hook` inside `me` prints for a SessionStart from `source`.
+fn session_start(d: &Daemon, me: &Value, source: &str) -> String {
+    let mut c = spawn(d, me, &["_hook"]);
+    let hook = json!({"hook_event_name": "SessionStart", "session_id": me["id"], "source": source});
+    c.stdin.take().unwrap().write_all(hook.to_string().as_bytes()).unwrap();
+    let o = c.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    out(&o)
+}
+
+/// The context a SessionStart hook added, from what it printed.
+fn context(printed: &str) -> String {
+    let v: Value = serde_json::from_str(printed).unwrap_or_else(|_| panic!("{printed}"));
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart", "{v}");
+    v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_lead_hears_of_its_helpers_after_a_compact_or_clear_and_its_news_waits_still() {
+    let d = daemon("brief", &[]);
+    let lead = summon(&d, "Reimu");
+    helper(&d, &lead, "Marisa");
+    for source in ["compact", "clear"] {
+        let told = context(&session_start(&d, &lead, source));
+        assert!(told.contains("helpers you summoned"), "{told}");
+        assert!(told.contains("- Marisa: resting, in "), "{told}");
+        assert!(told.contains("a turn you have not read: `gensokyo read Marisa`"), "{told}");
+        // Never what the helper wrote.
+        assert!(!told.contains("echo:"), "{told}");
+    }
+    // A start that keeps the conversation, a helper, and a lead of nobody hear nothing.
+    assert_eq!(session_start(&d, &lead, "startup"), "");
+    assert_eq!(session_start(&d, &lead, "resume"), "");
+    let marisa = me(&d, "Marisa");
+    assert_eq!(session_start(&d, &marisa, "compact"), "");
+    let other = summon(&d, "Youmu");
+    assert_eq!(session_start(&d, &other, "compact"), "");
+
+    // Told of, its turn is not collected: the wait still has it, and after that it is read.
+    let (code, l) = waited(inside(&d, &lead, &["wait", "Marisa", "--timeout", "5s"]));
+    assert_eq!((code, l[0]["news"].clone()), (0, json!(true)), "{l:?}");
+    let told = context(&session_start(&d, &lead, "compact"));
+    assert!(told.contains("- Marisa: resting, in ") && !told.contains("not read"), "{told}");
+
+    // Departed, it is named until its lead is told so; then nobody is left to name.
+    assert!(inside(&d, &lead, &["close", "Marisa"]).status.success());
+    wait(|| me(&d, "Marisa")["state"] == "departed", "gone");
+    let told = context(&session_start(&d, &lead, "compact"));
+    assert!(told.contains("- Marisa: departed, in "), "{told}");
+    let (code, _) = waited(inside(&d, &lead, &["wait", "Marisa", "--timeout", "5s"]));
+    assert_eq!(code, 0);
+    assert_eq!(session_start(&d, &lead, "compact"), "");
+}
+
 #[test]
 fn helpers_are_capped_cannot_summon_and_belong_to_their_lead_alone() {
     let d = daemon("cap", &[]);

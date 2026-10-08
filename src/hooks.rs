@@ -1,13 +1,14 @@
 //! The two commands Claude Code runs inside every resident: `_hook` for each hook event, and
 //! `_statusline` for the line at the bottom of its screen. Both always exit 0, never start a
-//! daemon, and wait on one no longer than twice `DELIVER` (the write, then the answer):
-//! `UserPromptSubmit` holds up the prompt until its hook ends.
+//! daemon, and wait on one no longer than twice `DELIVER` (the write, then the answer), or
+//! three times for a hook the daemon answers: `UserPromptSubmit` holds up the prompt until its
+//! hook ends.
 
 use crate::paths;
 use crate::proto::{self, Envelope, Hook, Request};
 use crate::tele;
 use serde_json::Value;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, ErrorKind, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -36,8 +37,9 @@ fn stdin() -> Vec<u8> {
 }
 
 /// `gensokyo _hook`: the payload on stdin, reduced, for the resident `$GENSOKYO_RESIDENT`. A
-/// daemon that cannot be reached gets it later from the spool. Nothing goes to stdout, which
-/// Claude Code would feed to the model.
+/// daemon that cannot be reached gets it later from the spool. Claude Code feeds stdout to the
+/// model, so only the daemon's answer to a session started after a compact or a `/clear` goes
+/// there: a lead's helpers, which its conversation no longer holds.
 pub fn hook_main() {
     let payload = stdin();
     let (Ok(j), Some(resident)) =
@@ -45,9 +47,17 @@ pub fn hook_main() {
     else {
         return;
     };
-    let req = Request::Hook { resident, hook: reduce(&j, now_ms()) };
-    if !deliver(&req) {
+    let hook = reduce(&j, now_ms());
+    let briefs = hook.briefs();
+    let req = Request::Hook { resident, hook };
+    let (taken, answer) = deliver(&req, briefs);
+    if !taken {
         spool(&paths::state_dir(), &req);
+    }
+    if let Some(context) = answer.filter(|a| !a.is_empty()) {
+        let out = serde_json::json!({"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": context}});
+        println!("{out}");
     }
 }
 
@@ -95,9 +105,10 @@ pub fn cap(s: &str, n: usize) -> &str {
 /// hello, then the request, then the hello's answer, within `DELIVER`. A daemon that refused
 /// the hello (one from before an update, speaking another protocol) has not taken the request,
 /// which goes to the spool for the next daemon. No answer in time is a daemon that is there and
-/// busy: it has the request, and spooling it too would replay it twice.
-fn deliver(req: &Request) -> bool {
-    let Ok(mut s) = UnixStream::connect(paths::socket_path()) else { return false };
+/// busy: it has the request, and spooling it too would replay it twice. With `answered`, the
+/// request's own `done` is read too, within another `DELIVER`, and its message given.
+fn deliver(req: &Request, answered: bool) -> (bool, Option<String>) {
+    let Ok(mut s) = UnixStream::connect(paths::socket_path()) else { return (false, None) };
     let hello = Request::Hello { proto: proto::PROTO, who: "hook".into(), resident: None };
     let mut b = Vec::new();
     for req in [hello, req.clone()] {
@@ -105,17 +116,29 @@ fn deliver(req: &Request) -> bool {
         b.push(b'\n');
     }
     if s.set_write_timeout(Some(DELIVER)).is_err() || s.write_all(&b).is_err() {
-        return false;
+        return (false, None);
     }
     let _ = s.set_read_timeout(Some(DELIVER));
+    let mut r = std::io::BufReader::new(&s);
     let mut line = Vec::new();
-    match std::io::BufReader::new(&s).read_until(b'\n', &mut line) {
+    let taken = match r.read_until(b'\n', &mut line) {
         // A welcome in another protocol is a daemon that takes hooks from any build, but may
         // not read this one: the spool has it too, for a daemon of this build.
         Ok(_) => serde_json::from_slice::<Value>(&line)
             .is_ok_and(|v| v["t"] == "welcome" && v["proto"] == proto::PROTO),
-        Err(e) => matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+        Err(e) => {
+            return (matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut), None);
+        }
+    };
+    if !(taken && answered) {
+        return (taken, None);
     }
+    line.clear();
+    let answer = r.read_until(b'\n', &mut line).ok().and_then(|_| {
+        let v = serde_json::from_slice::<Value>(&line).ok()?;
+        (v["t"] == "done").then(|| v["message"].as_str().map(String::from)).flatten()
+    });
+    (true, answer)
 }
 
 /// One line appended to `spool.jsonl`, for the daemon to replay. Past `SPOOL_MOST` it moves to
@@ -193,7 +216,7 @@ pub fn statusline_main(id: &str) {
     let mut t = tele::from_statusline(&j);
     t.advisor =
         tele::setting(&cwd, "/advisorModel").and_then(|v| v.as_str().map(|a| tele::clean(a, 20)));
-    deliver(&Request::Statusline { resident: id.into(), telemetry: t.clone() });
+    deliver(&Request::Statusline { resident: id.into(), telemetry: t.clone() }, false);
     let user = (paths::config("STATUSLINE").as_deref() == Some("user"))
         .then(|| tele::setting(&cwd, "/statusLine/command"))
         .flatten();

@@ -516,10 +516,16 @@ async fn input(
     }
     {
         let mut sh = shrine.borrow_mut();
-        sh.typed = true;
-        if let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == rid) {
-            e.aware.typed(&bytes);
+        let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == rid) else { return Ok(()) };
+        // Its `/exit` is on the line: a key now would land in it, or in a process on its way out.
+        if e.renew == Some(super::renew::Renew::Going) {
+            return match bytes.as_slice() {
+                b"\x1b[I" | b"\x1b[O" => Ok(()),
+                _ => Err(format!("{name} is being renewed: a moment")),
+            };
         }
+        e.aware.typed(&bytes);
+        sh.typed = true;
     }
     // A focus report is the terminal's, not typing: it leaves the view where it is, and what
     // this client has selected.

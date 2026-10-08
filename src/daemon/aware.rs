@@ -406,7 +406,8 @@ impl Aware {
     /// seen, which still waits on them.
     pub fn renewed(&self, resumed: bool) -> Aware {
         // A hook the old process sent late is older than anything the new one says.
-        let mut a = Aware { hook_at: self.hook_at, ..Aware::default() };
+        // Marks keep counting, so one a card still holds is never taken for a new one.
+        let mut a = Aware { hook_at: self.hook_at, marks: self.marks, ..Aware::default() };
         if self.pending == Some(Pending::Stopped) {
             a.set(self.pending, self.detail.clone());
         }

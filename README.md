@@ -130,10 +130,11 @@ all back under recall. Each of these is also a command, for scripts (below).
 Claude Code updates itself on disk while a session runs, and the session keeps the version it
 started with until it starts again. A resident behind the `claude` installed now is marked `⇡`
 in the sidebar (and in `list`), and a `[renew u]` button appears. Renewing starts each
-of them again on the new version, into its own conversation, keeping its name, slot, lead and
-screen. Each one waits until it rests (no turn running, no dialog, nothing half typed) and has
-been quiet for two seconds, so nothing is cut short; it shows `↻` until then. What lives only in
-the session is lost: background tasks, a Monitor, a `/loop`. A ritual run that is only kept
+of them again on the new version, into its own conversation, keeping its name, slot and lead,
+and on the screen it was on (its scrollback starts afresh). Each one waits until it rests (no
+turn running, no dialog, nothing half typed) and has been quiet for two seconds, so nothing is
+cut short; it shows `↻` until then, and keys wait the moment it goes. What lives only in the
+session is lost: background tasks, a Monitor, a `/loop`. A ritual run that is only kept
 until it has rested a while is left to end on its own. `gensokyo renew Marisa` renews one
 resident whether or not it is behind, which also picks up changed settings, plugins and MCP
 servers.

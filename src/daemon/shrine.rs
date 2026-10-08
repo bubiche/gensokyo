@@ -178,7 +178,7 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
 }
 
 /// A flag's value in a launch argv, before any `--`.
-fn flag(argv: &[String], f: &str) -> Option<String> {
+pub(super) fn flag(argv: &[String], f: &str) -> Option<String> {
     argv.iter().take_while(|a| *a != "--").skip_while(|a| *a != f).nth(1).cloned()
 }
 
@@ -238,7 +238,7 @@ fn launch(
 const PROMPT_MOST: usize = 64 * 1024;
 
 /// Claude Code's permission modes, narrowest first: a helper's is never past its lead's.
-const MODES: [&str; 5] = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
+pub(super) const MODES: [&str; 5] = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
 
 /// The tools a lead may let a helper use without asking: they read, and change nothing here.
 const READ_ONLY: [&str; 5] = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];

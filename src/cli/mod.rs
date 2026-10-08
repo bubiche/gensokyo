@@ -262,7 +262,9 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
         }
-        if let Some(v) = &r.outdated {
+        if r.renewing {
+            fields = format!("{fields} · ↻ renewing");
+        } else if let Some(v) = &r.outdated {
             fields = format!("{fields} · ⇡ claude {v}: gensokyo renew");
         }
         let cwd = crate::tele::clean(r.here.as_ref().unwrap_or(&r.cwd), usize::MAX);

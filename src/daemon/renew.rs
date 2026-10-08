@@ -4,8 +4,10 @@
 //! tasks, a Monitor, a `/loop`) goes with the old process.
 
 use super::log::log;
-use super::resident::Handle;
-use super::shrine::{EXIT_WAIT, Entry, Shared, Shrine, come_back, departed, find, stir, touch};
+use super::resident::{Exit, Handle};
+use super::shrine::{
+    EXIT_WAIT, Entry, MODES, Shared, Shrine, come_back, departed, find, flag, stir, touch,
+};
 use serde_json::json;
 use std::rc::Rc;
 use std::time::Duration;
@@ -115,48 +117,45 @@ pub(super) fn ask(shrine: &Shared, who: &[String]) -> Result<String, String> {
 
 /// Waits for `id`, running as `h`, to rest, then starts it again. Given up when it leaves, is
 /// closed, banished or recalled, or the daemon stops meanwhile, and after `TRIES` `/exit`s that
-/// came to nothing: a turn began each time.
+/// came to nothing.
 async fn renewal(shrine: Shared, id: String, h: Rc<Handle>) {
     let mut tries = 0;
-    while rested(&shrine, &id, &h).await {
-        match go(&shrine, &id, &h).await {
-            Went::Done => return,
-            Went::NotYet => {}
-            Went::Again => tries += 1,
-        }
-        if tries >= TRIES {
-            let mut sh = shrine.borrow_mut();
-            if let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id && runs_as(e, &h)) {
-                let name = e.rec.name.clone();
-                e.renew = None;
-                log(json!({"ev": "renew", "id": id, "gave_up": tries}));
-                sh.notice(&format!(
-                    "{name} was not renewed: it began a turn each time it was asked to /exit; \
-                     renew it again once it rests"
-                ));
-                touch(&sh);
-            }
+    while tries < TRIES && rested(&shrine, &id, &h).await {
+        if !go(&shrine, &id, &h).await {
             return;
         }
+        tries += 1;
     }
     let mut sh = shrine.borrow_mut();
     let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id && e.renew.is_some()) else {
         return;
     };
-    // Departed with its renew still asked for: after an `/exit` that seemed to come to nothing,
-    // it left late, and nothing started it again.
     let left = e.handle.is_none();
-    if left || runs_as(e, &h) {
-        e.renew = None;
-        let name = e.rec.name.clone();
-        if left && tries > 0 {
-            sh.notice(&format!(
-                "{name} left late for its renew, and was not started again: `gensokyo resume \
-                 {name}` brings it back"
-            ));
-        }
-        touch(&sh);
+    if !left && !runs_as(e, &h) {
+        return;
     }
+    e.renew = None;
+    let name = e.rec.name.clone();
+    let said = match (left, tries) {
+        // Departed with its renew still asked for: after an `/exit` that seemed to come to
+        // nothing, it left late, and nothing started it again.
+        (true, 1..) => Some(format!(
+            "{name} left late for its renew, and was not started again: `gensokyo resume {name}` \
+             brings it back"
+        )),
+        (false, TRIES..) => {
+            log(json!({"ev": "renew", "id": id, "gave_up": tries}));
+            Some(format!(
+                "{name} was not renewed: it stirred or stayed each time it was asked to /exit; \
+                 renew it again once it rests"
+            ))
+        }
+        _ => None,
+    };
+    if let Some(said) = said {
+        sh.notice(&said);
+    }
+    touch(&sh);
 }
 
 /// Resting and settled for `QUIET` with no hook. False once it no longer runs as `h` or is no
@@ -188,27 +187,14 @@ fn still(shrine: &Shared, id: &str, h: &Rc<Handle>) -> Option<Option<i64>> {
     Some((e.aware.idle() && e.aware.dialog().is_none()).then(|| e.aware.heard()))
 }
 
-enum Went {
-    Done,
-    /// Not resting after all: wait for it again.
-    NotYet,
-    /// The `/exit` came to nothing.
-    Again,
-}
-
-/// `/exit`, then the same start a recall makes, in place. A close or a banish meanwhile takes
-/// it over: it leaves, and stays departed.
-async fn go(shrine: &Shared, id: &str, h: &Rc<Handle>) -> Went {
+/// `/exit`, then the same start a recall makes, in place; true when the `/exit` came to nothing
+/// and it is to be asked again. `rested` has just found it so, with no await since. A close or a
+/// banish meanwhile takes it over: it leaves, and stays departed.
+async fn go(shrine: &Shared, id: &str, h: &Rc<Handle>) -> bool {
     let mark = {
         let mut sh = shrine.borrow_mut();
-        let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id) else { return Went::Done };
-        if !runs_as(e, h) || h.exit().is_some() || e.renew != Some(Renew::Asked) {
-            return Went::Done;
-        }
-        if !(e.aware.idle() && e.aware.dialog().is_none()) {
-            return Went::NotYet;
-        }
-        // Taken, so no card or ritual prompt goes in meanwhile.
+        let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id) else { return false };
+        // Taken, so no card or ritual prompt goes in meanwhile; the user's keys wait too.
         let mark = e.aware.mark();
         e.renew = Some(Renew::Going);
         log(json!({"ev": "renew", "id": id, "pid": h.pid, "going": true}));
@@ -221,31 +207,26 @@ async fn go(shrine: &Shared, id: &str, h: &Rc<Handle>) -> Went {
     let mut sh = shrine.borrow_mut();
     // Gone from the shrine, or departed by `watch_exit` after a close took it over.
     let Some(i) = sh.entries.iter().position(|e| e.rec.id == id && runs_as(e, h)) else {
-        return Went::Done;
+        return false;
     };
     let going = sh.entries[i].renew == Some(Renew::Going);
-    match (h.exit(), going) {
-        (Some(_), true) => {
-            relaunch(shrine, &mut sh, i, h);
-            Went::Done
-        }
-        // Closed or banished while going: it left as they asked, which `watch_exit` left to us.
-        (Some(x), false) => {
-            departed(&mut sh, i, x);
-            Went::Done
-        }
-        (None, going) => {
+    match h.exit() {
+        Some(x) if going && !sh.quitting => relaunch(shrine, &mut sh, i, x),
+        // Closed or banished while going, or the daemon stopping: it left as they asked, which
+        // `watch_exit` left to us.
+        Some(x) => departed(&mut sh, i, x),
+        None => {
             let e = &mut sh.entries[i];
             e.aware.unmark(mark);
             log(json!({"ev": "renew", "id": id, "left": false}));
-            if !going {
-                return Went::Done;
+            if going {
+                e.renew = Some(Renew::Asked);
+                touch(&sh);
             }
-            e.renew = Some(Renew::Asked);
-            touch(&sh);
-            Went::Again
+            return going;
         }
     }
+    false
 }
 
 /// How long an `/exit` that went in may take to end the process: two of close's waits, for
@@ -253,13 +234,13 @@ async fn go(shrine: &Shared, id: &str, h: &Rc<Handle>) -> Went {
 const LEAVE_WAIT: Duration = Duration::from_secs(2 * EXIT_WAIT.as_secs());
 
 /// `/exit` typed in and, once nothing has stirred, Enter: no Esc or Ctrl-C first, which would
-/// deny a dialog or cut short a turn that began meanwhile. When one did, or the user began
-/// typing, the `/exit` is erased.
+/// deny a dialog or cut short a turn that began meanwhile. When one did, the `/exit` is erased
+/// (the user's keys wait while it goes, so the line holds only that).
 async fn exit(shrine: &Shared, h: &Handle) {
-    let calm = (stir(shrine, h), drafted(shrine, h));
+    let calm = stir(shrine, h);
     h.input(b"/exit").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    if (stir(shrine, h), drafted(shrine, h)) != calm {
+    if stir(shrine, h) != calm {
         h.input(&[0x7f; 5]).await;
         return;
     }
@@ -267,25 +248,18 @@ async fn exit(shrine: &Shared, h: &Handle) {
     let _ = tokio::time::timeout(LEAVE_WAIT, h.exited()).await;
 }
 
-/// Something in the way of an Enter on the resident at `h`: a dialog, or what the user typed.
-fn drafted(shrine: &Shared, h: &Handle) -> bool {
-    let sh = shrine.borrow();
-    let e = sh.entries.iter().find(|e| e.handle.as_ref().is_some_and(|x| x.pid == h.pid));
-    e.is_some_and(|e| e.aware.in_way().is_some())
-}
-
-/// The one at `i`, which has left for its renew, started again in place; departed as any other
-/// that left when that fails, or when the daemon is stopping (which retires it).
-fn relaunch(shrine: &Shared, sh: &mut Shrine, i: usize, old: &Rc<Handle>) {
-    let exit = old.exit().expect("it has left");
-    if sh.quitting {
-        sh.entries[i].renew = None;
-        return;
-    }
+/// The one at `i`, which has left for its renew with `exit`, started again in place; departed
+/// as any other that left when that fails.
+fn relaunch(shrine: &Shared, sh: &mut Shrine, i: usize, exit: Exit) {
     // Its last news counted before the new start forgets it.
     super::ingest::tally(sh, i, None);
     let rec = sh.entries[i].rec.clone();
-    let mode = sh.entries[i].aware.mode.clone();
+    // The mode it was in, as its hooks say; bypassing permissions only when it was started so,
+    // as Claude Code reaches that mode no other way, and a hook is anyone's to send.
+    let launched = flag(&rec.argv, "--permission-mode");
+    let mode = sh.entries[i].aware.mode.clone().filter(|m| {
+        MODES.contains(&m.as_str()) && (m != "bypassPermissions" || launched.as_ref() == Some(m))
+    });
     match come_back(shrine, sh, &rec, mode) {
         Ok((program, argv, handle, resumed)) => {
             let e = &mut sh.entries[i];

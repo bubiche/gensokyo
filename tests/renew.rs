@@ -205,3 +205,84 @@ fn a_close_takes_over_from_a_renew_and_it_stays_departed() {
     assert_eq!((&r["state"], r.get("renewing")), (&json!("departed"), None));
     assert!(!d.log().iter().any(|l| l["ev"] == "renewed"));
 }
+
+/// What a client that starts watching now is handed that no client has had yet.
+fn missed(d: &Daemon) -> Vec<String> {
+    let (mut w, mut lines) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    loop {
+        let v = next(&mut lines);
+        if v["t"] == "notices" {
+            let n = v["notices"].as_array().unwrap().iter().filter(|n| n["missed"] == true);
+            return n.map(|n| n["text"].as_str().unwrap().to_string()).collect();
+        }
+    }
+}
+
+/// A Stop hook for `r` in permission mode `mode`, as anyone may send one.
+fn stopped_in(d: &Daemon, r: &Value, mode: &str) {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let hook = json!({"t": "hook", "id": 0, "resident": r["id"],
+                      "hook": {"event": "Stop", "at": at.as_millis() as i64, "mode": mode}});
+    let (mut w, mut lines) = d.connect();
+    writeln!(w, "{hook}\n{}", json!({"t": "list", "id": 1})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    wait(|| me(d, r["name"].as_str().unwrap())["mode"] == mode, "the mode heard");
+}
+
+#[test]
+fn it_comes_back_in_the_mode_it_was_in_but_never_one_it_could_not_have_reached() {
+    let d = daemon("mode");
+    let r = summon(&d, "Reimu");
+    input(&d, "Reimu", "hello");
+    wait(|| me(&d, "Reimu")["turns"] == 1, "its turn");
+    wait(|| me(&d, "Reimu")["blocked"].is_null(), "the registry to list it");
+    // A hook saying it bypasses permissions, though it was not started so: not believed.
+    stopped_in(&d, &r, "bypassPermissions");
+    let pid = me(&d, "Reimu")["pid"].clone();
+    assert_eq!(out(&d.cli(&["renew", "Reimu"])).trim(), "renewing Reimu");
+    renewed(&d, "Reimu", &pid);
+    wait(|| d.stub(&r["id"], "args").contains("--resume"), "the new args");
+    assert!(
+        !d.stub(&r["id"], "args").contains("bypassPermissions"),
+        "{}",
+        d.stub(&r["id"], "args")
+    );
+    // Shift-tab to accept edits: kept.
+    wait(|| me(&d, "Reimu")["blocked"].is_null(), "the registry to list it again");
+    stopped_in(&d, &r, "acceptEdits");
+    let pid = me(&d, "Reimu")["pid"].clone();
+    d.cli(&["renew", "Reimu"]);
+    renewed(&d, "Reimu", &pid);
+    wait(|| d.stub(&r["id"], "args").contains("acceptEdits"), "the mode kept");
+}
+
+#[test]
+fn one_that_cannot_come_back_departs_and_says_so_and_a_quit_starts_nobody() {
+    let d = daemon("gone");
+    let gone = d.dir.join("gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": gone, "name": "Reimu"}));
+    d.stub(&r["resident"]["id"], "ready");
+    summon(&d, "Marisa");
+    let hang = |n: &str| {
+        wait(|| me(&d, n)["blocked"].is_null(), "the registry to list it");
+        input(&d, n, "/hang");
+        wait(|| me(&d, n)["state"] == "busy", "busy");
+    };
+    hang("Reimu");
+    std::fs::remove_dir_all(&gone).unwrap();
+    assert_eq!(out(&d.cli(&["renew", "Reimu"])).trim(), "renewing Reimu once they rest");
+    wait(|| me(&d, "Reimu")["state"] == "departed", "it to leave");
+    assert_eq!(me(&d, "Reimu").get("renewing"), None);
+    let notices = missed(&d);
+    let gone = "Reimu left to be renewed and could not come back";
+    assert!(notices.iter().any(|n| n.contains(gone)), "{notices:?}");
+
+    // The daemon stopping while one waits to rest: it is not started again.
+    hang("Marisa");
+    assert_eq!(out(&d.cli(&["renew", "Marisa"])).trim(), "renewing Marisa once they rest");
+    d.cli(&["quit"]);
+    let log = d.log();
+    assert!(!log.iter().any(|l| l["ev"] == "renewed" && l["error"].is_null()), "{log:?}");
+}

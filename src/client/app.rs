@@ -184,6 +184,8 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         let next_draw = dirty.then_some(drawn + FRAME);
         let expires = app.expires();
         let edge = app.edge();
+        // Countdowns and times go on while nothing happens: a frame on each minute.
+        let minute = Instant::now() + Duration::from_secs(60 - now().rem_euclid(60) as u64);
         tokio::select! {
             b = input.recv() => match b {
                 Some(b) => {
@@ -207,6 +209,7 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
                 app.expire(Instant::now());
             }
             _ = tokio::time::sleep_until(edge.unwrap_or(start).into()), if edge.is_some() => app.tick(),
+            _ = tokio::time::sleep_until(minute.into()) => {}
             _ = winch.recv() => term.resize(host_area()).map_err(err)?,
             _ = hup.recv() => break Ok("the terminal hung up".into()),
             _ = sigterm.recv() => break Ok("terminated".into()),

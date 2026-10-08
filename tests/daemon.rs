@@ -1015,6 +1015,10 @@ fn the_status_line_reports_and_prints_its_own_line_or_the_users() {
     // Claude has gone into a subdirectory: the settings are still the project's.
     j["workspace"]["project_dir"] = json!(d.dir);
     j["workspace"]["current_dir"] = json!(d.dir.join("src"));
+    // Windows not yet reset: one past its reset is not shown.
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    j["rate_limits"]["five_hour"]["resets_at"] = json!(now.as_secs() + 3600);
+    j["rate_limits"]["seven_day"]["resets_at"] = json!(now.as_secs() + 86400);
     let payload = j.to_string();
     let env = [("GENSOKYO_CONFIG_DIR", conf.to_str().unwrap())];
     let out = inside(&d, &["_statusline", &id], &env, payload.as_bytes());

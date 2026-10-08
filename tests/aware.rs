@@ -329,6 +329,21 @@ fn a_spool_nobody_reads_keeps_its_newest_hooks() {
 }
 
 #[test]
+fn usage_is_the_latest_windows_highest_and_none_past_its_reset() {
+    use gensokyo::proto::Limit;
+    let l = |used, resets| Limit { used, resets: Some(resets) };
+    let pick = |ls: &[Limit], now| tele::freshest(ls, now).map(|l| (l.used, l.resets.unwrap()));
+    // One window, its reset given a few seconds apart: use only grows, so the highest.
+    assert_eq!(pick(&[l(40, 5000), l(55, 5003), l(30, 5001)], 1000), Some((55, 5003)));
+    // A new window's use, however low, outdates the last one's.
+    assert_eq!(pick(&[l(90, 5000), l(4, 23000)], 6000), Some((4, 23000)));
+    assert_eq!(pick(&[l(90, 5000), l(4, 23000)], 1000), Some((4, 23000)));
+    // Past its reset, nothing is known.
+    assert_eq!(pick(&[l(90, 5000)], 5000), None);
+    assert_eq!(pick(&[], 0), None);
+}
+
+#[test]
 fn resident_text_is_one_line_of_printable_characters() {
     assert_eq!(tele::clean("\r\n\t a\u{9b}b\u{7f}\u{1b}]9;x\u{7}", 80), "a b  ]9;x ");
     assert_eq!(tele::clean("日本語テキスト", 3), "日本語");

@@ -144,7 +144,8 @@ screen in a focused terminal, the shrine rings the bell and posts an iTerm2 noti
 
 The status line reports feed the rest: each sidebar line shows the model and context used, the
 title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
-and cost, and the sidebar's foot has the account's 5-hour and weekly usage. The directory is
+and cost, and the sidebar's foot has the account's 5-hour and weekly usage, the freshest any
+resident has heard (a window past its reset is left off until one hears again). The directory is
 where Claude works now, which follows it into a worktree or a subdirectory, and its branch is on
 a dim line under each resident in the sidebar while they all fit. `BRANCH_PREFIX=you/` in the
 config leaves that prefix off there. Inside the resident,

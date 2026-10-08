@@ -710,6 +710,30 @@ fn tiny_screens_do_not_panic() {
 }
 
 #[test]
+fn the_sidebar_shows_the_freshest_usage_and_none_past_its_reset() {
+    let mut m = aware();
+    let sidebar = |m: &Model| -> Vec<String> {
+        let mut buf = Buffer::empty(AREA);
+        render::render(m, AREA, &mut buf);
+        (0..AREA.height)
+            .map(|y| (1..render::SIDEBAR_W - 1).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    };
+    let has = |m: &Model, s: &str| sidebar(m).iter().any(|l| l.starts_with(s));
+    // Marisa, idle, reported last but from before Reimu's turns: Reimu's higher use is fresher.
+    let r = &mut m.residents;
+    r[1].telemetry.as_mut().unwrap().at = NOW;
+    r[1].telemetry.as_mut().unwrap().five_hour.as_mut().unwrap().used = 20;
+    assert!(has(&m, "5h ▓░░░░ 37%"), "{:#?}", sidebar(&m));
+    // A window past its reset is not shown at its old use.
+    for t in m.residents.iter_mut().filter_map(|r| r.telemetry.as_mut()) {
+        t.five_hour.as_mut().unwrap().resets = Some(NOW - 1);
+    }
+    assert!(!has(&m, "5h"), "{:#?}", sidebar(&m));
+    assert!(has(&m, "wk"));
+}
+
+#[test]
 fn whoever_needs_you_is_gold_across_the_sidebar() {
     let m = aware();
     let mut buf = Buffer::empty(AREA);

@@ -248,11 +248,12 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         let cwd = crate::tele::clean(r.here.as_ref().unwrap_or(&r.cwd), usize::MAX);
         println!("{slot} {} {:<12} {state:<8} {cwd}  {fields}", r.state.glyph(), r.name);
     }
-    let newest = residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
-    let usage: Vec<String> = newest
+    let reports = || residents.iter().filter_map(|r| r.telemetry.as_ref());
+    let five = crate::tele::freshest(reports().filter_map(|t| t.five_hour.as_ref()), now);
+    let wk = crate::tele::freshest(reports().filter_map(|t| t.seven_day.as_ref()), now);
+    let usage: Vec<String> = [("5h", five), ("wk", wk)]
         .into_iter()
-        .flat_map(|t| [("5h", &t.five_hour), ("wk", &t.seven_day)])
-        .filter_map(|(label, l)| l.as_ref().map(|l| crate::tele::usage(label, l, now, 10)))
+        .filter_map(|(label, l)| l.map(|l| crate::tele::usage(label, l, now, 10)))
         .collect();
     if !usage.is_empty() {
         println!("usage {}", usage.join("   "));

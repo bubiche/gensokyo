@@ -130,6 +130,20 @@ pub fn model_short(m: &str) -> String {
     m.split_whitespace().next().unwrap_or("").chars().take(3).collect()
 }
 
+/// A usage window as the freshest report has it, across every resident's: within a window use
+/// only grows, so the highest of those on the latest window. One past its reset is gone (Claude
+/// Code drops it too, but only from the reports it sends after).
+pub fn freshest<'a>(limits: impl IntoIterator<Item = &'a Limit>, now: i64) -> Option<&'a Limit> {
+    // Reports of one window can name its reset some seconds apart.
+    const SAME: i64 = 600;
+    let live: Vec<&Limit> =
+        limits.into_iter().filter(|l| l.resets.is_none_or(|r| r > now)).collect();
+    let last = live.iter().filter_map(|l| l.resets).max();
+    live.into_iter()
+        .filter(|l| last.is_none_or(|m| l.resets.is_some_and(|r| r + SAME >= m)))
+        .max_by_key(|l| l.used)
+}
+
 /// A usage window, `5h ▓▓░░░ 37% ↻2h11m`; the countdown is dropped once it has reset.
 pub fn usage(label: &str, l: &Limit, now: i64, cells: u32) -> String {
     let eta =

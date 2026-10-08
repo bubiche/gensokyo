@@ -345,13 +345,13 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         let y = up(rows);
         flow(buf, Rect { y, height: rows, ..inner }, &buttons, BUTTON, hits);
     }
-    // The account's usage, from the newest report that has it.
-    let newest = m.residents.iter().filter_map(|r| r.telemetry.as_ref()).max_by_key(|t| t.at);
-    if let Some(t) = newest {
-        for (label, l) in [("wk", &t.seven_day), ("5h", &t.five_hour)] {
-            if let Some(l) = l {
-                buf.set_stringn(inner.x, up(1), tele::usage(label, l, m.now, 5), w, DIM);
-            }
+    // The account's usage.
+    let reports = || m.residents.iter().filter_map(|r| r.telemetry.as_ref());
+    let wk = tele::freshest(reports().filter_map(|t| t.seven_day.as_ref()), m.now);
+    let five = tele::freshest(reports().filter_map(|t| t.five_hour.as_ref()), m.now);
+    for (label, l) in [("wk", wk), ("5h", five)] {
+        if let Some(l) = l {
+            buf.set_stringn(inner.x, up(1), tele::usage(label, l, m.now, 5), w, DIM);
         }
     }
     // The ritual that fires next.

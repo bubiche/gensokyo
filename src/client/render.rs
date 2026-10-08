@@ -405,6 +405,8 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
     }
     let mut order = drawn(&m.residents);
+    // Those with a helper below them: a lead with helpers, and each helper but the last.
+    let held: Vec<usize> = order.windows(2).filter(|p| p[1].1).map(|p| p[0].0).collect();
     // Each one's branch on a dim row below it, while every row fits.
     let branches = order.iter().filter(|(i, _)| m.residents[*i].branch.is_some()).count();
     let room = bottom.saturating_sub(inner.y + 1) as usize;
@@ -456,7 +458,11 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
                 t.model.as_deref().map(tele::model_short).unwrap_or_default()
             )
         });
-        let tee = if helper { "└" } else { "" };
+        let tee = match (helper, held.contains(&i)) {
+            (false, _) => "",
+            (true, true) => "├",
+            (true, false) => "└",
+        };
         let lead = format!("{slot} {tee}{} ", r.state.glyph());
         let rw = (width(&right) as usize).min(w);
         buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
@@ -478,6 +484,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         };
         buf.set_style(line, under);
         buf.set_stringn(inner.x + pad as u16, y, format!("⎇ {b}"), w - pad, under);
+        if held.contains(&i) {
+            buf.set_stringn(inner.x + width(&slot) + 1, y, "│", 1, under);
+        }
         hits.push(line, Hit::Resident(i));
         y += 1;
     }
@@ -513,7 +522,7 @@ fn more(
 /// The sidebar's order: each resident, and below it the helpers it leads. A helper whose lead
 /// is not in the list stands on its own. Each is its index into `residents`, and whether it is
 /// drawn as a helper.
-fn drawn(residents: &[Resident]) -> Vec<(usize, bool)> {
+pub fn drawn(residents: &[Resident]) -> Vec<(usize, bool)> {
     let lead = |r: &Resident| {
         let o = r.owner.as_deref()?;
         residents.iter().position(|l| l.id == o && l.id != r.id && lead_free(residents, l))

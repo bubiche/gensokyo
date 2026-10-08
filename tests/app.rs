@@ -456,6 +456,34 @@ fn j_and_k_go_round_the_sidebar_and_a_finds_whoever_needs_you() {
 }
 
 #[test]
+fn j_k_and_a_take_a_lead_s_helpers_right_after_it_as_the_sidebar_draws_them() {
+    let mut a = shrine();
+    // Sakuya is Reimu's helper, summoned after Marisa: the sidebar has her under Reimu.
+    let sakuya = Resident { owner: Some("id-Reimu".into()), ..resident(3, "Sakuya") };
+    let mut residents = a.m.residents.clone();
+    residents.push(sakuya);
+    daemon(&mut a, Reply::Residents { residents });
+    let on = |a: &App| a.m.focused.clone().unwrap_or_default();
+    for (keys, who) in [
+        (&b"\x1dj"[..], "id-Sakuya"),
+        (b"\x1dj", "id-Marisa"),
+        (b"\x1dj", "id-Reimu"),
+        (b"\x1dk", "id-Marisa"),
+        (b"\x1dk", "id-Sakuya"),
+    ] {
+        host(&mut a, keys);
+        assert_eq!(on(&a), who, "{keys:?}");
+    }
+    let mut residents = a.m.residents.clone();
+    residents[1].state = State::Asked;
+    residents[2].state = State::Asked;
+    daemon(&mut a, Reply::Residents { residents });
+    host(&mut a, b"\x1d1");
+    host(&mut a, b"\x1da");
+    assert_eq!(on(&a), "id-Sakuya");
+}
+
+#[test]
 fn a_cast_starts_on_the_resident_on_screen_and_a_double_enter_casts_nothing() {
     let mut a = shrine();
     host(&mut a, b"\x1d2");

@@ -4,9 +4,9 @@ expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensokyo ⎇ nebel95/padlet-ai-summary┐"
 "│1 ○ Reimu              ││line 00                                              │"
-"│    ⎇ padlet-ai-summar…││line 01     ~                                        │"
-"│4 └● Youmu             ││line 02     ~~                                       │"
-"│     ⎇ fix-ci          ││line 03     ~~~                                      │"
+"│  │ ⎇ padlet-ai-summar…││line 01     ~                                        │"
+"│4 ├● Youmu             ││line 02     ~~                                       │"
+"│  │  ⎇ fix-ci          ││line 03     ~~~                                      │"
 "│5 └○ Hieda-no-Akyuu-the││line 04     ~~~~                                     │"
 "│     ⎇ a1b2c3d         ││line 05     ~~~~~                                    │"
 "│2 ○ Marisa             ││line 06     ~~~~~~                                   │"

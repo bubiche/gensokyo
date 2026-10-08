@@ -361,7 +361,8 @@ shut through a fire makes it up at the next tick after it wakes.
 Ask a resident to *"get a couple of helpers to …"* and its `gensokyo-lead` skill summons other
 residents for the parts, briefs each, waits on them in the background, reads their reports and
 closes them. A resident it summons is its **helper**, and it the helper's **lead**; the sidebar
-draws helpers under their lead with `└`.
+draws helpers under their lead on a tree line (`├`, `└`), and `j`/`k` go through them in that
+order.
 
 **Worktrees.** `gensokyo new <dir> --worktree <name>` summons into
 `<repo>/.claude/worktrees/<name>` under the main checkout (from inside another worktree too),

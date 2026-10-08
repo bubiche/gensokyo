@@ -1151,13 +1151,16 @@ impl App {
     }
 
     /// The first resident after the one on screen (before it, going back) that `pick` takes,
-    /// round from the other end and the one on screen last; false when there is none.
+    /// round from the other end and the one on screen last; false when there is none. Taken in
+    /// the sidebar's order, a lead's helpers right after it.
     fn round(&mut self, by: isize, pick: impl Fn(&Resident) -> bool) -> bool {
-        let n = self.m.residents.len() as isize;
-        let at = self.m.residents.iter().position(|r| Some(&r.id) == self.m.focused.as_ref());
+        let order: Vec<&Resident> =
+            render::drawn(&self.m.residents).iter().map(|&(i, _)| &self.m.residents[i]).collect();
+        let n = order.len() as isize;
+        let at = order.iter().position(|r| Some(&r.id) == self.m.focused.as_ref());
         let at = at.map_or(if by > 0 { -1 } else { 0 }, |i| i as isize);
         let found = (1..=n)
-            .map(|i| &self.m.residents[(at + by * i).rem_euclid(n.max(1)) as usize])
+            .map(|i| order[(at + by * i).rem_euclid(n.max(1)) as usize])
             .find(|r| pick(r))
             .map(|r| r.id.clone());
         let found_any = found.is_some();

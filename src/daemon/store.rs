@@ -45,6 +45,13 @@ pub struct Record {
     /// A ritual run's own flags (`--add-dir`, `--allowedTools` …), kept for a recall.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<String>,
+    /// Its role as asked for, found again at every launch: the shipped files move with an
+    /// update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// The user's own words appended to its system prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
     /// The resident that summoned this one, its lead, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,

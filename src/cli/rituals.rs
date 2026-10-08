@@ -84,6 +84,9 @@ pub struct Add {
     /// MCP servers for its runs (claude --mcp-config)
     #[arg(long, value_name = "FILE")]
     mcp_config: Option<String>,
+    /// Appended to each run's system prompt: a role by name, or a file by its path
+    #[arg(long, value_name = "NAME|FILE")]
+    role: Option<String>,
     /// new (a fresh resident per run), persistent, or a resident's name
     #[arg(long)]
     target: Option<String>,
@@ -242,11 +245,15 @@ fn add(o: Add) -> Result<(), String> {
     (a.catch_up, a.headless, a.disabled) = (o.catch_up, o.headless, o.disabled);
     (a.when, a.quiet, a.deliver, a.worktree) = (o.when, o.quiet, o.deliver, o.worktree);
     a.allowed_tools = o.allowed_tools.iter().flat_map(|v| crate::frontmatter::items(v)).collect();
+    a.role = o.role.map(|r| super::role_here(&here, r));
     // A resident's ritual waits for the user to read what it may do and resume it.
     if resident() {
         a.disabled = true;
         if let Some(m) = &a.mcp_config {
-            in_config(m).map_err(|e| format!("ritual add: {e}"))?;
+            in_config("--mcp-config", m).map_err(|e| format!("ritual add: {e}"))?;
+        }
+        if let Some(r) = a.role.as_deref().filter(|r| r.contains('/')) {
+            in_config("--role", r).map_err(|e| format!("ritual add: {e}"))?;
         }
     }
     let share = share();
@@ -276,15 +283,16 @@ fn resident() -> bool {
     std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|v| !v.is_empty())
 }
 
-/// An MCP config a resident names must be one the user put in the config dir: the servers in
-/// it start with every run.
-fn in_config(m: &str) -> Result<(), String> {
+/// A file a resident names must be one the user put in the config dir: the servers in an MCP
+/// config start with every run, and a role file is read afresh by every run, so a resident could
+/// change what a run it no longer watches is told.
+fn in_config(flag: &str, m: &str) -> Result<(), String> {
     let real = |p: &std::path::Path| std::fs::canonicalize(p).map_err(|e| format!("{m}: {e}"));
     let (file, dir) = (real(std::path::Path::new(&paths::expand(m)))?, real(&paths::config_dir())?);
     match file.starts_with(&dir) {
         true => Ok(()),
         false => Err(format!(
-            "--mcp-config: {m} is not in {}; ask the user to put the config there",
+            "{flag}: {m} is not in {}; ask the user to put the file there",
             paths::short(&dir.to_string_lossy())
         )),
     }

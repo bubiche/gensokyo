@@ -174,6 +174,14 @@ async fn summon_type_click_detach_reattach() {
         c.send(&[ch]).await;
     }
     c.send(b"\r").await;
+    // A role from share/roles/, picked with the arrows, and words of ours with it.
+    c.wait("the role stage", |s| s.contains("your words:")).await;
+    c.send(b"\x1b[B").await;
+    c.wait("the first role picked", |s| s.contains("› chief-of-staff")).await;
+    for ch in "be brief".bytes() {
+        c.send(&[ch]).await;
+    }
+    c.send(b"\r").await;
     // In a git repository (a build's target/ is in this one) a worktree is asked for next:
     // Enter leaves it empty, which works right there.
     let worktree = |s: &str| s.contains("Enter works right here");
@@ -185,6 +193,9 @@ async fn summon_type_click_detach_reattach() {
     }
     let s = c.wait("the stub on screen", |s| s.contains("stub-claude Reimu")).await;
     assert!(s.contains("1 ○ Reimu"), "{s}");
+    let args = stub(&dir, "args");
+    assert!(args.contains("be brief --append-system-prompt-file "), "{args}");
+    assert!(args.contains("/share/roles/chief-of-staff.md "), "{args}");
     // Typing waits until the stub reads, and past the reattach nudge's two resizes: a SIGWINCH
     // in the middle of the stub's `read` would lose the line.
     c.wait("the stub reading", |_| ready(&dir) == 1).await;

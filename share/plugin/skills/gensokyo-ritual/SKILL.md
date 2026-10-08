@@ -61,7 +61,9 @@ PROMPT
   the blunter way; `--model haiku` is worth it for anything that is only reading and
   summarising. `--effort` goes to claude as it is, and so does `--mcp-config <file>`, which
   has to be one the user keeps in gensokyo's config dir: its servers start with every run, so
-  you name theirs and never write one. `--prompt "…"`
+  you name theirs and never write one. `--role reviewer` (or another of `gensokyo new`'s
+  roles) gives each run a standing stance in its system prompt; a role file you name must be
+  one the user keeps in the config dir. `--prompt "…"`
   stands in for `--prompt-file` when the prompt is one line.
 - `--target` is where the fire lands. Leave it out for the default, a fresh resident per run,
   which is the right answer for almost everything - the prompt is written for a session that
@@ -307,7 +309,7 @@ gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and it
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
 each ritual's `name`, `enabled`, `schedule`, `next_fire` (epoch seconds; `next_fire_local` is
 the same minute on this machine's clock), `last_run`, `target`, `headless`, `keep`, `overlap`,
-`deliver`, `cwd`, `mode`, `allowed_tools`, `mcp_config`, `when`, `problem`, `path` and
+`deliver`, `cwd`, `mode`, `allowed_tools`, `mcp_config`, `role`, `when`, `problem`, `path` and
 `shipped`. A `problem` is why that ritual is not firing,
 and it is the answer to "why didn't it run?".
 

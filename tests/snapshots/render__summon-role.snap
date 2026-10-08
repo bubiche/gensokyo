@@ -1,0 +1,17 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ summon ──────────────────────────────────────────────────────────┐"
+"│ In ~/dev/scratch_repo                                            │"
+"│ role                                                             │"
+"│   none                                                           │"
+"│   chief-of-staff                                                 │"
+"│   debugger                                                       │"
+"│   implementer                                                    │"
+"│   researcher                                                     │"
+"│ › reviewer                                                       │"
+"│ your words: focus on the SQL layer                               │"
+"│ ↑↓ a role, and what you type goes with it into its system prompt │"
+"│ [summon ⏎] [cancel esc]                                          │"
+"└──────────────────────────────────────────────────────────────────┘"

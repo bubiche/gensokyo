@@ -43,6 +43,8 @@ pub struct Ritual {
     pub mode: Option<String>,
     pub allowed_tools: Vec<String>,
     pub mcp_config: Option<String>,
+    /// Appended to each run's system prompt: a role's name, or a file's full path, `~` expanded.
+    pub role: Option<String>,
     /// A probe: a program whose changed output is what fires the ritual. As written.
     pub when: Option<String>,
     /// A worktree of `cwd`'s repository every run works in, by its name.
@@ -197,6 +199,7 @@ const KEYS: &[&str] = &[
     "mode",
     "permission_mode",
     "mcp_config",
+    "role",
     "keep",
     "overlap",
     "deliver",
@@ -228,6 +231,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
         mode: None,
         allowed_tools: Vec::new(),
         mcp_config: None,
+        role: None,
         when: None,
         worktree: None,
         keep: "2h".into(),
@@ -254,6 +258,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "effort" => r.effort = some(v),
             "mode" | "permission_mode" => r.mode = some(v),
             "mcp_config" => r.mcp_config = some(v),
+            "role" => r.role = some(crate::paths::expand(&v)),
             "keep" => r.keep = v,
             "overlap" => r.overlap = v,
             "deliver" => r.deliver = v,
@@ -427,6 +432,17 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
                 .into(),
         );
     }
+    if let Some(role) = &r.role {
+        if !own {
+            return p(format!(
+                "role: {role} is for a run that starts a session (target: new or persistent), \
+                 and target {} types into a resident that is already there",
+                r.target
+            ));
+        }
+        let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
+        crate::role::find(role, share.as_deref()).map_err(|e| format!("role: {e}"))?;
+    }
     if r.headless() && r.target() != Target::New {
         return p(format!(
             "headless: true is a claude -p of its own, which is always a fresh session, so it \
@@ -596,6 +612,7 @@ pub fn powers(i: &RitualInfo) -> Vec<(&'static str, String)> {
         v.push(("tools", i.allowed_tools.join(", ")));
     }
     v.extend(i.mcp_config.clone().map(|m| ("mcp", m)));
+    v.extend(i.role.clone().map(|r| ("role", r)));
     v.extend(i.when.clone().map(|w| ("probe", w)));
     v
 }
@@ -624,6 +641,7 @@ pub fn info(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust, dir: &Dir) -> Ri
         mode: r.mode.clone(),
         allowed_tools: r.allowed_tools.clone(),
         mcp_config: r.mcp_config.clone(),
+        role: r.role.clone(),
         when: r.when.clone(),
         problem,
         path: r.path.to_string_lossy().into_owned(),

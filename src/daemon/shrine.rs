@@ -9,6 +9,7 @@ use super::resident::{self, Handle};
 use super::rituals::Rites;
 use super::store::{self, Record, Store};
 use crate::proto::{self, Reply, State, Summon, Telemetry};
+use crate::role;
 use crate::tele;
 use serde_json::json;
 use std::cell::RefCell;
@@ -291,7 +292,8 @@ pub(super) fn summon(
     caller: Option<&str>,
 ) -> Result<proto::Resident, String> {
     may_summon(shrine, &s, caller, Path::new(&s.cwd))?;
-    let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, .. } = s;
+    let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
+    let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
     // Named, so a helper never starts in the user's defaultMode where that is wider.
     if let Some(c) = caller.filter(|_| mode.is_none()) {
         mode = shrine.borrow().entries.iter().find(|e| e.rec.id == c).map(mode_of);
@@ -305,7 +307,19 @@ pub(super) fn summon(
     let owner = caller.map(String::from);
     start(
         shrine,
-        Start { cwd, name, model, effort, mode, prompt, extra, owner, ..Start::default() },
+        Start {
+            cwd,
+            name,
+            model,
+            effort,
+            mode,
+            prompt,
+            extra,
+            owner,
+            role,
+            system_prompt,
+            ..Start::default()
+        },
     )
 }
 
@@ -338,11 +352,20 @@ pub(super) fn may_summon(
             PROMPT_MOST / 1024
         ));
     }
+    if s.system_prompt.as_ref().is_some_and(|p| p.len() > PROMPT_MOST) {
+        return Err(format!(
+            "a system prompt typed in is at most {} KB: make it a role",
+            PROMPT_MOST / 1024
+        ));
+    }
     if let Some(t) = s.allowed_tools.iter().find(|t| t.starts_with('-')) {
         return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
     }
     {
         let sh = shrine.borrow();
+        if let Some(r) = &s.role {
+            role::find(r, sh.share.as_deref())?;
+        }
         if sh.quitting {
             return Err("the daemon is stopping".into());
         }
@@ -374,6 +397,13 @@ pub(super) fn may_summon(
             return Err(format!(
                 "a helper works in your mode ({lead}) or a narrower one, so not {m}; the user \
                  can summon one in {m}"
+            ));
+        }
+        let file = s.role.as_deref().filter(|r| r.contains('/'));
+        if let Some(r) = file.filter(|r| !role::in_config(Path::new(r))) {
+            return Err(format!(
+                "role: {r} is not in {}; a helper you summon takes a role by its name",
+                crate::paths::short(&crate::paths::config_dir().to_string_lossy())
             ));
         }
         if let Some(t) = s.allowed_tools.iter().find(|t| !read_only(t)) {
@@ -411,6 +441,10 @@ pub(super) struct Start {
     pub(super) owner: Option<String>,
     /// A ritual run whose finished turns stay quiet.
     pub(super) quiet: bool,
+    /// A role's name or a file's full path, found at every launch.
+    pub(super) role: Option<String>,
+    /// The user's own words for its system prompt.
+    pub(super) system_prompt: Option<String>,
 }
 
 pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String> {
@@ -434,6 +468,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
     let id = store::uuid();
     let lead = s.owner.as_deref().and_then(|o| lead_name(&sh, o));
+    let role = s.role.as_deref().map(|r| role::find(r, Some(&share))).transpose()?;
     let opts = launch::Options {
         id: &id,
         session: &id,
@@ -445,6 +480,8 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         resume: false,
         extra: &s.extra,
         lead: lead.as_deref(),
+        role: role.as_deref(),
+        system_prompt: s.system_prompt.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -460,6 +497,8 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         ritual: s.ritual,
         keep: s.keep,
         extra: s.extra,
+        role: s.role,
+        system_prompt: s.system_prompt,
         owner: s.owner,
         quiet: s.quiet,
         turns: 0,
@@ -520,6 +559,16 @@ pub(super) fn recall(
     // The session its hooks last named, which /clear moves on. One that never got a prompt has
     // nothing to resume: it starts afresh on that session, with the same name.
     let resume = launch::has_conversation(&rec.session);
+    // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
+    // it, so a role file gone since does not keep it away; a fresh start would go without.
+    let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())) {
+        Some(Err(e)) if !resume => return Err(format!("{} cannot come back: {e}", rec.name)),
+        Some(Err(e)) => {
+            log(json!({"ev": "role_gone", "id": rec.id, "error": e}));
+            None
+        }
+        found => found.transpose().ok().flatten(),
+    };
     let opts = launch::Options {
         id: &rec.id,
         session: &rec.session,
@@ -531,6 +580,8 @@ pub(super) fn recall(
         resume,
         extra: &rec.extra,
         lead: lead.as_deref(),
+        role: role.as_deref(),
+        system_prompt: rec.system_prompt.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let free =

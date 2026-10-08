@@ -186,6 +186,9 @@ impl App {
             Some(Modal::Timetable(tt)) if tt.confirm => tt.confirm = false,
             Some(Modal::Timetable(tt)) if tt.open.is_some() => tt.open = None,
             Some(Modal::Summon(s)) if s.stage == Stage::Worktree && !s.waiting => {
+                (s.stage, s.error) = (Stage::Role, None);
+            }
+            Some(Modal::Summon(s)) if s.stage == Stage::Role && !s.waiting => {
                 (s.stage, s.error) = (Stage::Name, None);
             }
             Some(Modal::Summon(s)) if s.stage == Stage::Name && !s.waiting => {
@@ -210,6 +213,13 @@ impl App {
                     self.confirm();
                 } else {
                     s.selected = Some(i);
+                }
+            }
+            Some(Modal::Summon(s)) if s.stage == Stage::Role && !s.waiting => {
+                if s.role == i {
+                    self.confirm();
+                } else {
+                    s.role = i;
                 }
             }
             Some(Modal::Timetable(tt)) if tt.open.is_none() => {

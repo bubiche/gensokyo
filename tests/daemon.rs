@@ -129,6 +129,80 @@ fn summon_launches_claude_with_our_argv_and_env() {
 }
 
 #[test]
+fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall() {
+    let d = Daemon::start("role", &[]);
+    let at = |id: &Value, f: &str| {
+        let args = d.stub(id, "args");
+        let i = args.find(&format!("{f} "))? + f.len() + 1;
+        Some(args[i..].split(" --").next().unwrap().to_string())
+    };
+    // A shipped role by name, and words of the user's after gensokyo's own.
+    let r = d.summon(json!({"name": "Reimu", "role": "reviewer", "system_prompt": "be kind"}));
+    let file = at(&r["id"], "--append-system-prompt-file").unwrap();
+    assert!(file.ends_with("/share/roles/reviewer.md"), "{file}");
+    let ours = at(&r["id"], "--append-system-prompt").unwrap();
+    assert!(ours.contains("name is Reimu.") && ours.ends_with("\n\nbe kind"), "{ours:?}");
+
+    // One of the user's own shadows the shipped one of that name.
+    let mine = d.dir.join("conf/roles");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("reviewer.md"), "Be terse.").unwrap();
+    let r = d.summon(json!({"name": "Marisa", "role": "reviewer"}));
+    let file = at(&r["id"], "--append-system-prompt-file").unwrap();
+    assert_eq!(file, mine.join("reviewer.md").to_str().unwrap());
+    assert!(!at(&r["id"], "--append-system-prompt").unwrap().contains("\n\n"));
+
+    // A file by its path, from the CLI's own directory, found again at a recall with the words.
+    let own = d.dir.join("mine.md");
+    std::fs::write(&own, "Only read.").unwrap();
+    let new = ["new", "--name", "Sanae", "--role", "./mine.md", "--json", "--prompt", "hi"];
+    let mut o = d.command(&new);
+    let o = o.args(["--system-prompt", "be kind"]).current_dir(&d.dir).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(at(&r["id"], "--append-system-prompt-file").unwrap(), own.to_str().unwrap());
+    let recall = |name: &str, r: &Value| {
+        let gone = || d.list().iter().all(|x| x["name"] != name || !x["departed"].is_null());
+        d.stub(&r["id"], "ready");
+        d.cli(&["banish", name]);
+        wait(gone, "it gone");
+        let ready = d.dir.join("stub").join(format!("{}.ready", r["id"].as_str().unwrap()));
+        std::fs::remove_file(&ready).unwrap();
+        d.command(&["resume", name]).output().unwrap()
+    };
+    assert!(recall("Sanae", &r).status.success());
+    assert!(d.stub(&r["id"], "args").contains(" --resume "));
+    assert_eq!(at(&r["id"], "--append-system-prompt-file").unwrap(), own.to_str().unwrap());
+    assert!(at(&r["id"], "--append-system-prompt").unwrap().ends_with("\n\nbe kind"));
+    // Its file gone, a conversation still comes back with the prompt Claude Code recorded...
+    std::fs::remove_file(&own).unwrap();
+    assert!(recall("Sanae", &r).status.success());
+    assert_eq!(at(&r["id"], "--append-system-prompt-file"), None);
+    assert!(at(&r["id"], "--append-system-prompt").unwrap().ends_with("\n\nbe kind"));
+    // ...and one with nothing to resume is refused rather than started without it.
+    std::fs::write(&own, "Only read.").unwrap();
+    let y = d.summon(json!({"name": "Youmu", "role": own}));
+    std::fs::remove_file(&own).unwrap();
+    let o = recall("Youmu", &y);
+    assert!(!o.status.success(), "a fresh start with its role gone");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("Youmu cannot come back: "), "{o:?}");
+
+    for (bad, why) in [
+        (json!({"role": "nope"}), "no role nope (there are chief-of-staff, debugger,"),
+        (json!({"role": "../x"}), "../x is a file, and a file is named by its full path"),
+        (json!({"role": "mine.md"}), "a file is named by its path, ./mine.md"),
+        (json!({"role": "/no/such.md"}), "no such file"),
+        (json!({"system_prompt": "x".repeat(65 * 1024)}), "at most 64 KB"),
+    ] {
+        let mut req = json!({"t": "summon", "id": 3, "cwd": d.dir});
+        req.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let e = d.req(req);
+        assert_eq!(e["t"], "error");
+        assert!(e["error"].as_str().unwrap().contains(why), "{e}");
+    }
+}
+
+#[test]
 fn a_resident_marks_links_unless_the_user_said_otherwise() {
     use gensokyo::daemon::launch;
     let (bin, sock) = (Path::new("/bin"), Path::new("/s"));

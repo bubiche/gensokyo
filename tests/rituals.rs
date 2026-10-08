@@ -300,12 +300,24 @@ fn every_problem_is_named() {
         ("enabled: ture\n", "enabled: ture is neither true nor false"),
         ("catch_up: maybe\n", "catch_up: maybe is neither"),
         ("colour: red\n", "not a ritual setting: colour"),
+        ("role: nope\n", "role: no role nope (there are "),
+        ("role: roles/x.md\n", "role: roles/x.md is a file, and a file is named by its full path"),
+        ("role: /no/such.md\n", "role: /no/such.md: no such file"),
+        ("target: branch\nwhen: gh-prs\nrole: x\n", "and target branch types into a resident"),
+        ("target: Sakuya\nrole: reviewer\n", "role: reviewer is for a run that starts a session"),
     ];
     for (line, want) in cases {
         // A later line wins, so each case overrides the good ritual.
         let text = good.replacen("---\nhi", &format!("{line}---\nhi"), 1);
         let p = ritual::problem(&rit(&text), now, &tz, &trust).unwrap_or_default();
         assert!(p.contains(want), "{line:?}: {p}");
+    }
+    let own = dir.join("role.md");
+    std::fs::write(&own, "Be odd.").unwrap();
+    for role in ["reviewer", own.to_str().unwrap()] {
+        let text =
+            good.replacen("---\nhi", &format!("role: {role}\ntarget: persistent\n---\nhi"), 1);
+        assert_eq!(ritual::problem(&rit(&text), now, &tz, &trust), None, "{role}");
     }
     let bare = format!("---\nschedule: \"@daily\"\ncwd: {d}\n---\n");
     assert!(ritual::problem(&rit(&bare), now, &tz, &trust).unwrap().starts_with("no prompt"));

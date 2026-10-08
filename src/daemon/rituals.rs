@@ -516,6 +516,8 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
         extra,
         owner: None,
         quiet: r.quiet(),
+        role: r.role.clone(),
+        system_prompt: None,
     };
     start(shrine, s).map(|res| res.id)
 }

@@ -515,6 +515,10 @@ fn esc_goes_back_one_stage_in_summon_and_cast_too() {
         _ => None,
     };
     assert_eq!(stage(&a), Some(Stage::Name));
+    host(&mut a, b"\r");
+    assert_eq!(stage(&a), Some(Stage::Role));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), Some(Stage::Name));
     host(&mut a, b"\x1b");
     assert_eq!(stage(&a), Some(Stage::Dir));
     host(&mut a, b"\x1b");
@@ -732,15 +736,19 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     };
     assert_eq!(summoning(&a), Some((Stage::Name, false, None)));
     host(&mut a, b"\r");
+    assert_eq!(summoning(&a), Some((Stage::Role, false, None)));
+    assert!(sent(&mut a).is_empty(), "the name alone summons nothing: the role comes next");
+    host(&mut a, b"\r");
     let out = sent(&mut a);
     assert_eq!(kinds(&out), ["summon"]);
+    assert!(out[0].get("role").is_none() && out[0].get("system_prompt").is_none(), "{}", out[0]);
     let id = out[0]["id"].as_u64().unwrap();
-    assert_eq!(summoning(&a), Some((Stage::Name, true, None)));
+    assert_eq!(summoning(&a), Some((Stage::Role, true, None)));
     // A second Enter while it waits sends nothing more.
     host(&mut a, b"\r");
     assert!(sent(&mut a).is_empty());
     daemon(&mut a, Reply::Error { id, error: "no claude on PATH".into() });
-    assert_eq!(summoning(&a), Some((Stage::Name, false, Some("no claude on PATH".into()))));
+    assert_eq!(summoning(&a), Some((Stage::Role, false, Some("no claude on PATH".into()))));
     assert_eq!(said(&a), None, "the error is the modal's, not the sidebar's");
     host(&mut a, b"\r");
     let id = sent(&mut a)[0]["id"].as_u64().unwrap();
@@ -749,8 +757,7 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     assert_eq!(a.m.focused.as_deref(), Some("id-Sakuya"));
     // Esc while it waits, and a new summon opened: the old reply leaves the new one alone.
     host(&mut a, b"\x1dn");
-    host(&mut a, b"/\r");
-    host(&mut a, b"\r");
+    host(&mut a, b"/\r\r\r");
     let id = sent(&mut a).last().unwrap()["id"].as_u64().unwrap();
     host(&mut a, b"\x1b");
     assert!(a.m.modal.is_none());
@@ -758,6 +765,26 @@ fn summon_waits_for_its_reply_and_shows_its_error() {
     daemon(&mut a, Reply::Error { id, error: "late".into() });
     daemon(&mut a, Reply::Summoned { id, resident: resident(4, "Youmu"), note: None });
     assert_eq!(summoning(&a), Some((Stage::Dir, false, None)));
+}
+
+#[test]
+fn the_role_stage_sends_the_role_picked_and_the_words_typed() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dn");
+    sent(&mut a);
+    host(&mut a, b"/\r\r");
+    let Some(Modal::Summon(s)) = &mut a.m.modal else { panic!("no summon modal") };
+    assert_eq!((s.stage, s.role), (Stage::Role, 0), "none is picked first");
+    s.roles = vec!["debugger".into(), "reviewer".into()];
+    // Down past the end stays on the last; Up comes back one.
+    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[A");
+    host(&mut a, b"mind the SQL");
+    host(&mut a, b"\x1b[200~ layer\nonly\n\x1b[201~");
+    host(&mut a, b"\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["summon"]);
+    assert_eq!(out[0]["role"], "debugger", "{}", out[0]);
+    assert_eq!(out[0]["system_prompt"], "mind the SQL layer only", "{}", out[0]);
 }
 
 #[test]
@@ -819,11 +846,11 @@ fn in_a_git_repository_summon_asks_for_a_worktree_and_enter_works_right_there() 
     host(&mut a, b"\x1dn");
     sent(&mut a);
     host(&mut a, format!("{}\r", repo.display()).as_bytes());
-    host(&mut a, b"\r");
+    host(&mut a, b"\r\r");
     assert_eq!(stage(&a), Some(Stage::Worktree));
-    assert!(sent(&mut a).is_empty(), "the name alone summons nothing in a repository");
+    assert!(sent(&mut a).is_empty(), "the name and role summon nothing in a repository");
     host(&mut a, b"\x1b");
-    assert_eq!(stage(&a), Some(Stage::Name), "Esc goes back to the name");
+    assert_eq!(stage(&a), Some(Stage::Role), "Esc goes back to the role");
     host(&mut a, b"\r\r");
     let out = sent(&mut a);
     assert_eq!(kinds(&out), ["summon"]);
@@ -832,7 +859,7 @@ fn in_a_git_repository_summon_asks_for_a_worktree_and_enter_works_right_there() 
     host(&mut a, b"\x1b");
     host(&mut a, b"\x1dn");
     sent(&mut a);
-    host(&mut a, format!("{}\r\rfix-login\r", repo.display()).as_bytes());
+    host(&mut a, format!("{}\r\r\rfix-login\r", repo.display()).as_bytes());
     let out = sent(&mut a);
     assert_eq!(out[0]["worktree"], serde_json::json!({"slug": "fix-login"}), "{}", out[0]);
     let (id, note) = (out[0]["id"].as_u64().unwrap(), "reused ~/x/.claude/worktrees/fix-login");

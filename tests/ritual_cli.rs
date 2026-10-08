@@ -18,13 +18,16 @@ impl Env {
     /// has been trusted in.
     fn new(name: &str) -> Env {
         let root = fresh(&format!("rc-{name}"));
-        for d in ["config", "state", "home", "claude", "share/rituals", "trusted", "untrusted"] {
+        let dirs = ["config", "state", "home", "claude", "share/rituals", "share/roles"];
+        for d in dirs.into_iter().chain(["trusted", "untrusted"]) {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("share");
         std::fs::copy(src.join("names.txt"), root.join("share/names.txt")).unwrap();
-        for f in std::fs::read_dir(src.join("rituals")).unwrap().flatten() {
-            std::fs::copy(f.path(), root.join("share/rituals").join(f.file_name())).unwrap();
+        for d in ["rituals", "roles"] {
+            for f in std::fs::read_dir(src.join(d)).unwrap().flatten() {
+                std::fs::copy(f.path(), root.join("share").join(d).join(f.file_name())).unwrap();
+            }
         }
         let e = Env { root: std::fs::canonicalize(&root).unwrap() };
         let trusted = e.path("trusted");
@@ -304,6 +307,37 @@ fn a_residents_ritual_arrives_paused_and_only_the_user_resumes_it() {
         (&r["mode"], &r["allowed_tools"]),
         (&"bypassPermissions".into(), &serde_json::json!(["Bash"]))
     );
+}
+
+#[test]
+fn a_role_is_written_and_a_residents_names_a_file_only_in_the_config_dir() {
+    let e = Env::new("role");
+    let add = |name: &str, role: &str, inside: bool| {
+        let a = ["ritual", "add", "--name", name, "--prompt", "Tea.", "--schedule", "@daily"];
+        let a: Vec<&str> =
+            a.into_iter().chain(["--target", "persistent", "--role", role]).collect();
+        if inside { e.inside(&a) } else { e.run(&a) }
+    };
+    let o = add("tea", "reviewer", false);
+    assert!(o.status.success(), "{}", err(&o));
+    let text = std::fs::read_to_string(e.mine("tea")).unwrap();
+    assert!(text.contains("role: \"reviewer\"\n"), "{text}");
+    let r = e.list().into_iter().find(|r| r["name"] == "tea").unwrap();
+    assert_eq!((&r["role"], &r["problem"]), (&"reviewer".into(), &serde_json::Value::Null));
+    let o = add("coffee", "nope", false);
+    assert!(!o.status.success() && err(&o).contains("no role nope"), "{}", err(&o));
+
+    // A resident's: a name is the user's or shipped, a file must be one the user put there.
+    std::fs::write(e.path("home/role.md"), "Be odd.").unwrap();
+    let o = add("cocoa", e.path("home/role.md").to_str().unwrap(), true);
+    assert!(!o.status.success() && err(&o).contains("--role: "), "{}", err(&o));
+    assert!(err(&o).contains("is not in"), "{}", err(&o));
+    std::fs::write(e.path("config/role.md"), "Be odd.").unwrap();
+    let o = add("cocoa", e.path("config/role.md").to_str().unwrap(), true);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = e.run(&["ritual", "enable", "cocoa"]);
+    assert!(out(&o).contains("  role       "), "{}", out(&o));
+    assert!(add("chai", "debugger", true).status.success());
 }
 
 #[test]

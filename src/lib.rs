@@ -10,5 +10,6 @@ pub mod hooks;
 pub mod paths;
 pub mod proto;
 pub mod ritual;
+pub mod role;
 pub mod tele;
 pub mod vt;

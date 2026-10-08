@@ -123,7 +123,7 @@ fn watch_for(lines: &mut Lines, mut f: impl FnMut(&Value) -> bool) -> Value {
 
 #[test]
 fn a_due_fire_starts_one_run_with_its_flags_and_its_notes() {
-    let text = hourly("allowed_tools:\n  - Read\n  - Bash(ls:*)\nmodel: haiku\n");
+    let text = hourly("allowed_tools:\n  - Read\n  - Bash(ls:*)\nmodel: haiku\nrole: reviewer\n");
     // Two minutes past the hour: this hour's fire is not this ritual's (it was not seen then).
     let d = Daemon::start("due", T0 + 120, &[("rounds", &text)], &[]);
     wait(|| d.stamp("rounds") == Some(T0 + 120), "first sight's stamp");
@@ -149,6 +149,7 @@ fn a_due_fire_starts_one_run_with_its_flags_and_its_notes() {
     );
     assert!(args.contains(&tools), "{args}");
     assert!(args.contains("--model haiku"), "{args}");
+    assert!(args.contains("/share/roles/reviewer.md --model"), "{args}");
     let memory = notes.join("memory.md");
     assert!(args.trim_end().ends_with(&format!(
         "Your notes from previous runs are at `{}`. Read them first; update them before you finish.",
@@ -358,7 +359,8 @@ fn notices_nobody_watched_are_missed_until_a_client_has_them_and_only_the_last_t
 }
 
 fn headless_run(name: &str, env: &[(&str, &str)]) -> (Daemon, String) {
-    let d = Daemon::start(name, T0 + 120, &[("quiet", &hourly("headless: true\n"))], env);
+    let text = hourly("headless: true\nrole: researcher\n");
+    let d = Daemon::start(name, T0 + 120, &[("quiet", &text)], env);
     wait(|| d.stamp("quiet").is_some(), "first sight");
     d.clock(T0 + 3600 + 5);
     wait(|| d.journal("quiet").iter().any(|e| e["ev"] == "done" || e["ev"] == "failed"), "the run");
@@ -386,6 +388,8 @@ fn what_a_headless_run_leaves_behind_goes_with_it() {
 fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
     let (d, log) = headless_run("headless", &[("STUB_P_DENY", "Bash")]);
     assert!(log.contains("stub -p ran in"), "{log}");
+    let args = std::fs::read_to_string(d.dir.join("stub/print.args")).unwrap();
+    assert!(args.contains("/share/roles/researcher.md --allowedTools "), "{args}");
     assert!(log.contains(
         "refused  Bash - a run with nobody to ask needs it in the ritual's allowed_tools"
     ));

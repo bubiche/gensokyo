@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 11;
+pub const PROTO: u32 = 12;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -321,6 +321,12 @@ pub struct Summon {
     /// `claude --allowedTools`, kept for a recall too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
+    /// A role's name, or the full path of a file: appended to its system prompt (`role.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Words of the user's own appended to its system prompt, beside the role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
     /// A checkout of its own, `<repo>/.claude/worktrees/<slug>`, made (or found) first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeAsk>,
@@ -401,6 +407,8 @@ pub struct RitualInfo {
     pub mode: Option<String>,
     pub allowed_tools: Vec<String>,
     pub mcp_config: Option<String>,
+    /// The role appended to each run's system prompt, as written.
+    pub role: Option<String>,
     pub when: Option<String>,
     /// Why it cannot fire, when something is wrong with it.
     pub problem: Option<String>,

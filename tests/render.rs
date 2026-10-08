@@ -140,6 +140,11 @@ fn summon(stage: Stage) -> Modal {
         completions: vec!["scratch_repo/".into(), "scripts/".into()],
         name: "Yuyu".into(),
         repo: stage != Stage::Dir,
+        roles: ["chief-of-staff", "debugger", "implementer", "researcher", "reviewer"]
+            .map(String::from)
+            .into(),
+        role: 5,
+        words: if stage == Stage::Role { "focus on the SQL layer".into() } else { String::new() },
         worktree: if stage == Stage::Worktree { "fix-login".into() } else { String::new() },
         error: (stage == Stage::Name).then(|| "Yuyu is already here".into()),
         waiting: false,
@@ -284,6 +289,7 @@ fn screens() -> Vec<(&'static str, Model)> {
         ),
         ("summon-dir", with(&|m| m.modal = Some(summon(Stage::Dir)))),
         ("summon-name", with(&|m| m.modal = Some(summon(Stage::Name)))),
+        ("summon-role", with(&|m| m.modal = Some(summon(Stage::Role)))),
         ("summon-worktree", with(&|m| m.modal = Some(summon(Stage::Worktree)))),
         (
             "banish",
@@ -665,6 +671,7 @@ fn a_text_field_has_the_cursor_after_what_is_typed() {
     let fields = [
         (Stage::Dir, "  /Users/someone/dev/sc"),
         (Stage::Name, "name: Yuyu"),
+        (Stage::Role, "your words: focus on the SQL layer"),
         (Stage::Worktree, "worktree: fix-login"),
     ];
     for (stage, typed) in fields {

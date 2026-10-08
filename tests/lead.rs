@@ -358,6 +358,17 @@ fn a_helper_works_in_its_leads_mode_or_narrower_and_is_let_only_read() {
     ]);
     assert!(o.status.success(), "{}", err(&o));
 
+    // A role file only from the config dir: claude reads it past every Read rule.
+    let (outside, conf) = (d.dir.join("secret.md"), d.dir.join("conf/mine.md"));
+    std::fs::create_dir_all(d.dir.join("conf")).unwrap();
+    for f in [&outside, &conf] {
+        std::fs::write(f, "Be odd.").unwrap();
+    }
+    let o = new(&["Cirno", "--role", outside.to_str().unwrap()]);
+    assert!(err(&o).contains("a helper you summon takes a role by its name"), "{}", err(&o));
+    let o = new(&["Rumia", "--role", conf.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+
     // Rituals run and resume at the user's hand.
     let o = inside(&d, &lead, &["ritual", "run", "tea"]);
     assert!(err(&o).contains("the user runs and resumes rituals"), "{}", err(&o));

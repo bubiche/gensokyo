@@ -48,6 +48,14 @@ fn headless_limit() -> Duration {
 /// out. One still going after `HEADLESS_LIMIT` is stopped, by whichever daemon is there.
 pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), String> {
     let (claude, env) = shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH")?;
+    // Found before any of the run's files is made, so a role gone leaves none behind.
+    let mut args = ritual::args(r, &d.path);
+    if let Some(role) = &r.role {
+        let role = crate::role::find(role, shrine.borrow().share.as_deref())?;
+        // Before the variadic `--allowedTools`, which must end the list.
+        let at = args.iter().position(|a| a == "--allowedTools").unwrap_or(args.len());
+        args.splice(at..at, ["--append-system-prompt-file".into(), role.to_string_lossy().into()]);
+    }
     let cwd = r.cwd.clone().unwrap_or_default();
     let tz = TimeZone::system();
     let started = now();
@@ -58,7 +66,6 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
     std::fs::create_dir_all(d.runs()).map_err(|e| e.to_string())?;
     let file = |ext: &str| std::fs::File::create(part(&stem, ext)).map_err(|e| e.to_string());
     let (out, err, mut logf) = (file("json")?, file("err")?, file("log")?);
-    let args = ritual::args(r, &d.path);
     let prompt = ritual::prompt_text(r, &d.memory());
     let _ = write!(
         logf,

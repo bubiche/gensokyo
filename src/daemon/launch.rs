@@ -25,6 +25,10 @@ pub struct Options<'a> {
     pub extra: &'a [String],
     /// A helper's lead, by name.
     pub lead: Option<&'a str>,
+    /// The role's file, found.
+    pub role: Option<&'a Path>,
+    /// The user's own words for the system prompt.
+    pub system_prompt: Option<&'a str>,
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -101,7 +105,16 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     a.extend(DISALLOWED.map(OsString::from));
     a.extend(["--settings".into(), settings(p, o.id, cwd).into()]);
     a.extend(["--plugin-dir".into(), p.share.join("plugin").into_os_string()]);
-    a.extend(["--append-system-prompt".into(), system_paragraph(o.name, o.lead).into()]);
+    // Of two `--append-system-prompt`s claude keeps the last, so the user's words join ours;
+    // a `--append-system-prompt-file` is kept beside it, after it.
+    let mut system = system_paragraph(o.name, o.lead);
+    if let Some(s) = o.system_prompt {
+        system = format!("{system}\n\n{s}");
+    }
+    a.extend(["--append-system-prompt".into(), system.into()]);
+    if let Some(r) = o.role {
+        a.extend(["--append-system-prompt-file".into(), r.into()]);
+    }
     for (flag, v) in [("--model", o.model), ("--effort", o.effort), ("--permission-mode", o.mode)] {
         if let Some(v) = v {
             a.extend([flag.into(), v.into()]);

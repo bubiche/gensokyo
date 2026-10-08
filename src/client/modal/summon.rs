@@ -1,5 +1,6 @@
-//! Summon: a directory (typed with Tab completion, or one of the recent ones), then a name, and
-//! in a git repository a worktree to work in, which is none unless one is named.
+//! Summon: a directory (typed with Tab completion, or one of the recent ones), then a name, then
+//! a role and words of the user's own for its system prompt, and in a git repository a worktree
+//! to work in, which is none unless one is named.
 
 use super::Key;
 use crate::client::app::App;
@@ -22,6 +23,12 @@ pub struct Summon {
     pub name: String,
     /// The directory chosen is in a git repository: the worktree stage follows the name.
     pub repo: bool,
+    /// The roles there are, by name (`role.rs`).
+    pub roles: Vec<String>,
+    /// The one picked: 0 is none, else one past its index in `roles`.
+    pub role: usize,
+    /// Words of the user's own for its system prompt, with the role.
+    pub words: String,
     /// A worktree to make, or find, by its name; empty works in the directory itself.
     pub worktree: String,
     pub error: Option<String>,
@@ -34,6 +41,7 @@ pub enum Stage {
     #[default]
     Dir,
     Name,
+    Role,
     Worktree,
 }
 
@@ -69,6 +77,22 @@ impl Summon {
                     false => "Enter picks a random name when this is empty",
                 }),
             ],
+            Stage::Role => {
+                let names = std::iter::once("none").chain(self.roles.iter().map(String::as_str));
+                let names: Vec<&str> = names.collect();
+                let mut rows = vec![Row::text(&format!("In {}", tilde(&self.path, &m.home)))];
+                rows.push(Row::dim("role"));
+                rows.extend(window(names.len(), self.role, 8).map(|i| {
+                    let sel = self.role == i;
+                    Row::Item(i, format!("{}{}", mark(sel), names[i]), sel)
+                }));
+                rows.push(Row::Field(format!("your words: {}", self.words), PICK));
+                rows.push(Row::dim(match self.waiting {
+                    true => "summoning…",
+                    false => "↑↓ a role, and what you type goes with it into its system prompt",
+                }));
+                rows
+            }
             Stage::Worktree => vec![
                 Row::text(&format!("In {}", tilde(&self.path, &m.home))),
                 Row::Field(format!("worktree: {}", self.worktree), PICK),
@@ -123,6 +147,16 @@ impl Summon {
             }
             (Stage::Name, Key::Text(ch)) => self.name.push(ch),
             (Stage::Name, Key::Paste(t)) => self.name.push_str(t.trim()),
+            (Stage::Role, Key::Up) => self.role = self.role.saturating_sub(1),
+            (Stage::Role, Key::Down) => self.role = (self.role + 1).min(self.roles.len()),
+            (Stage::Role, Key::Back) => {
+                self.words.pop();
+            }
+            (Stage::Role, Key::Text(ch)) => self.words.push(ch),
+            // One line: it is shown, and sent, as typed.
+            (Stage::Role, Key::Paste(t)) => {
+                self.words.push_str(&t.trim_end_matches(['\r', '\n']).replace(['\r', '\n'], " "))
+            }
             (Stage::Worktree, Key::Back) => {
                 self.worktree.pop();
             }
@@ -151,15 +185,24 @@ impl Summon {
 }
 
 impl App {
-    /// The directory, once it is one, moves on to the name; the name summons, and the modal
-    /// stays until the daemon says how that went.
+    /// The directory, once it is one, moves on to the name, the name to the role; the role
+    /// summons, or in a repository the worktree does, and the modal stays until the daemon says
+    /// how that went.
     pub(super) fn summon_confirm(&mut self, mut s: Summon) {
         let home = self.m.home.clone();
         if s.waiting {
             self.m.modal = Some(super::Modal::Summon(s));
             return;
         }
-        if s.stage == Stage::Name && s.repo {
+        if s.stage == Stage::Name {
+            let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
+            s.roles = crate::role::names(share.as_deref());
+            s.role = s.role.min(s.roles.len());
+            (s.stage, s.error) = (Stage::Role, None);
+            self.m.modal = Some(super::Modal::Summon(s));
+            return;
+        }
+        if s.stage == Stage::Role && s.repo {
             (s.stage, s.error) = (Stage::Worktree, None);
             self.m.modal = Some(super::Modal::Summon(s));
             return;
@@ -167,10 +210,13 @@ impl App {
         if s.stage != Stage::Dir {
             let cwd = expand(&s.path, &home).to_string_lossy().into_owned();
             let name = Some(s.name.trim().to_string()).filter(|n| !n.is_empty());
+            let role = s.role.checked_sub(1).and_then(|i| s.roles.get(i)).cloned();
+            let system_prompt = Some(s.words.trim().to_string()).filter(|w| !w.is_empty());
             let slug = s.worktree.trim().to_string();
             let worktree = (s.stage == Stage::Worktree && !slug.is_empty())
                 .then(|| proto::WorktreeAsk { slug, ..Default::default() });
-            let ask = proto::Summon { cwd, name, worktree, ..Default::default() };
+            let ask =
+                proto::Summon { cwd, name, role, system_prompt, worktree, ..Default::default() };
             let id = self.send(Request::Summon(ask));
             (self.summoning, s.waiting, s.error) = (Some(id), true, None);
             self.m.modal = Some(super::Modal::Summon(s));

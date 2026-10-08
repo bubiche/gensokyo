@@ -41,6 +41,9 @@ BRIEF
 ```
 
 It prints one JSON object (`id`, `name`, `slot`, `owner`, `turns`, `needs`, …). Keep the name.
+`--role implementer` (or `reviewer`, `researcher`, `debugger`, or one of the user's own: a name
+that is none is refused with the list) gives it a standing stance in its system prompt that
+outlasts `/compact`; the brief still says the task.
 A helper works in your permission mode unless you name a narrower one with `-p` (`plan` <
 `default` < `acceptEdits` < `auto` < `bypassPermissions`), and `--allowed-tools` (again for each)
 lets it use only `Read`, `Glob`, `Grep`, `WebSearch` or `WebFetch` without asking; it asks the

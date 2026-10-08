@@ -19,6 +19,7 @@ pub struct Add {
     pub effort: Option<String>,
     pub mode: Option<String>,
     pub mcp_config: Option<String>,
+    pub role: Option<String>,
     pub target: Option<String>,
     pub keep: Option<String>,
     pub overlap: Option<String>,
@@ -105,6 +106,9 @@ pub fn add(
     }
     if let Some(m) = &a.mcp_config {
         f += &format!("mcp_config: {}\n", quote(m)?);
+    }
+    if let Some(r) = &a.role {
+        f += &format!("role: {}\n", quote(r)?);
     }
     for (k, v) in [
         ("keep", &a.keep),

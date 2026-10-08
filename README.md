@@ -212,6 +212,34 @@ cast Spirit Sign "Status Report" on Reimu and Sakuya; Marisa has a dialog waitin
 From a shell, `gensokyo broadcast` alone lists the cards; the targets are `all`, `awaiting`,
 `idle` or residents by name, slot or id, and `--with Sanae` names a pair card's peer.
 
+## Roles
+
+A **role** is a paragraph added to a resident's system prompt when it is summoned: a standing
+way of working that `/clear` and `/compact` keep, where a first prompt is gone after either.
+The summon dialog asks for one after the name, with the arrow keys, and for words of your own
+to go with it ("focus on the SQL layer"); either, both or neither. Five ship with gensokyo:
+
+| Role | It |
+|---|---|
+| `reviewer` | reviews a diff, branch or PR, changes nothing, and reports confirmed findings with file, line and a failing case, or `LGTM` |
+| `implementer` | makes the change asked for and only that, tests it, and reports what changed and how it was checked |
+| `debugger` | reproduces the failure, finds the cause, fixes it with a test that fails without the fix |
+| `researcher` | answers a question with evidence and changes nothing |
+| `chief-of-staff` | coordinates instead of coding: hands work to helpers in the roles above, checks it, and keeps you briefed |
+
+Your own go in `~/.config/gensokyo/roles/<name>.md`, and one of yours shadows a shipped one of
+the same name. The file is the text as it stands, with no frontmatter. It reaches Claude Code as
+`--append-system-prompt-file`, after gensokyo's own paragraph and your words, and it adds to
+Claude Code's own system prompt rather than replacing it. From a shell, `gensokyo new --role
+reviewer --system-prompt "…"` does the same, and `--role` also takes a file by its path.
+
+A resident keeps the system prompt it started with: Claude Code records it with the
+conversation, so a recall brings the same one back even if the file has changed since, until
+the conversation is compacted. The role file is looked up again at a recall; if it has gone, a
+conversation still comes back with the prompt it recorded, and one with nothing to resume is
+refused. A lead can summon its helpers in a role, and a
+ritual's runs take one with `role:` (below).
+
 ## Rituals
 
 A ritual is standing work on a schedule: a markdown file that says when to run, where, and what
@@ -263,6 +291,9 @@ scheduled?" work the same way.
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts
   with. A ritual that reads Slack or mail needs its MCP server: a claude.ai connector, the
   `cwd`'s own Claude Code setup, or `mcp_config`.
+- **`role`** (with `target: new` or `persistent`): a role for every run's system prompt, by name
+  or a file's full path, as [Roles](#roles) describes. A persistent ritual's session keeps the
+  role it was started with, as it keeps its model.
 - **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` in the
   background, what it said goes to a log beside the ritual's notes, and a run still going after
   an hour is stopped. Nobody is there to answer a permission prompt, so what it needs goes in
@@ -376,7 +407,7 @@ single-branch clone gets it added to `origin`'s fetched branches); a new
 one starts from the remote's default branch, fetched first, or `--base`. Started from a
 subdirectory of the repository, the resident works in the same one inside the worktree. A
 branch checked out elsewhere is refused, and so is a worktree whose directory is gone or whose
-checkout was cut off, with the git command that clears it. The summon dialog asks for a worktree after the name
+checkout was cut off, with the git command that clears it. The summon dialog asks for a worktree after the role
 when the directory is in a git repository; leaving it empty works right there. gensokyo never
 removes a worktree: `git worktree remove` is yours. It does not use `claude --worktree`, whose
 `/exit` stops at a keep-or-remove question. A lead's skill gives each helper its own this way.
@@ -396,7 +427,8 @@ without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
 another session is the `gensokyo-peers` skill's to write, that standing schedules are
 gensokyo's (Claude Code's own `CronCreate`, `CronList` and `CronDelete` are turned off for
 residents and headless runs), and that helpers are the `gensokyo-lead` skill's. A helper hears
-instead who its lead is, and that its last message is its report. The three skills carry what a
+instead who its lead is, and that its last message is its report. A [role](#roles) and words of
+your own come after that paragraph, only when you ask for them. The three skills carry what a
 click cannot: `gensokyo-peers` writes an opening message that says who is asking, what is
 wanted, the round cap and the reply address; `gensokyo-ritual` turns "every weekday at 9:05"
 into a ritual file; `gensokyo-lead` briefs helpers, waits on them and reads their reports. Only
@@ -411,6 +443,7 @@ and for the residents' own skills:
 gensokyo list [--all] [--json]          # who is here: slot, state, directory, model, context
 gensokyo new ~/dev/x -n Marisa -m haiku # summon; also -e effort, -p permission mode, --prompt,
                                         #   --prompt-file FILE|-, --allowed-tools TOOL, --json
+gensokyo new ~/dev/x --role reviewer    # with a role (Roles); --system-prompt TEXT, your own
 gensokyo new ~/dev/x --worktree fix     # in a worktree of its own (below); --branch, --base
 gensokyo resume Marisa                  # bring a departed one back (list --all shows them)
 gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
@@ -463,7 +496,8 @@ version of it is refused. Script against the commands.
 
 ## Files
 
-- `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `rituals/`, `probes/`.
+- `~/.config/gensokyo/`: `config` (`KEY=value` lines), `spellcards/`, `roles/`, `rituals/`,
+  `probes/`.
   `GENSOKYO_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gensokyo`.
 - `~/.local/state/gensokyo/`: `residents/` and `departed/` (one JSON record each), `answers/`
   (each resident's last answer), `daemon.log`, `run/` (the socket and locks), and each ritual's

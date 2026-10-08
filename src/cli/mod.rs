@@ -37,7 +37,7 @@ enum Cmd {
         all: bool,
     },
     /// Summon a resident: Claude Code in a directory of its own
-    New(New),
+    New(Box<New>),
     /// Bring a departed resident back into its old conversation
     #[command(visible_alias = "recall")]
     Resume {
@@ -159,6 +159,13 @@ struct New {
     /// A tool it may use without asking (claude --allowedTools); again for more
     #[arg(long = "allowed-tools", value_name = "TOOL")]
     allowed_tools: Vec<String>,
+    /// Appended to its system prompt: a role by name (reviewer, implementer, chief-of-staff,
+    /// researcher, debugger, or one of yours in roles/), or a file by its path
+    #[arg(long, value_name = "NAME|FILE")]
+    role: Option<String>,
+    /// Your own words appended to its system prompt, with the role if there is one
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+    system_prompt: Option<String>,
     /// Print the new resident as JSON: id, name, slot and the rest `list --json` gives
     #[arg(long)]
     json: bool,
@@ -183,7 +190,7 @@ pub fn main(args: &[String]) -> ExitCode {
     };
     let r = match cli.cmd {
         Cmd::List { json, all } => list(json, all),
-        Cmd::New(n) => new(n),
+        Cmd::New(n) => new(*n),
         Cmd::Resume { who } => resume(&who),
         Cmd::Banish { who } => say(request(Request::Banish { who }, false)),
         Cmd::Close { who } => say(request(Request::Close { who }, false)),
@@ -302,8 +309,19 @@ fn resume(who: &str) -> Result<(), String> {
     }
 }
 
+/// A role that is a file, found from here: the daemon is somewhere else. One that is not there
+/// is left for the daemon to say so.
+pub(crate) fn role_here(here: &std::path::Path, r: String) -> String {
+    if !r.contains('/') {
+        return r;
+    }
+    let p = here.join(paths::expand(&r));
+    std::fs::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned()
+}
+
 fn new(n: New) -> Result<(), String> {
     let here = std::env::current_dir().map_err(|e| e.to_string())?;
+    let role = n.role.map(|r| role_here(&here, r));
     let cwd = match n.dir.as_deref() {
         None | Some("") => here,
         Some(d) => here.join(d),
@@ -326,6 +344,8 @@ fn new(n: New) -> Result<(), String> {
         mode: n.mode,
         prompt: prompt.filter(|p| !p.trim().is_empty()),
         allowed_tools: n.allowed_tools,
+        role,
+        system_prompt: n.system_prompt.filter(|p| !p.trim().is_empty()),
         worktree: n.worktree.map(|slug| WorktreeAsk { slug, branch: n.branch, base: n.base }),
     };
     let reply = request(Request::Summon(s), true)?;

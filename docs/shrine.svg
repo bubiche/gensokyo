@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="1032" height="600" viewBox="0 0 1032 600">
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace;font-size:14px;white-space:pre}.b{font-weight:bold}.d{opacity:.6}.i{font-style:italic}.u{text-decoration:underline}</style>
+<style>.c0{fill:#686868}.c1{fill:#d0d0d0}.c2{fill:#d77757}.c3{fill:#999999}.c4{fill:#000000}.c5{fill:#ffffff}.c6{fill:#b1b9f9}.c7{fill:#888888}.c8{fill:#00c5c7}</style>
+<rect width="100%" height="100%" rx="6" fill="#141414"/>
+<rect x="20.4" y="28" width="193.2" height="16" fill="#3a3a3a"/>
+<rect x="20.4" y="44" width="193.2" height="16" fill="#3a3a3a"/>
+<rect x="20.4" y="60" width="193.2" height="16" fill="#c7c400"/>
+<rect x="20.4" y="92" width="193.2" height="16" fill="#c7c400"/>
+<rect x="230.4" y="108" width="781.2" height="16" fill="#373737"/>
+<rect x="230.4" y="124" width="781.2" height="16" fill="#373737"/>
+<text x="12.0" y="24.5" class="c0" textLength="285.6" lengthAdjust="spacingAndGlyphs">┌ gensokyo ─────────────┐┌ 1 Reimu</text>
+<text x="306.0" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="322.8" y="24.5" class="c0" textLength="151.2" lengthAdjust="spacingAndGlyphs">~/dev/scratch_repo</text>
+<text x="482.4" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="499.2" y="24.5" class="c0" textLength="33.6" lengthAdjust="spacingAndGlyphs">main</text>
+<text x="541.2" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="558.0" y="24.5" class="c0" textLength="84.0" lengthAdjust="spacingAndGlyphs">Sonnet 5.5</text>
+<text x="642.0" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">→</text>
+<text x="650.4" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⚖</text>
+<text x="667.2" y="24.5" class="c0" textLength="33.6" lengthAdjust="spacingAndGlyphs">Opus</text>
+<text x="709.2" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="726.0" y="24.5" class="c0" textLength="50.4" lengthAdjust="spacingAndGlyphs">medium</text>
+<text x="784.8" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="801.6" y="24.5" class="c0" textLength="58.8" lengthAdjust="spacingAndGlyphs">default</text>
+<text x="868.8" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="885.6" y="24.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">⚡</text>
+<text x="902.4" y="24.5" class="c0" textLength="25.2" lengthAdjust="spacingAndGlyphs">67%</text>
+<text x="936.0" y="24.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="952.8" y="24.5" class="c0" textLength="67.2" lengthAdjust="spacingAndGlyphs">$0.06 ─┐</text>
+<text x="12.0" y="40.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="40.5" class="c1 b" textLength="8.4" lengthAdjust="spacingAndGlyphs">1</text>
+<text x="37.2" y="40.5" class="c1 b" textLength="8.4" lengthAdjust="spacingAndGlyphs">○</text>
+<text x="54.0" y="40.5" class="c1 b" textLength="159.6" lengthAdjust="spacingAndGlyphs">Reimu      Son   4%</text>
+<text x="213.6" y="40.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="238.8" y="40.5" class="c2" textLength="8.4" lengthAdjust="spacingAndGlyphs">▐</text>
+<text x="247.2" y="40.5" class="c2" textLength="50.4" lengthAdjust="spacingAndGlyphs">▛███▛█</text>
+<text x="322.8" y="40.5" class="c1 b" textLength="50.4" lengthAdjust="spacingAndGlyphs">Claude</text>
+<text x="381.6" y="40.5" class="c1 b" textLength="33.6" lengthAdjust="spacingAndGlyphs">Code</text>
+<text x="423.6" y="40.5" class="c3" textLength="67.2" lengthAdjust="spacingAndGlyphs">v2.1.294</text>
+<text x="1011.6" y="40.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="56.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="54.0" y="56.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="70.8" y="56.5" class="c0" textLength="33.6" lengthAdjust="spacingAndGlyphs">main</text>
+<text x="213.6" y="56.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="56.5" class="c2" textLength="16.8" lengthAdjust="spacingAndGlyphs">▝▜</text>
+<text x="247.2" y="56.5" class="c2" textLength="42.0" lengthAdjust="spacingAndGlyphs">█████</text>
+<text x="289.2" y="56.5" class="c2" textLength="16.8" lengthAdjust="spacingAndGlyphs">█▀</text>
+<text x="322.8" y="56.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">Sonnet</text>
+<text x="381.6" y="56.5" class="c3" textLength="25.2" lengthAdjust="spacingAndGlyphs">5.5</text>
+<text x="415.2" y="56.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="432.0" y="56.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">Claude</text>
+<text x="490.8" y="56.5" class="c3" textLength="33.6" lengthAdjust="spacingAndGlyphs">Team</text>
+<text x="1011.6" y="56.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="72.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="72.5" class="c4" textLength="8.4" lengthAdjust="spacingAndGlyphs">2</text>
+<text x="37.2" y="72.5" class="c4" textLength="8.4" lengthAdjust="spacingAndGlyphs">✦</text>
+<text x="54.0" y="72.5" class="c4" textLength="159.6" lengthAdjust="spacingAndGlyphs">Marisa     Hai   4%</text>
+<text x="213.6" y="72.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="238.8" y="72.5" class="c2" textLength="16.8" lengthAdjust="spacingAndGlyphs">▝▝</text>
+<text x="280.8" y="72.5" class="c2" textLength="16.8" lengthAdjust="spacingAndGlyphs">▝▝</text>
+<text x="322.8" y="72.5" class="c3" textLength="151.2" lengthAdjust="spacingAndGlyphs">~/dev/scratch_repo</text>
+<text x="1011.6" y="72.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="88.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="54.0" y="88.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="70.8" y="88.5" class="c0" textLength="159.6" lengthAdjust="spacingAndGlyphs">main             ││</text>
+<text x="1011.6" y="88.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="104.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="104.5" class="c4" textLength="8.4" lengthAdjust="spacingAndGlyphs">3</text>
+<text x="37.2" y="104.5" class="c4" textLength="8.4" lengthAdjust="spacingAndGlyphs">✧</text>
+<text x="54.0" y="104.5" class="c4" textLength="159.6" lengthAdjust="spacingAndGlyphs">Sakuya     Hai   4%</text>
+<text x="213.6" y="104.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="104.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="120.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="54.0" y="120.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="70.8" y="120.5" class="c0" textLength="159.6" lengthAdjust="spacingAndGlyphs">main             ││</text>
+<text x="230.4" y="120.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">❯</text>
+<text x="247.2" y="120.5" class="c5" textLength="688.8" lengthAdjust="spacingAndGlyphs">In five short bullet points: when is a git worktree a better choice than switching</text>
+<text x="1011.6" y="120.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="136.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">│4</text>
+<text x="37.2" y="136.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="54.0" y="136.5" class="c0" textLength="176.4" lengthAdjust="spacingAndGlyphs">Cirno              ││</text>
+<text x="247.2" y="136.5" class="c5" textLength="75.6" lengthAdjust="spacingAndGlyphs">branches?</text>
+<text x="1011.6" y="136.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="152.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="54.0" y="152.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="70.8" y="152.5" class="c0" textLength="159.6" lengthAdjust="spacingAndGlyphs">main             ││</text>
+<text x="1011.6" y="152.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="168.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="168.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">5</text>
+<text x="37.2" y="168.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">●</text>
+<text x="54.0" y="168.5" class="c1" textLength="159.6" lengthAdjust="spacingAndGlyphs">Youmu      Son   4%</text>
+<text x="213.6" y="168.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="168.5" class="c5" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏺</text>
+<text x="247.2" y="168.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">-</text>
+<text x="264.0" y="168.5" class="c1 b" textLength="294.0" lengthAdjust="spacingAndGlyphs">Parallel work on multiple branches:</text>
+<text x="566.4" y="168.5" class="c1" textLength="436.8" lengthAdjust="spacingAndGlyphs">You can keep a long-running task (build, test suite,</text>
+<text x="1011.6" y="168.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="184.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="54.0" y="184.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">⎇</text>
+<text x="70.8" y="184.5" class="c0" textLength="159.6" lengthAdjust="spacingAndGlyphs">main             ││</text>
+<text x="264.0" y="184.5" class="c1" textLength="747.6" lengthAdjust="spacingAndGlyphs">review) going in one worktree while you work in another, with no stashing or WIP commits.</text>
+<text x="1011.6" y="184.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="200.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="200.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="200.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">-</text>
+<text x="264.0" y="200.5" class="c1 b" textLength="176.4" lengthAdjust="spacingAndGlyphs">Urgent interruptions:</text>
+<text x="448.8" y="200.5" class="c1" textLength="546.0" lengthAdjust="spacingAndGlyphs">A hotfix or PR review can happen in a separate directory, so your</text>
+<text x="1011.6" y="200.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="216.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="216.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="264.0" y="216.5" class="c1" textLength="294.0" lengthAdjust="spacingAndGlyphs">in-progress changes stay untouched.</text>
+<text x="1011.6" y="216.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="232.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="232.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="232.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">-</text>
+<text x="264.0" y="232.5" class="c1 b" textLength="159.6" lengthAdjust="spacingAndGlyphs">Expensive rebuilds:</text>
+<text x="432.0" y="232.5" class="c1" textLength="394.8" lengthAdjust="spacingAndGlyphs">Each worktree keeps its own build artifacts and</text>
+<text x="835.2" y="232.5" class="c6" textLength="100.8" lengthAdjust="spacingAndGlyphs">node_modules</text>
+<text x="936.0" y="232.5" class="c1" textLength="67.2" lengthAdjust="spacingAndGlyphs">, so you</text>
+<text x="1011.6" y="232.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="248.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="248.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="264.0" y="248.5" class="c1" textLength="478.8" lengthAdjust="spacingAndGlyphs">avoid re-installing or recompiling every time you switch.</text>
+<text x="1011.6" y="248.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="264.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="264.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="264.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">-</text>
+<text x="264.0" y="264.5" class="c1 b" textLength="285.6" lengthAdjust="spacingAndGlyphs">Comparing or testing side by side:</text>
+<text x="558.0" y="264.5" class="c1" textLength="445.2" lengthAdjust="spacingAndGlyphs">You can run two versions of the code at once, or diff</text>
+<text x="1011.6" y="264.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="280.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="280.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="264.0" y="280.5" class="c1" textLength="504.0" lengthAdjust="spacingAndGlyphs">behavior between branches, without switching back and forth.</text>
+<text x="1011.6" y="280.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="296.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="296.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="296.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">-</text>
+<text x="264.0" y="296.5" class="c1 b" textLength="252.0" lengthAdjust="spacingAndGlyphs">Parallel AI agents or helpers:</text>
+<text x="524.4" y="296.5" class="c1" textLength="428.4" lengthAdjust="spacingAndGlyphs">Each agent gets an isolated checkout, so they can't</text>
+<text x="1011.6" y="296.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="312.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="312.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="264.0" y="312.5" class="c1" textLength="445.2" lengthAdjust="spacingAndGlyphs">clobber each other's files, though they all share one</text>
+<text x="717.6" y="312.5" class="c6" textLength="33.6" lengthAdjust="spacingAndGlyphs">.git</text>
+<text x="759.6" y="312.5" class="c1" textLength="67.2" lengthAdjust="spacingAndGlyphs">history.</text>
+<text x="1011.6" y="312.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="328.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="328.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="328.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="344.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="344.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="344.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">✻</text>
+<text x="247.2" y="344.5" class="c3" textLength="109.2" lengthAdjust="spacingAndGlyphs">Cooked for 4s</text>
+<text x="364.8" y="344.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="381.6" y="344.5" class="c3" textLength="100.8" lengthAdjust="spacingAndGlyphs">done 4:36 PM</text>
+<text x="1011.6" y="344.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="360.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="360.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="360.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="376.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="376.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="376.5" class="c7" textLength="781.2" lengthAdjust="spacingAndGlyphs">───────────────────────────────────────────────────────────────────────────────────── Reimu ─</text>
+<text x="1011.6" y="376.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="392.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="392.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="392.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">❯</text>
+<text x="238.8" y="392.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs"></text>
+<text x="1011.6" y="392.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="408.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="408.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="230.4" y="408.5" class="c7" textLength="781.2" lengthAdjust="spacingAndGlyphs">─────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="1011.6" y="408.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="424.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="424.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="424.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">Sonnet</text>
+<text x="306.0" y="424.5" class="c3" textLength="25.2" lengthAdjust="spacingAndGlyphs">5.5</text>
+<text x="331.2" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">→</text>
+<text x="339.6" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">⚖</text>
+<text x="356.4" y="424.5" class="c3" textLength="33.6" lengthAdjust="spacingAndGlyphs">Opus</text>
+<text x="398.4" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="415.2" y="424.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">medium</text>
+<text x="474.0" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="490.8" y="424.5" class="c3" textLength="159.6" lengthAdjust="spacingAndGlyphs">▍░░░░░░░░░ 4% of 1M</text>
+<text x="658.8" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="675.6" y="424.5" class="c3" textLength="16.8" lengthAdjust="spacingAndGlyphs">⚡</text>
+<text x="692.4" y="424.5" class="c3" textLength="117.6" lengthAdjust="spacingAndGlyphs">67% (turn 67%)</text>
+<text x="818.4" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="835.2" y="424.5" class="c3" textLength="42.0" lengthAdjust="spacingAndGlyphs">$0.06</text>
+<text x="885.6" y="424.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="902.4" y="424.5" class="c3" textLength="16.8" lengthAdjust="spacingAndGlyphs">4s</text>
+<text x="1011.6" y="424.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="440.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="213.6" y="440.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="247.2" y="440.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏸</text>
+<text x="264.0" y="440.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">manual</text>
+<text x="322.8" y="440.5" class="c3" textLength="33.6" lengthAdjust="spacingAndGlyphs">mode</text>
+<text x="364.8" y="440.5" class="c3" textLength="16.8" lengthAdjust="spacingAndGlyphs">on</text>
+<text x="390.0" y="440.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">·</text>
+<text x="406.8" y="440.5" class="c3" textLength="8.4" lengthAdjust="spacingAndGlyphs">←</text>
+<text x="423.6" y="440.5" class="c3" textLength="25.2" lengthAdjust="spacingAndGlyphs">for</text>
+<text x="457.2" y="440.5" class="c3" textLength="50.4" lengthAdjust="spacingAndGlyphs">agents</text>
+<text x="1011.6" y="440.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="456.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="456.5" class="c1" textLength="8.4" lengthAdjust="spacingAndGlyphs">⏲</text>
+<text x="37.2" y="456.5" class="c1" textLength="58.8" lengthAdjust="spacingAndGlyphs">none on</text>
+<text x="213.6" y="456.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="456.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="472.5" class="c0" textLength="134.4" lengthAdjust="spacingAndGlyphs">│5h █▊░░░░░░ 23%</text>
+<text x="154.8" y="472.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">↻</text>
+<text x="163.2" y="472.5" class="c0" textLength="42.0" lengthAdjust="spacingAndGlyphs">1h32m</text>
+<text x="213.6" y="472.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="472.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="488.5" class="c0" textLength="134.4" lengthAdjust="spacingAndGlyphs">│wk ██▊░░░░░ 35%</text>
+<text x="154.8" y="488.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">↻</text>
+<text x="163.2" y="488.5" class="c0" textLength="42.0" lengthAdjust="spacingAndGlyphs">1d22h</text>
+<text x="213.6" y="488.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="488.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="504.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="504.5" class="c8" textLength="84.0" lengthAdjust="spacingAndGlyphs">[summon n]</text>
+<text x="112.8" y="504.5" class="c8" textLength="67.2" lengthAdjust="spacingAndGlyphs">[cast c]</text>
+<text x="213.6" y="504.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="504.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="520.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="520.5" class="c8" textLength="84.0" lengthAdjust="spacingAndGlyphs">[banish b]</text>
+<text x="112.8" y="520.5" class="c8" textLength="84.0" lengthAdjust="spacingAndGlyphs">[recall r]</text>
+<text x="213.6" y="520.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="520.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="536.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="536.5" class="c8" textLength="109.2" lengthAdjust="spacingAndGlyphs">[timetable t]</text>
+<text x="138.0" y="536.5" class="c8" textLength="67.2" lengthAdjust="spacingAndGlyphs">[quit q]</text>
+<text x="213.6" y="536.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="536.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="552.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="552.5" class="c8" textLength="25.2" lengthAdjust="spacingAndGlyphs">[?]</text>
+<text x="213.6" y="552.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="552.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="568.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="20.4" y="568.5" class="c8" textLength="142.8" lengthAdjust="spacingAndGlyphs">[mouse: shrine m]</text>
+<text x="213.6" y="568.5" class="c0" textLength="16.8" lengthAdjust="spacingAndGlyphs">││</text>
+<text x="1011.6" y="568.5" class="c0" textLength="8.4" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="12.0" y="584.5" class="c0" textLength="1008.0" lengthAdjust="spacingAndGlyphs">└──── ^] then a key ────┘└─────────────────────────────────────────────────────────────────────────────────────────────┘</text>
+</svg>

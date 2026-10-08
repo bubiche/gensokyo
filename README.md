@@ -58,6 +58,8 @@ Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 daemon keeps running after the client leaves: closing the terminal or detaching (`Ctrl-] d`)
 leaves every resident as it was, and `gensokyo` again shows them.
 
+![The shrine: five residents in the sidebar, and Reimu's Claude Code session on screen](docs/shrine.svg)
+
 Keys go to the resident on screen, except the **leader**, `Ctrl-]`, and the key after it. The
 sidebar's foot says so (` ^] then a key `), and once the leader is pressed the sidebar lists
 what comes next:
@@ -155,6 +157,11 @@ and below (gold when one of those needs you; a click shows it). When it is not t
 screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
 (OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
 
+![Marisa on screen at a permission prompt, gold in the sidebar with Sakuya and Youmu](docs/needs-you.svg)
+
+Here Marisa, on screen, waits on a permission prompt, Sakuya has asked a question, and Youmu has
+finished a turn nobody has read; Reimu is resting and Cirno has departed.
+
 The status line reports feed the rest: each sidebar line shows the model and context used, the
 title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
 (`cold` once the cache has expired, so the next message writes it all again) and cost, and the
@@ -180,6 +187,8 @@ gensokyo:
 | `Border Sign "Sync Up"` | every resident tells the others what it is on, and raises any overlap with the one it affects |
 | `Review Sign "Second Opinion"` | another resident reviews your uncommitted diff, and you iterate until it says LGTM |
 | `Time Sign "Wrap Up"` | summarize the session, leave the tree clean, then go quiet |
+
+![The cast dialog over the shrine, asking which spell card](docs/cast.svg)
 
 Your own go in `~/.config/gensokyo/spellcards/<name>.md`, and a card of yours shadows a shipped
 one of the same name. The name is letters, digits, `.`, `_` and `-`, starting with a letter or

@@ -37,22 +37,17 @@ pub fn find(role: &str, share: Option<&Path>) -> Result<PathBuf, String> {
             (true, true) => Ok(p),
         };
     }
-    let found =
-        name_ok(role).then(|| dirs(share).into_iter().map(|d| d.join(format!("{role}.md"))));
-    found.into_iter().flatten().find(|p| p.is_file()).ok_or_else(|| {
-        let mine = paths::short(&paths::config_dir().join("roles").to_string_lossy());
-        let file = match role.ends_with(".md") {
-            true => format!("; a file is named by its path, ./{role}"),
-            false => String::new(),
-        };
-        let there = names(share).join(", ");
-        format!("no role {role} (there are {there}; yours go in {mine}/{file})")
-    })
-}
-
-/// Whether file `p` is in the config dir, where no resident writes: claude reads a role file
-/// itself, past every Read rule, so a resident may name only one the user put there.
-pub fn in_config(p: &Path) -> bool {
-    let real = |p: &Path| std::fs::canonicalize(p).ok();
-    real(p).zip(real(&paths::config_dir())).is_some_and(|(f, d)| f.starts_with(d))
+    if name_ok(role) {
+        let file = format!("{role}.md");
+        if let Some(p) = dirs(share).into_iter().map(|d| d.join(&file)).find(|p| p.is_file()) {
+            return Ok(p);
+        }
+    }
+    let mine = paths::short(&paths::config_dir().join("roles").to_string_lossy());
+    let file = match role.ends_with(".md") {
+        true => format!("; a file is named by its path, ./{role}"),
+        false => String::new(),
+    };
+    let there = names(share).join(", ");
+    Err(format!("no role {role} (there are {there}; yours go in {mine}/{file})"))
 }

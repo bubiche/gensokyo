@@ -49,13 +49,12 @@ fn headless_limit() -> Duration {
 pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), String> {
     let (claude, env) = shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH")?;
     // Found before any of the run's files is made, so a role gone leaves none behind.
-    let mut args = ritual::args(r, &d.path);
+    let mut args = Vec::new();
     if let Some(role) = &r.role {
         let role = crate::role::find(role, shrine.borrow().share.as_deref())?;
-        // Before the variadic `--allowedTools`, which must end the list.
-        let at = args.iter().position(|a| a == "--allowedTools").unwrap_or(args.len());
-        args.splice(at..at, ["--append-system-prompt-file".into(), role.to_string_lossy().into()]);
+        args.extend(["--append-system-prompt-file".into(), role.to_string_lossy().into_owned()]);
     }
+    args.extend(ritual::args(r, &d.path));
     let cwd = r.cwd.clone().unwrap_or_default();
     let tz = TimeZone::system();
     let started = now();

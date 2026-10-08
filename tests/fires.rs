@@ -389,7 +389,11 @@ fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
     let (d, log) = headless_run("headless", &[("STUB_P_DENY", "Bash")]);
     assert!(log.contains("stub -p ran in"), "{log}");
     let args = std::fs::read_to_string(d.dir.join("stub/print.args")).unwrap();
-    assert!(args.contains("/share/roles/researcher.md --allowedTools "), "{args}");
+    assert!(
+        args.contains("--append-system-prompt-file /")
+            && args.contains("/share/roles/researcher.md --"),
+        "{args}"
+    );
     assert!(log.contains(
         "refused  Bash - a run with nobody to ask needs it in the ritual's allowed_tools"
     ));

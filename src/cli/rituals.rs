@@ -250,10 +250,12 @@ fn add(o: Add) -> Result<(), String> {
     if resident() {
         a.disabled = true;
         if let Some(m) = &a.mcp_config {
-            in_config("--mcp-config", m).map_err(|e| format!("ritual add: {e}"))?;
+            in_config(m).map_err(|e| format!("ritual add: {e}"))?;
         }
         if let Some(r) = a.role.as_deref().filter(|r| r.contains('/')) {
-            in_config("--role", r).map_err(|e| format!("ritual add: {e}"))?;
+            return Err(format!(
+                "ritual add: --role {r} is a file; a ritual you add takes a role by its name"
+            ));
         }
     }
     let share = share();
@@ -283,16 +285,15 @@ fn resident() -> bool {
     std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|v| !v.is_empty())
 }
 
-/// A file a resident names must be one the user put in the config dir: the servers in an MCP
-/// config start with every run, and a role file is read afresh by every run, so a resident could
-/// change what a run it no longer watches is told.
-fn in_config(flag: &str, m: &str) -> Result<(), String> {
+/// An MCP config a resident names must be one the user put in the config dir: the servers in
+/// it start with every run.
+fn in_config(m: &str) -> Result<(), String> {
     let real = |p: &std::path::Path| std::fs::canonicalize(p).map_err(|e| format!("{m}: {e}"));
     let (file, dir) = (real(std::path::Path::new(&paths::expand(m)))?, real(&paths::config_dir())?);
     match file.starts_with(&dir) {
         true => Ok(()),
         false => Err(format!(
-            "{flag}: {m} is not in {}; ask the user to put the file there",
+            "--mcp-config: {m} is not in {}; ask the user to put the config there",
             paths::short(&dir.to_string_lossy())
         )),
     }

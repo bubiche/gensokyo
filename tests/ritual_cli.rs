@@ -310,7 +310,7 @@ fn a_residents_ritual_arrives_paused_and_only_the_user_resumes_it() {
 }
 
 #[test]
-fn a_role_is_written_and_a_residents_names_a_file_only_in_the_config_dir() {
+fn a_role_is_written_and_a_resident_names_one_only_by_its_name() {
     let e = Env::new("role");
     let add = |name: &str, role: &str, inside: bool| {
         let a = ["ritual", "add", "--name", name, "--prompt", "Tea.", "--schedule", "@daily"];
@@ -327,13 +327,11 @@ fn a_role_is_written_and_a_residents_names_a_file_only_in_the_config_dir() {
     let o = add("coffee", "nope", false);
     assert!(!o.status.success() && err(&o).contains("no role nope"), "{}", err(&o));
 
-    // A resident's: a name is the user's or shipped, a file must be one the user put there.
-    std::fs::write(e.path("home/role.md"), "Be odd.").unwrap();
-    let o = add("cocoa", e.path("home/role.md").to_str().unwrap(), true);
-    assert!(!o.status.success() && err(&o).contains("--role: "), "{}", err(&o));
-    assert!(err(&o).contains("is not in"), "{}", err(&o));
+    // A resident's: by its name, never a file, even one in the config dir.
     std::fs::write(e.path("config/role.md"), "Be odd.").unwrap();
     let o = add("cocoa", e.path("config/role.md").to_str().unwrap(), true);
+    assert!(!o.status.success() && err(&o).contains("takes a role by its name"), "{}", err(&o));
+    let o = add("cocoa", "reviewer", true);
     assert!(o.status.success(), "{}", err(&o));
     let o = e.run(&["ritual", "enable", "cocoa"]);
     assert!(out(&o).contains("  role       "), "{}", out(&o));

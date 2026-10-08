@@ -399,11 +399,10 @@ pub(super) fn may_summon(
                  can summon one in {m}"
             ));
         }
-        let file = s.role.as_deref().filter(|r| r.contains('/'));
-        if let Some(r) = file.filter(|r| !role::in_config(Path::new(r))) {
+        // Claude reads a role file past every Read rule; a name finds only the user's own.
+        if let Some(r) = s.role.as_deref().filter(|r| r.contains('/')) {
             return Err(format!(
-                "role: {r} is not in {}; a helper you summon takes a role by its name",
-                crate::paths::short(&crate::paths::config_dir().to_string_lossy())
+                "role: {r} is a file, and a helper you summon takes a role by its name"
             ));
         }
         if let Some(t) = s.allowed_tools.iter().find(|t| !read_only(t)) {
@@ -561,13 +560,13 @@ pub(super) fn recall(
     let resume = launch::has_conversation(&rec.session);
     // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
     // it, so a role file gone since does not keep it away; a fresh start would go without.
-    let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())) {
-        Some(Err(e)) if !resume => return Err(format!("{} cannot come back: {e}", rec.name)),
-        Some(Err(e)) => {
+    let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())).transpose() {
+        Ok(found) => found,
+        Err(e) if !resume => return Err(format!("{} cannot come back: {e}", rec.name)),
+        Err(e) => {
             log(json!({"ev": "role_gone", "id": rec.id, "error": e}));
             None
         }
-        found => found.transpose().ok().flatten(),
     };
     let opts = launch::Options {
         id: &rec.id,

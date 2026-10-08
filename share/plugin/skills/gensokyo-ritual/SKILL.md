@@ -62,8 +62,8 @@ PROMPT
   summarising. `--effort` goes to claude as it is, and so does `--mcp-config <file>`, which
   has to be one the user keeps in gensokyo's config dir: its servers start with every run, so
   you name theirs and never write one. `--role reviewer` (or another of `gensokyo new`'s
-  roles) gives each run a standing stance in its system prompt; a role file you name must be
-  one the user keeps in the config dir. `--prompt "…"`
+  roles) gives each run a standing stance in its system prompt; name a role, never a file
+  (the user's own are found by name too). `--prompt "…"`
   stands in for `--prompt-file` when the prompt is one line.
 - `--target` is where the fire lands. Leave it out for the default, a fresh resident per run,
   which is the right answer for almost everything - the prompt is written for a session that

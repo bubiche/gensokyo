@@ -241,7 +241,7 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         let state = serde_json::to_value(r.state).ok();
         let state = state.as_ref().and_then(|v| v.as_str()).unwrap_or("");
         let t = r.telemetry.as_ref();
-        let mut fields = crate::tele::fields(t, r.mode.as_deref(), r.branch.as_deref(), true);
+        let mut fields = crate::tele::fields(t, r.mode.as_deref(), r.branch.as_deref(), true, now);
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
         }

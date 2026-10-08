@@ -177,28 +177,63 @@ fn a_status_line_report_and_the_lines_drawn_from_it() {
         (Some("Sonnet 5"), Some(5), Some(1_000_000), Some(93), Some(99))
     );
     assert_eq!(t.five_hour.map(|l| (l.used, l.resets)), Some((36, Some(1788543000))));
+    assert_eq!((t.cache_warm, t.cache_until), (Some(true), Some(1788534053)));
     t.advisor = Some("opus".into());
+    // A minute before the cache goes cold, and when it has.
+    let (warm, cold) = (1788534053 - 60, 1788534053);
     assert_eq!(
-        tele::own_line(&t),
-        "Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m"
+        tele::own_line(&t, warm),
+        "Sonnet 5→⚖ Opus · medium · ▌░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m"
     );
     assert_eq!(
-        tele::fields(Some(&t), Some("acceptEdits"), Some("main"), false),
+        tele::own_line(&t, cold),
+        "Sonnet 5→⚖ Opus · medium · ▌░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) \x1b[36mcold\x1b[0m · \
+         $0.19 · +8/-0 · 5m"
+    );
+    assert_eq!(
+        tele::fields(Some(&t), Some("acceptEdits"), Some("main"), false, warm),
         "Sonnet 5→⚖ Opus · medium · accept-edits · ⚡93% · $0.19"
     );
     assert_eq!(
-        tele::fields(Some(&t), None, Some("main"), true),
-        "Sonnet 5→⚖ Opus · ctx 5% · medium · ⚡93% (turn 99%) · $0.19 · ⎇ main"
+        tele::fields(Some(&t), None, Some("main"), true, cold),
+        "Sonnet 5→⚖ Opus · ctx 5% · medium · ⚡93% (turn 99%) cold · $0.19 · ⎇ main"
     );
     assert_eq!(
         tele::usage("5h", &t.five_hour.unwrap(), 1788543000 - 2 * 3600 - 11 * 60, 5),
-        "5h ▓░░░░ 36% ↻2h11m"
+        "5h █▊░░░ 36% ↻2h11m"
     );
+    // A context filling up is yellow from 70% and red from 90%, on its own line only.
+    t.ctx = Some(75);
+    assert!(tele::own_line(&t, warm).contains(" · \x1b[33m███████▌░░ 75%\x1b[0m of 1M · "));
+    t.ctx = Some(93);
+    assert!(tele::own_line(&t, warm).contains(" · \x1b[31m█████████▎ 93%\x1b[0m of 1M · "));
+    // A cache Claude reports cold is cold whatever its time says.
+    t.cache_warm = Some(false);
+    assert!(tele::fields(Some(&t), None, None, false, warm).contains("⚡93% cold"));
     // Before the first API call there is little to say.
     assert_eq!(
-        tele::own_line(&tele::from_statusline(&json!({"model": {"display_name": "Haiku 4.5"}}))),
+        tele::own_line(&tele::from_statusline(&json!({"model": {"display_name": "Haiku 4.5"}})), 0),
         "Haiku 4.5"
     );
+}
+
+#[test]
+fn a_usage_window_warms_once_use_runs_ahead_of_the_clock() {
+    use gensokyo::proto::Limit;
+    const FIVE: i64 = 5 * 3600;
+    let heat =
+        |used, left| tele::usage_heat(&Limit { used, resets: Some(1000 + left) }, FIVE, 1000);
+    // Half the window gone: 60% used runs ahead, 45% is under half and calm.
+    assert_eq!(heat(60, FIVE / 2), tele::Heat::Warn);
+    assert_eq!(heat(45, FIVE / 2), tele::Heat::Calm);
+    // Four fifths gone: 60% is behind the clock.
+    assert_eq!(heat(60, FIVE / 5), tele::Heat::Calm);
+    // From 70% it is worth a look, and from 90% nearly out, whatever the clock.
+    assert_eq!(heat(75, 60), tele::Heat::Warn);
+    assert_eq!(heat(92, 60), tele::Heat::Hot);
+    assert_eq!(tele::bar(0, 5), "░░░░░");
+    assert_eq!(tele::bar(100, 5), "█████");
+    assert_eq!(tele::bar(50, 5), "██▌░░");
 }
 
 #[test]
@@ -353,8 +388,8 @@ fn resident_text_is_one_line_of_printable_characters() {
     );
     assert_eq!((r.event.as_str(), r.text), ("", None));
     let l = gensokyo::proto::Limit { used: 100, resets: Some(1059) };
-    assert_eq!(tele::usage("7d", &l, 1000, 5), "7d ▓▓▓▓▓ 100% ↻1m");
-    assert_eq!(tele::usage("7d", &l, 1059, 5), "7d ▓▓▓▓▓ 100%");
+    assert_eq!(tele::usage("7d", &l, 1000, 5), "7d █████ 100% ↻1m");
+    assert_eq!(tele::usage("7d", &l, 1059, 5), "7d █████ 100%");
 }
 
 #[test]

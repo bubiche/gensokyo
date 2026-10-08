@@ -210,7 +210,7 @@ pub fn statusline_main(id: &str) {
         }
         return;
     }
-    println!("{}", tele::own_line(&t));
+    println!("{}", tele::own_line(&t, now_ms() / 1000));
 }
 
 pub fn now_ms() -> i64 {

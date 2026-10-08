@@ -240,6 +240,9 @@ pub struct Telemetry {
     /// Cache hit rate, percent: the session's, and the last request's.
     pub cache: Option<u32>,
     pub turn_cache: Option<u32>,
+    /// Whether the cached prefix was warm at the report, and when it goes cold, epoch seconds.
+    pub cache_warm: Option<bool>,
+    pub cache_until: Option<i64>,
     pub cost: Option<f64>,
     pub added: Option<u64>,
     pub removed: Option<u64>,

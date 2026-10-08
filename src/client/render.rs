@@ -226,7 +226,7 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
         Some(r) => {
             let slot = r.slot.map_or(String::new(), |s| format!("{s} "));
             let branch = r.branch.as_ref().map_or(String::new(), |b| format!(" ⎇ {b}"));
-            let f = tele::fields(r.telemetry.as_ref(), r.mode.as_deref(), None, false);
+            let f = tele::fields(r.telemetry.as_ref(), r.mode.as_deref(), None, false, m.now);
             let f = match f.is_empty() || r.departed.is_some() {
                 true => String::new(),
                 false => format!(" · {f}"),
@@ -345,13 +345,22 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         let y = up(rows);
         flow(buf, Rect { y, height: rows, ..inner }, &buttons, BUTTON, hits);
     }
-    // The account's usage.
+    // The account's usage, the bar warm or hot as it presses.
     let reports = || m.residents.iter().filter_map(|r| r.telemetry.as_ref());
     let wk = tele::freshest(reports().filter_map(|t| t.seven_day.as_ref()), m.now);
     let five = tele::freshest(reports().filter_map(|t| t.five_hour.as_ref()), m.now);
-    for (label, l) in [("wk", wk), ("5h", five)] {
-        if let Some(l) = l {
-            buf.set_stringn(inner.x, up(1), tele::usage(label, l, m.now, 5), w, DIM);
+    for (label, l, span) in [("wk", wk, 7 * 86400), ("5h", five, 5 * 3600)] {
+        let Some(l) = l else { continue };
+        let y = up(1);
+        let heat = heated(tele::usage_heat(l, span, m.now), DIM);
+        let parts = [
+            (format!("{label} "), DIM),
+            (tele::bar(l.used, 8), heat),
+            (format!(" {}", tele::usage_tail(l, m.now)), DIM),
+        ];
+        let mut x = inner.x;
+        for (text, style) in parts {
+            x = buf.set_stringn(x, y, text, inner.right().saturating_sub(x) as usize, style).0;
         }
     }
     // The ritual that fires next.
@@ -467,6 +476,14 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         let rw = (width(&right) as usize).min(w);
         buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
         buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
+        // The context, warm or hot as it fills, unless the line is already gold.
+        if let Some(c) = t.and_then(|t| t.ctx).filter(|_| !r.state.needs_you()) {
+            let pct = format!("{c}%");
+            let x = inner.x + w as u16 - width(&pct);
+            if rw >= pct.len() {
+                buf.set_stringn(x, y, &pct, pct.len(), heated(tele::heat(c, 0), style));
+            }
+        }
         hits.push(line, Hit::Resident(i));
         y += 1;
         let Some(b) = r.branch.as_deref().filter(|_| two) else { continue };
@@ -492,6 +509,15 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     }
     if !below.is_empty() && y + 1 < bottom {
         more(buf, Rect { y, height: 1, ..inner }, "↓", &below, m, hits);
+    }
+}
+
+/// `calm` while a number is calm, else yellow or red over it.
+fn heated(h: tele::Heat, calm: Style) -> Style {
+    match h {
+        tele::Heat::Calm => calm,
+        tele::Heat::Warn => calm.fg(Color::Yellow),
+        tele::Heat::Hot => calm.fg(Color::LightRed),
     }
 }
 

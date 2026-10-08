@@ -7,8 +7,9 @@ use serde_json::Value;
 use std::path::Path;
 
 /// The report, from Claude Code's statusLine JSON (2.1.260: `model.display_name`,
-/// `effort.level`, `context_window.*`, `prompt_cache.hit_ratio`, `cost.*`, and on Pro and Max
-/// `rate_limits.{five_hour,seven_day}`; `workspace.current_dir`, which follows a `cd`, 2.1.291).
+/// `effort.level`, `context_window.*`, `prompt_cache.{hit_ratio,warm,expires_at}`, `cost.*`,
+/// and on Pro and Max `rate_limits.{five_hour,seven_day}`; `workspace.current_dir`, which
+/// follows a `cd`, 2.1.291).
 /// `advisor` and `at` are not in it.
 pub fn from_statusline(j: &Value) -> Telemetry {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str).map(|v| clean(v, 40));
@@ -33,6 +34,8 @@ pub fn from_statusline(j: &Value) -> Telemetry {
         window: u("/context_window/context_window_size"),
         cache: n("/prompt_cache/hit_ratio").map(|r| (r * 100.0).min(100.0) as u32),
         turn_cache,
+        cache_warm: j.pointer("/prompt_cache/warm").and_then(Value::as_bool),
+        cache_until: u("/prompt_cache/expires_at").map(|v| v as i64),
         cost: n("/cost/total_cost_usd"),
         added: u("/cost/total_lines_added"),
         removed: u("/cost/total_lines_removed"),
@@ -55,9 +58,10 @@ pub fn is_dir_path(d: &str) -> bool {
 }
 
 /// gensokyo's own line at the bottom of a resident: the numbers a working session watches.
-/// `Sonnet 5→⚖ Opus · medium · ▓░░░░░░░░░ 12% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m`.
-/// Unknown fields are left out.
-pub fn own_line(t: &Telemetry) -> String {
+/// `Sonnet 5→⚖ Opus · medium · █▏░░░░░░░░ 12% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m`,
+/// the context yellow from 70% and red from 90%, and the cache marked once it has gone cold.
+/// Unknown fields are left out. Colour is for this line only, which Claude Code draws.
+pub fn own_line(t: &Telemetry, now: i64) -> String {
     let mut out = model(t).unwrap_or_else(|| "Claude".into());
     let mut add = |s: String| {
         out.push_str(" · ");
@@ -68,10 +72,18 @@ pub fn own_line(t: &Telemetry) -> String {
     }
     if let Some(c) = t.ctx {
         let of = t.window.map_or(String::new(), |w| format!(" of {}", tokens(w)));
-        add(format!("{} {c}%{of}", bar(c, 10)));
+        let ansi = match heat(c, 0) {
+            Heat::Calm => "",
+            Heat::Warn => "\x1b[33m",
+            Heat::Hot => "\x1b[31m",
+        };
+        let off = if ansi.is_empty() { "" } else { "\x1b[0m" };
+        add(format!("{ansi}{} {c}%{off}{of}", bar(c, 10)));
     }
     if let Some(c) = t.cache {
-        add(format!("⚡{c}%{}", t.turn_cache.map_or(String::new(), |c| format!(" (turn {c}%)"))));
+        let turn = t.turn_cache.map_or(String::new(), |c| format!(" (turn {c}%)"));
+        let cold = if cold(t, now) { " \x1b[36mcold\x1b[0m" } else { "" };
+        add(format!("⚡{c}%{turn}{cold}"));
     }
     if let Some(c) = t.cost {
         add(cost(c));
@@ -94,6 +106,7 @@ pub fn fields(
     mode: Option<&str>,
     branch: Option<&str>,
     verbose: bool,
+    now: i64,
 ) -> String {
     let mut v: Vec<String> = Vec::new();
     if let Some(m) = t.and_then(model) {
@@ -108,7 +121,8 @@ pub fn fields(
         if let Some(c) = t.cache {
             let turn =
                 t.turn_cache.filter(|_| verbose).map_or(String::new(), |c| format!(" (turn {c}%)"));
-            v.push(format!("⚡{c}%{turn}"));
+            let cold = if cold(t, now) { " cold" } else { "" };
+            v.push(format!("⚡{c}%{turn}{cold}"));
         }
         v.extend(t.cost.map(cost));
     }
@@ -144,11 +158,47 @@ pub fn freshest<'a>(limits: impl IntoIterator<Item = &'a Limit>, now: i64) -> Op
         .max_by_key(|l| l.used)
 }
 
-/// A usage window, `5h ▓▓░░░ 37% ↻2h11m`; the countdown is dropped once it has reset.
+/// A usage window, `5h █▊░░░ 37% ↻2h11m`; the countdown is dropped once it has reset.
 pub fn usage(label: &str, l: &Limit, now: i64, cells: u32) -> String {
+    format!("{label} {} {}", bar(l.used, cells), usage_tail(l, now))
+}
+
+/// What follows a usage window's bar: `37% ↻2h11m`.
+pub fn usage_tail(l: &Limit, now: i64) -> String {
     let eta =
         l.resets.filter(|r| *r > now).map_or(String::new(), |r| format!(" ↻{}", eta(r - now)));
-    format!("{label} {} {}%{eta}", bar(l.used, cells), l.used)
+    format!("{}%{eta}", l.used)
+}
+
+/// How hard a number presses: calm, worth a look, or nearly out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heat {
+    Calm,
+    Warn,
+    Hot,
+}
+
+/// A share used, warm from 70% and hot from 90%; with `ahead` set, also warm from half once it
+/// runs that many points ahead of the clock.
+pub fn heat(used: u32, ahead: i64) -> Heat {
+    match used {
+        90.. => Heat::Hot,
+        70.. => Heat::Warn,
+        50.. if ahead > 0 => Heat::Warn,
+        _ => Heat::Calm,
+    }
+}
+
+/// A usage window's heat: from half used, warm while use runs ahead of the time gone in a
+/// window `span` seconds long, on course to run out before it resets.
+pub fn usage_heat(l: &Limit, span: i64, now: i64) -> Heat {
+    let gone = l.resets.map_or(0, |r| 100 - (r - now).clamp(0, span) * 100 / span.max(1));
+    heat(l.used, i64::from(l.used) - gone)
+}
+
+/// The cached prefix has left its lifetime: the next request writes it all again.
+pub fn cold(t: &Telemetry, now: i64) -> bool {
+    t.cache.is_some() && (t.cache_warm == Some(false) || t.cache_until.is_some_and(|u| u <= now))
 }
 
 pub fn mode_label(m: &str) -> String {
@@ -178,10 +228,13 @@ fn tokens(n: u64) -> String {
     }
 }
 
-/// `cells` cells, one filled per share of 100.
+/// `cells` cells filled by eighths, `█▊░░░` for 37 of 5.
 pub fn bar(pct: u32, cells: u32) -> String {
-    let full = (pct.min(100) * cells / 100) as usize;
-    "▓".repeat(full) + &"░".repeat(cells as usize - full)
+    const PART: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let eighths = pct.min(100) * cells * 8 / 100;
+    let (full, part) = ((eighths / 8) as usize, PART[(eighths % 8) as usize]);
+    let left = cells as usize - full - usize::from(!part.is_empty());
+    "█".repeat(full) + part + &"░".repeat(left)
 }
 
 /// 3d4h, 2h11m, 14m.

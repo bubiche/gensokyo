@@ -1015,16 +1015,17 @@ fn the_status_line_reports_and_prints_its_own_line_or_the_users() {
     // Claude has gone into a subdirectory: the settings are still the project's.
     j["workspace"]["project_dir"] = json!(d.dir);
     j["workspace"]["current_dir"] = json!(d.dir.join("src"));
-    // Windows not yet reset: one past its reset is not shown.
+    // Windows not yet reset, and a cache still warm: past those times they show otherwise.
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
     j["rate_limits"]["five_hour"]["resets_at"] = json!(now.as_secs() + 3600);
     j["rate_limits"]["seven_day"]["resets_at"] = json!(now.as_secs() + 86400);
+    j["prompt_cache"]["expires_at"] = json!(now.as_secs() + 600);
     let payload = j.to_string();
     let env = [("GENSOKYO_CONFIG_DIR", conf.to_str().unwrap())];
     let out = inside(&d, &["_statusline", &id], &env, payload.as_bytes());
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
-        "Sonnet 5→⚖ Opus · medium · ░░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m\n"
+        "Sonnet 5→⚖ Opus · medium · ▌░░░░░░░░░ 5% of 1M · ⚡93% (turn 99%) · $0.19 · +8/-0 · 5m\n"
     );
     wait(|| !d.list()[0]["telemetry"].is_null(), "the report");
     let t = &d.list()[0]["telemetry"];
@@ -1037,7 +1038,7 @@ fn the_status_line_reports_and_prints_its_own_line_or_the_users() {
         list.contains("Sonnet 5→⚖ Opus · ctx 5% · medium · ⚡93% (turn 99%) · $0.19"),
         "{list}"
     );
-    assert!(list.contains("\nusage 5h ▓▓▓░░░░░░░ 36%"), "{list}");
+    assert!(list.contains("\nusage 5h ███▌░░░░░░ 36%"), "{list}");
 
     // STATUSLINE=user: the user's command gets the same JSON, and its output goes out as it is.
     std::fs::write(conf.join("config"), "# mine\nSTATUSLINE=own\nSTATUSLINE=user\n").unwrap();

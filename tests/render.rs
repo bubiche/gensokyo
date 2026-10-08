@@ -724,13 +724,36 @@ fn the_sidebar_shows_the_freshest_usage_and_none_past_its_reset() {
     let r = &mut m.residents;
     r[1].telemetry.as_mut().unwrap().at = NOW;
     r[1].telemetry.as_mut().unwrap().five_hour.as_mut().unwrap().used = 20;
-    assert!(has(&m, "5h ▓░░░░ 37%"), "{:#?}", sidebar(&m));
+    assert!(has(&m, "5h ██▉░░░░░ 37%"), "{:#?}", sidebar(&m));
     // A window past its reset is not shown at its old use.
     for t in m.residents.iter_mut().filter_map(|r| r.telemetry.as_mut()) {
         t.five_hour.as_mut().unwrap().resets = Some(NOW - 1);
     }
     assert!(!has(&m, "5h"), "{:#?}", sidebar(&m));
     assert!(has(&m, "wk"));
+}
+
+#[test]
+fn numbers_that_press_turn_yellow_or_red_and_a_cold_cache_says_so() {
+    use ratatui::style::Color;
+    let mut m = aware();
+    m.residents[0].telemetry.as_mut().unwrap().ctx = Some(93);
+    m.residents[0].telemetry.as_mut().unwrap().cache_warm = Some(false);
+    let mut buf = Buffer::empty(AREA);
+    render::render(&m, AREA, &mut buf);
+    let row = |y: u16| -> String { (0..AREA.width).map(|x| buf[(x, y)].symbol()).collect() };
+    let at = |p: &str| (0..AREA.height).find(|&y| row(y)[3..].starts_with(p)).unwrap();
+    let fg = |x: u16, y: u16| buf[(x, y)].fg;
+    // The week is 62% used with 55% of it gone: ahead of the clock. Five hours at 37% is calm.
+    let (wk, five) = (at("wk "), at("5h "));
+    assert_eq!((fg(4, wk), fg(4, five)), (Color::Yellow, Color::DarkGray));
+    assert_eq!((fg(1, wk), fg(13, wk)), (Color::DarkGray, Color::DarkGray));
+    // Reimu's context is nearly full; the rest of its line keeps its colour.
+    let reimu = at("1 ");
+    let end = render::SIDEBAR_W - 2;
+    assert_eq!((fg(end, reimu), fg(end - 2, reimu)), (Color::LightRed, Color::LightRed));
+    assert_ne!(fg(1, reimu), Color::LightRed);
+    assert!(row(0).contains("91% cold"), "{}", row(0));
 }
 
 #[test]

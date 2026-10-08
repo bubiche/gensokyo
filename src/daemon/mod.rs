@@ -14,6 +14,7 @@ mod notify;
 mod probe;
 pub mod pty;
 pub mod registry;
+mod renew;
 mod resident;
 mod rituals;
 pub mod server;

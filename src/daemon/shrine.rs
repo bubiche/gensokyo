@@ -25,7 +25,7 @@ use tokio::sync::{broadcast, watch};
 const BANISH_GRACE: Duration = Duration::from_secs(3);
 
 /// How long one resident gets to act on one `/exit`; one that runs out is asked once more.
-const EXIT_WAIT: Duration = Duration::from_secs(6);
+pub(super) const EXIT_WAIT: Duration = Duration::from_secs(6);
 
 /// How many notices are kept for clients that come later.
 const KEPT: usize = 20;
@@ -50,6 +50,8 @@ pub(super) struct Entry {
     /// A helper's finished turn kept quiet while its lead was busy, rung once the lead's turn
     /// ends without collecting it.
     pub(super) held: bool,
+    /// To be started again on the claude installed now (`renew.rs`).
+    pub(super) renew: Option<super::renew::Renew>,
 }
 
 impl Entry {
@@ -74,6 +76,7 @@ impl Entry {
             idle_since: None,
             orphan_since: None,
             held: false,
+            renew: None,
         }
     }
 }
@@ -103,6 +106,8 @@ pub(super) struct Shrine {
     pub(super) typed: bool,
     /// Every `wait` held now.
     pub(super) waits: Vec<Rc<super::lead::Waiting>>,
+    /// The `claude` residents start now: the file it resolves to, and what `--version` said.
+    pub(super) installed: Option<super::registry::Installed>,
 }
 
 impl Shrine {
@@ -150,11 +155,14 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         owner: r.owner.clone(),
         turns: r.turns,
         needs: r.needs,
+        outdated: None,
+        renewing: false,
     }
 }
 
 /// Everything known about one in the shrine: what it is doing, and its last report.
-fn entry_info(e: &Entry) -> proto::Resident {
+/// `installed` is the version of the `claude` it would start on now.
+fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
     let mut r = info(&e.rec, e.handle.as_ref().map(|h| h.pid));
     if e.handle.is_some() {
         (r.state, r.detail) = (e.aware.state(), e.aware.detail.clone());
@@ -164,6 +172,8 @@ fn entry_info(e: &Entry) -> proto::Resident {
     r.here = e.here.as_ref().map(|(_, d)| d.clone()).filter(|d| *d != e.rec.cwd);
     r.branch = tele::git_branch(Path::new(r.here.as_ref().unwrap_or(&e.rec.cwd)));
     r.telemetry = e.tele.clone();
+    r.outdated = installed.filter(|_| super::renew::behind(e, installed)).map(String::from);
+    r.renewing = e.renew.is_some() && e.handle.is_some();
     r
 }
 
@@ -175,7 +185,8 @@ fn flag(argv: &[String], f: &str) -> Option<String> {
 /// The shrine in order; with `all`, then everyone in `departed/`, newest first and slotless.
 pub(super) fn list(shrine: &Shared, all: bool) -> Vec<proto::Resident> {
     let sh = shrine.borrow();
-    let mut v: Vec<_> = sh.entries.iter().map(entry_info).collect();
+    let installed = super::renew::installed(&sh);
+    let mut v: Vec<_> = sh.entries.iter().map(|e| entry_info(e, installed)).collect();
     if all {
         let mut gone = sh.store.load_departed();
         gone.retain(|r| !sh.entries.iter().any(|e| e.rec.id == r.id));
@@ -548,13 +559,47 @@ pub(super) fn recall(
     if let Some(c) = caller {
         room(&sh, c)?;
     }
+    let (program, argv, handle, resume) = come_back(shrine, &sh, &rec, None)?;
+    let free =
+        |n: u8| sh.entries.iter().enumerate().all(|(i, e)| Some(i) == at || e.rec.slot != Some(n));
+    rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
+    (rec.program, rec.argv, rec.told_gone) = (program, argv, false);
+    (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
+    rec.pid = running_as(&handle);
+    let _ = sh.store.restore(&rec);
+    log(
+        json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
+    );
+    let r = info(&rec, Some(handle.pid));
+    let mut entry = Entry::new(rec, handle);
+    if resume {
+        entry.aware.resumed();
+    }
+    match at {
+        Some(i) => sh.entries[i] = entry,
+        None => sh.entries.push(entry),
+    }
+    touch(&sh);
+    Ok(r)
+}
+
+/// A departed resident's launch, as a recall and a renew make it: the flags it was summoned
+/// with (`mode` in place of its own, when given), its role found again, and its session resumed
+/// when it has a conversation. The program, the argv, the handle, and whether it resumed.
+pub(super) fn come_back(
+    shrine: &Shared,
+    sh: &Shrine,
+    rec: &Record,
+    mode: Option<String>,
+) -> Result<(String, Vec<String>, Rc<Handle>, bool), String> {
     let cwd = PathBuf::from(&rec.cwd);
     if !cwd.is_dir() {
         return Err(format!("{} is gone", rec.cwd));
     }
-    let lead = rec.owner.as_deref().and_then(|o| lead_name(&sh, o));
+    let lead = rec.owner.as_deref().and_then(|o| lead_name(sh, o));
     let flag = |f: &str| flag(&rec.argv, f);
-    let (model, effort, mode) = (flag("--model"), flag("--effort"), flag("--permission-mode"));
+    let (model, effort) = (flag("--model"), flag("--effort"));
+    let mode = mode.or_else(|| flag("--permission-mode"));
     // The session its hooks last named, which /clear moves on. One that never got a prompt has
     // nothing to resume: it starts afresh on that session, with the same name.
     let resume = launch::has_conversation(&rec.session);
@@ -582,32 +627,12 @@ pub(super) fn recall(
         role: role.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
     };
-    let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
-    let free =
-        |n: u8| sh.entries.iter().enumerate().all(|(i, e)| Some(i) == at || e.rec.slot != Some(n));
-    rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
-    (rec.program, rec.argv, rec.told_gone) = (program, argv, false);
-    (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
-    rec.pid = running_as(&handle);
-    let _ = sh.store.restore(&rec);
-    log(
-        json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
-    );
-    let r = info(&rec, Some(handle.pid));
-    let mut entry = Entry::new(rec, handle);
-    if resume {
-        entry.aware.resumed();
-    }
-    match at {
-        Some(i) => sh.entries[i] = entry,
-        None => sh.entries.push(entry),
-    }
-    touch(&sh);
-    Ok(r)
+    let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
+    Ok((program, argv, handle, resume))
 }
 
 /// The process a resident runs as, for its record.
-fn running_as(h: &Handle) -> Option<(i32, u64)> {
+pub(super) fn running_as(h: &Handle) -> Option<(i32, u64)> {
     pty::start_id(h.pid).map(|t| (h.pid, t))
 }
 
@@ -642,10 +667,23 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     let exit = handle.exited().await;
     let mut sh = shrine.borrow_mut();
     let Some(i) = sh.entries.iter().position(|e| e.rec.id == id) else { return };
+    // Started again by a renew, or on its way: the renew sees to it.
+    let e = &sh.entries[i];
+    let ours = e.handle.as_ref().is_some_and(|h| Rc::ptr_eq(h, &handle));
+    if !ours || e.renew == Some(super::renew::Renew::Going) {
+        return;
+    }
+    departed(&mut sh, i, exit);
+}
+
+/// The one at `i` has left with `exit`: its record departed, nobody's screen, its lead's held
+/// turns let ring.
+pub(super) fn departed(sh: &mut Shrine, i: usize, exit: resident::Exit) {
+    let id = sh.entries[i].rec.id.clone();
     // A turn it left in the middle of has ended all the same: its lead hears so, not of the
     // turn before. Hooks after this find no handle and are dropped.
     sh.entries[i].aware.left();
-    super::ingest::tally(&mut sh, i, None);
+    super::ingest::tally(sh, i, None);
     let e = &mut sh.entries[i];
     e.handle = None;
     depart(&mut e.rec, Some(exit));
@@ -655,8 +693,8 @@ async fn watch_exit(shrine: Shared, id: String, handle: Rc<Handle>) {
     for v in sh.views.values_mut().filter(|v| v.0.as_deref() == Some(id.as_str())) {
         v.0 = None;
     }
-    super::lead::release(&mut sh, &id);
-    touch(&sh);
+    super::lead::release(sh, &id);
+    touch(sh);
     log(
         json!({"ev": "departed", "id": id, "name": rec.name, "exit": exit.code, "signal": exit.signal}),
     );
@@ -674,7 +712,11 @@ pub(super) fn live(shrine: &Shared, who: &str) -> Result<(String, String, Rc<Han
 }
 
 pub(super) async fn banish(shrine: &Shared, who: &str) -> Result<String, String> {
-    let (_, name, h) = live(shrine, who)?;
+    let (id, name, h) = live(shrine, who)?;
+    // Its renew, if it was to have one, is off: it stays departed.
+    if let Some(e) = shrine.borrow_mut().entries.iter_mut().find(|e| e.rec.id == id) {
+        e.renew = None;
+    }
     let t = Instant::now();
     let (_, sweep) = pty::sweep(h.pid, BANISH_GRACE).await;
     let exit = tokio::time::timeout(Duration::from_secs(5), h.exited()).await;
@@ -714,7 +756,7 @@ async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
 }
 
 /// What a turn starting changes on the resident at `h`: the last hook heard, and a dialog.
-fn stir(shrine: &Shared, h: &Handle) -> (i64, bool) {
+pub(super) fn stir(shrine: &Shared, h: &Handle) -> (i64, bool) {
     let sh = shrine.borrow();
     let e = sh.entries.iter().find(|e| e.handle.as_ref().is_some_and(|x| x.pid == h.pid));
     e.map_or((0, false), |e| (e.aware.heard(), e.aware.open()))
@@ -739,6 +781,8 @@ pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> 
             return Err("the daemon is stopping".into());
         }
         let i = find(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
+        // Its renew, if it was to have one, is off: it leaves and stays departed.
+        sh.entries[i].renew = None;
         match sh.entries[i].handle.clone() {
             Some(h) => (sh.entries[i].rec.name.clone(), h),
             None => {

@@ -1,7 +1,8 @@
 #!/bin/bash
 # tests/stub-claude - stands in for the `claude` binary so gensokyo can be exercised without
 # Claude Code or an Anthropic login. It implements just enough of Claude Code 2.1:
-#   --version                 prints a version line
+#   --version                 prints a version line: $STUB_STATE/installed if it is there, else
+#                             2.1.282, as the claude installed now says
 #   agents --json             the registry: $STUB_REGISTRY (a fixture file) if set, else one
 #                             entry per running stub session, status from <id>.status; each
 #                             call adds a line to agents.calls
@@ -18,6 +19,8 @@
 #                             /mouse turns on mouse reporting (1000, SGR 1006)
 #                             /link <uri> <text> prints <text> as a link to <uri> (OSC 8)
 #                             /clear starts a new session id (the files below keep the first)
+# /status runs the statusLine command from its --settings as Claude Code does, with the version
+# it started as; with STUB_STATUS=1 it also runs it as it starts.
 # With STUB_HOOKS=1 it runs the `_hook` command from its --settings as Claude Code does:
 # SessionStart at start and on /clear, UserPromptSubmit then Stop ("echo: <line>") for every
 # prompt (the one on the command line too), each naming the --permission-mode it was started
@@ -63,8 +66,10 @@ write_entry() {   # <id> <name> <status>; whole, so a registry read never sees h
   mv "$STUB_STATE/$1.json.tmp" "$STUB_STATE/$1.json"
 }
 
+installed() { cat "$STUB_STATE/installed" 2>/dev/null || echo 2.1.282; }
+
 case ${1:-} in
-  --version) echo "2.1.282 (Claude Code)"; exit 0 ;;
+  --version) echo "$(installed) (Claude Code)"; exit 0 ;;
   agents)
     [ -d "${STUB_STATE:-}" ] && echo . >>"$STUB_STATE/agents.calls"
     if [ -n "${STUB_REGISTRY:-}" ]; then cat "$STUB_REGISTRY"; exit 0; fi
@@ -145,13 +150,14 @@ fi
 
 # interactive
 ORIG_ARGS=$*
-id='' name=stub prompt='' resume='' hook_cmd='' mode=default
+id='' name=stub prompt='' resume='' hook_cmd='' status_cmd='' mode=default
 while [ $# -gt 0 ]; do
   case $1 in
     --session-id) id=$2; shift ;;
     --resume) id=$2; resume=1; shift ;;
     --name) name=$2; shift ;;
-    --settings) hook_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_hook\)".*/\1/p'); shift ;;
+    --settings) hook_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_hook\)".*/\1/p')
+                status_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_statusline[^"]*\)".*/\1/p'); shift ;;
     --permission-mode) mode=$2; shift ;;
     --plugin-dir|--append-system-prompt|--model|--effort|--mcp-config) shift ;;
     --) shift; prompt=$*; break ;;
@@ -164,6 +170,8 @@ session=$id
 [ -n "$resume" ] && [ ! -f "$(convo "$id")" ] && { echo "No conversation found with session ID: $id" >&2; exit 1; }
 [ -n "$resume" ] && [ -f "$STUB_STATE/$id.name" ] && name=$(cat "$STUB_STATE/$id.name")
 STARTED=$(date +%s)
+# What this process is: an update on disk does not change it.
+VERSION=$(installed)
 printf '%s\n' "$ORIG_ARGS" > "$STUB_STATE/$id.args"
 env > "$STUB_STATE/$id.env"
 printf '%s\n' "$name" > "$STUB_STATE/$id.name"
@@ -174,6 +182,13 @@ write_entry "$session" "$name" '"idle"'
 fire() {
   [ -n "${STUB_HOOKS:-}" ] && [ -n "$hook_cmd" ] || return 0
   printf '{"hook_event_name": "%s", "session_id": "%s"%s}' "$1" "$session" "${2:-}" | sh -c "$hook_cmd"
+}
+
+# The status line's JSON, as much of it as gensokyo reads that the stub can say.
+status() {
+  [ -n "$status_cmd" ] || return 0
+  printf '{"session_id": "%s", "version": "%s", "model": {"display_name": "Stub"}}' "$session" "$VERSION" |
+    sh -c "$status_cmd" >/dev/null
 }
 
 esc=$(printf '\033')
@@ -210,6 +225,7 @@ echo "env TERM=${TERM:-} COLORTERM=${COLORTERM:-} TERM_PROGRAM=${TERM_PROGRAM:-}
 # the binary, so whoever launched it must have put it on PATH.
 echo "gensokyo on PATH: $(command -v gensokyo || echo no)"
 if [ -n "$resume" ]; then fire SessionStart ', "source": "resume"'; else fire SessionStart ', "source": "startup"'; fi
+[ -n "${STUB_STATUS:-}" ] && status
 if [ -n "$prompt" ]; then
   fire UserPromptSubmit ", \"permission_mode\": \"$mode\", \"prompt\": \"$(json_str "$prompt")\""
   echo "> $prompt"; submitted "$prompt"
@@ -281,6 +297,7 @@ $more"
     # Draws over the line being typed <s> seconds on, with no hook, as a dialog draws over
     # Claude Code's input line before any hook or the registry tells of it.
     /cover\ *) (sleep "${line#/cover }"; printf '\r%s[2KDo you want to proceed?' "$esc") & ;;
+    /status) status; echo "status $VERSION" ;;
     /mouse) printf '%s[?1000h%s[?1006h' "$esc" "$esc"; echo "mouse on" ;;
     /link\ *) set -- ${line#/link }; printf '%s]8;;%s%s\\%s%s]8;;%s\\\n' "$esc" "$1" "$esc" "$2" "$esc" "$esc" ;;
     /clear) rm -f "$STUB_STATE/$session.json"; session=$(uuidgen | tr 'A-Z' 'a-z')

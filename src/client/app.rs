@@ -479,6 +479,11 @@ impl App {
         self.focused().filter(|r| r.departed.is_none()).map(|r| r.id.clone())
     }
 
+    /// The live one on screen, and the process it runs as: a recall or a renew changes that.
+    fn running(&self) -> Option<(String, Option<i32>)> {
+        self.focused().filter(|r| r.departed.is_none()).map(|r| (r.id.clone(), r.pid))
+    }
+
     fn focus(&mut self, id: Option<String>) {
         if id == self.m.focused {
             return;
@@ -673,7 +678,7 @@ impl App {
                 {
                     self.m.modal = None;
                 }
-                let was = self.live();
+                let was = self.running();
                 match self.m.residents.iter_mut().find(|r| r.id == resident.id) {
                     Some(r) => *r = resident.clone(),
                     None => self.m.residents.push(resident.clone()),
@@ -746,7 +751,7 @@ impl App {
     }
 
     fn residents(&mut self, list: Vec<Resident>) {
-        let was = self.live();
+        let was = self.running();
         self.m.residents = list;
         if self.focused().is_none() {
             let first = self.m.residents.iter().find(|r| r.departed.is_none());
@@ -762,9 +767,9 @@ impl App {
         }
     }
 
-    /// The resident on screen was recalled under its id: its new screen.
-    fn back(&mut self, was: Option<String>) {
-        if let Some(who) = self.live().filter(|l| was.as_ref() != Some(l)) {
+    /// The resident on screen was recalled or renewed under its id: its new screen.
+    fn back(&mut self, was: Option<(String, Option<i32>)>) {
+        if let Some((who, _)) = self.running().filter(|l| was.as_ref() != Some(l)) {
             self.m.screen = None;
             self.send(Request::View { who });
             self.modes();
@@ -1145,6 +1150,7 @@ impl App {
                 Button::Capture => self.chord(Chord::Capture),
                 Button::RecallFocused => self.recall_focused(),
                 Button::CloseFocused => self.chord(Chord::Close),
+                Button::Renew => self.chord(Chord::Renew),
                 Button::Yes => self.confirm(),
                 Button::No => self.go_back(),
             },
@@ -1227,6 +1233,19 @@ impl App {
                 }
                 None => {}
             },
+            Chord::Renew => {
+                let behind: Vec<String> = self
+                    .m
+                    .residents
+                    .iter()
+                    .filter(|r| r.outdated.is_some() && !r.renewing)
+                    .map(|r| r.name.clone())
+                    .collect();
+                match behind.is_empty() {
+                    true => self.say(Say::Info, "nobody here is behind the installed claude"),
+                    false => self.m.modal = Some(Modal::Renew(behind)),
+                }
+            }
             Chord::Focus(n) => match self.m.residents.iter().find(|r| r.slot == Some(n)) {
                 Some(r) => self.focus(Some(r.id.clone())),
                 None => self.say(Say::Info, format!("nobody is in slot {n}")),

@@ -122,6 +122,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         refused: HashSet::new(),
         typed: false,
         waits: Vec::new(),
+        installed: None,
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -327,6 +328,10 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::Recall { who } => Some(
                 recall(&shrine, &who, caller.as_deref())
                     .map_or_else(fail, |resident| Reply::Summoned { id, resident, note: None }),
+            ),
+            Request::Renew { who } => Some(
+                super::renew::ask(&shrine, &who)
+                    .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
             Request::Wait(w) => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
@@ -560,6 +565,10 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         | Request::Banish { who }
         | Request::Recall { who }
         | Request::Read { who, .. } => mine(&shrine.borrow(), caller, who).err(),
+        Request::Renew { who } if who.is_empty() => Some(
+            "renewing everyone behind the installed claude is the user's; name your helpers".into(),
+        ),
+        Request::Renew { who } => who.iter().find_map(|w| mine(&shrine.borrow(), caller, w).err()),
         Request::Wait(w) => w.who.iter().find_map(|who| mine(&shrine.borrow(), caller, who).err()),
         _ => None,
     }

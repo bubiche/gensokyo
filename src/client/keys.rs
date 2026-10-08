@@ -108,6 +108,8 @@ pub enum Chord {
     Capture,
     Detach,
     Close,
+    /// Everyone behind the installed claude started again on it, once they rest.
+    Renew,
     /// Back through the resident's scrollback, half a screen.
     ScrollBack,
     /// Look back through the resident's scrollback for something.
@@ -166,6 +168,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'm' => Chord::Capture,
         'd' => Chord::Detach,
         'x' => Chord::Close,
+        'u' => Chord::Renew,
         '[' => Chord::ScrollBack,
         '/' => Chord::Find,
         'y' => Chord::Copy,

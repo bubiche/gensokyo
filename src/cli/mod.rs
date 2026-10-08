@@ -44,6 +44,15 @@ enum Cmd {
         /// A name, a slot or an id
         who: String,
     },
+    /// Start residents again on the claude installed now, each into its own conversation
+    ///
+    /// Each goes once it rests (no turn, dialog or half-typed prompt), and keeps its name, slot,
+    /// lead and screen. With nobody named, everyone `list` marks ⇡: behind the installed claude.
+    /// What lives only in the session goes: background tasks, a Monitor, a /loop.
+    Renew {
+        /// Names, slots or ids
+        who: Vec<String>,
+    },
     /// Hang up on a resident; it stays in the shrine as departed, to resume or close
     Banish {
         /// A name, a slot or an id
@@ -192,6 +201,7 @@ pub fn main(args: &[String]) -> ExitCode {
         Cmd::List { json, all } => list(json, all),
         Cmd::New(n) => new(*n),
         Cmd::Resume { who } => resume(&who),
+        Cmd::Renew { who } => say(request(Request::Renew { who }, false)),
         Cmd::Banish { who } => say(request(Request::Banish { who }, false)),
         Cmd::Close { who } => say(request(Request::Close { who }, false)),
         Cmd::Broadcast { card, targets, with } => broadcast(card, targets, with),
@@ -251,6 +261,9 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         let mut fields = crate::tele::fields(t, r.mode.as_deref(), r.branch.as_deref(), true, now);
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
+        }
+        if let Some(v) = &r.outdated {
+            fields = format!("{fields} · ⇡ claude {v}: gensokyo renew");
         }
         let cwd = crate::tele::clean(r.here.as_ref().unwrap_or(&r.cwd), usize::MAX);
         println!("{slot} {} {:<12} {state:<8} {cwd}  {fields}", r.state.glyph(), r.name);

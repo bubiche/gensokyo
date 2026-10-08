@@ -9,7 +9,7 @@ use std::path::Path;
 /// The report, from Claude Code's statusLine JSON (2.1.260: `model.display_name`,
 /// `effort.level`, `context_window.*`, `prompt_cache.{hit_ratio,warm,expires_at}`, `cost.*`,
 /// and on Pro and Max `rate_limits.{five_hour,seven_day}`; `workspace.current_dir`, which
-/// follows a `cd`, 2.1.291).
+/// follows a `cd`, 2.1.291; `version`).
 /// `advisor` and `at` are not in it.
 pub fn from_statusline(j: &Value) -> Telemetry {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str).map(|v| clean(v, 40));
@@ -48,6 +48,7 @@ pub fn from_statusline(j: &Value) -> Telemetry {
             .find_map(|p| j.pointer(p).and_then(Value::as_str))
             .filter(|d| is_dir_path(d))
             .map(String::from),
+        version: s("/version"),
     }
 }
 

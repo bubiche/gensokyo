@@ -68,6 +68,7 @@ what comes next:
 | `b` / `r` | banish the one on screen / recall a departed one |
 | `t` | the timetable of rituals |
 | `x` | close the one on screen (asks first; `/exit`; a departed one leaves the sidebar) |
+| `u` | renew everyone behind the installed Claude Code (asks first; below) |
 | `j` / `k` | the next / previous resident in the sidebar |
 | `a` | the next resident that needs you |
 | `1`–`9` | the resident in that slot |
@@ -125,6 +126,17 @@ A resident that has left — `/exit`, a banish, a crash — stays in the sidebar
 was summoned with; `Ctrl-] r` lists everyone who has departed, this run or an earlier one.
 `Ctrl-] q` asks every resident to `/exit` and stops the daemon; the next `gensokyo` offers them
 all back under recall. Each of these is also a command, for scripts (below).
+
+Claude Code updates itself on disk while a session runs, and the session keeps the version it
+started with until it starts again. A resident behind the `claude` installed now is marked `⇡`
+in the sidebar (and in `list`), and a `[renew u]` button appears. Renewing starts each
+of them again on the new version, into its own conversation, keeping its name, slot, lead and
+screen. Each one waits until it rests (no turn running, no dialog, nothing half typed) and has
+been quiet for two seconds, so nothing is cut short; it shows `↻` until then. What lives only in
+the session is lost: background tasks, a Monitor, a `/loop`. A ritual run that is only kept
+until it has rested a while is left to end on its own. `gensokyo renew Marisa` renews one
+resident whether or not it is behind, which also picks up changed settings, plugins and MCP
+servers.
 
 When the daemon itself crashes, the next one (launchd's, or the next `gensokyo`'s) brings
 everyone back into their own conversations, their turns cut off, and the first client to open
@@ -448,6 +460,7 @@ gensokyo new ~/dev/x --worktree fix     # in a worktree of its own (below); --br
 gensokyo resume Marisa                  # bring a departed one back (list --all shows them)
 gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
 gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar
+gensokyo renew [Marisa …]               # start again on the installed claude, once it rests
 gensokyo broadcast status-report all    # cast a spell card
 gensokyo wait Marisa Sanae --any        # until they have news: a turn ended, a dialog, gone
 gensokyo read Marisa [--screen]         # its last answer, kept after it leaves; or its screen
@@ -462,7 +475,8 @@ per resident: `id`, `name`, `slot`, `cwd` (where it was started), `here` (where 
 when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
 or `departed`), `detail` (what it waits for), `blocked` (why nothing may be typed into it now),
 `finished`, `owner` (its lead's id), `turns` and `needs` (turns ended and dialogs opened, ever),
-`mode`, `branch` (at `here`), `telemetry`, and for a departed one `departed` (epoch seconds), `exit` and
+`mode`, `branch` (at `here`), `telemetry`, `outdated` (the installed Claude Code version, when it
+runs another), `renewing`, and for a departed one `departed` (epoch seconds), `exit` and
 `signal`. `new --json` prints the new resident the same way.
 
 `wait` holds until each resident named has news (`--any`: one of them), or only the kind
@@ -479,8 +493,8 @@ error; `wait` exits 3 on its timeout and 4 when the daemon went away (a restart:
 Run from inside a resident, these have a resident's rights rather than yours. Residents get
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
-It can close, banish, recall, `wait` on or `read` only its own helpers, and it can't `quit` or
-`restart`. A helper it summons works in its permission mode or a narrower one, and may be let
+It can close, banish, recall, renew, `wait` on or `read` only its own helpers, and it can't
+`quit` or `restart`. A helper it summons works in its permission mode or a narrower one, and may be let
 use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds
 arrives paused, and only you resume, run or `ritual edit` one; its MCP config must already be
 in the config dir. Its file tools are refused in the config dir, where rituals, probes and MCP

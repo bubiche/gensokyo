@@ -157,6 +157,43 @@ fn esc_in_the_timetable_goes_back_one_stage_at_a_time() {
 }
 
 /// What the app draws at 120x40, row by row.
+#[test]
+fn renew_shows_only_while_someone_is_behind_asks_and_a_new_pid_brings_its_new_screen() {
+    let mut a = shrine();
+    assert!(!screen(&mut a).iter().any(|l| l.contains("[renew u]")));
+    host(&mut a, b"\x1du");
+    assert!(a.m.modal.is_none());
+    let out = sent(&mut a);
+    assert!(!kinds(&out).contains(&"renew"), "{out:?}");
+
+    let mut residents = a.m.residents.clone();
+    residents[1].outdated = Some("2.1.300".into());
+    daemon(&mut a, Reply::Residents { residents: residents.clone() });
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("Marisa ⇡")), "{rows:#?}");
+    click(&mut a, "[renew u]");
+    assert!(screen(&mut a).iter().any(|l| l.contains("Renew Marisa?")));
+    a.later(Duration::from_millis(400));
+    host(&mut a, b"y");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["renew"]);
+    assert_eq!(out[0].get("who"), None, "everyone behind");
+
+    // On its way: the glyph turns and the button goes.
+    residents[1].renewing = true;
+    daemon(&mut a, Reply::Residents { residents: residents.clone() });
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("Marisa ↻")), "{rows:#?}");
+    assert!(!rows.iter().any(|l| l.contains("[renew u]")));
+
+    // Reimu, on screen, renewed: the same id under a new pid, so her new screen is asked for.
+    residents[0].pid = Some(999);
+    daemon(&mut a, Reply::Residents { residents });
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["view"]);
+    assert_eq!(out[0]["who"], "id-Reimu");
+}
+
 fn screen(a: &mut App) -> Vec<String> {
     let area = Rect::new(0, 0, 120, 40);
     let mut buf = Buffer::empty(area);

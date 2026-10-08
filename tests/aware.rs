@@ -178,6 +178,7 @@ fn a_status_line_report_and_the_lines_drawn_from_it() {
     );
     assert_eq!(t.five_hour.map(|l| (l.used, l.resets)), Some((36, Some(1788543000))));
     assert_eq!((t.cache_warm, t.cache_until), (Some(true), Some(1788534053)));
+    assert_eq!(t.version.as_deref(), Some("2.1.260"));
     t.advisor = Some("opus".into());
     // A minute before the cache goes cold, and when it has.
     let (warm, cold) = (1788534053 - 60, 1788534053);

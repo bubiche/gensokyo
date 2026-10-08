@@ -402,6 +402,20 @@ impl Aware {
         self.prompted = true;
     }
 
+    /// The new start a renew made of it: nothing known yet but a finished turn the user has not
+    /// seen, which still waits on them.
+    pub fn renewed(&self, resumed: bool) -> Aware {
+        // A hook the old process sent late is older than anything the new one says.
+        let mut a = Aware { hook_at: self.hook_at, ..Aware::default() };
+        if self.pending == Some(Pending::Stopped) {
+            a.set(self.pending, self.detail.clone());
+        }
+        if resumed {
+            a.resumed();
+        }
+        a
+    }
+
     /// On screen in a focused terminal: a finished turn has been seen. A dialog still waits.
     /// True if that cleared it.
     pub fn seen(&mut self) -> bool {

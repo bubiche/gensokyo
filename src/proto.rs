@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 12;
+pub const PROTO: u32 = 13;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -50,6 +50,13 @@ pub enum Request {
     /// A departed resident comes back: `claude --resume` with its old settings and name.
     Recall {
         who: String,
+    },
+    /// Live residents started again on the claude installed now, each into its own
+    /// conversation once it rests; with nobody named, everyone behind it. Answered with `done`
+    /// at once, saying who goes now and who once they rest.
+    Renew {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        who: Vec<String>,
     },
     /// `residents` events from now on, whenever the shrine changes.
     Watch,
@@ -256,6 +263,9 @@ pub struct Telemetry {
     /// `workspace.current_dir`, which the daemon takes out as the resident's `here`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    /// The Claude Code it runs: an update on disk waits for the session to start again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -566,4 +576,11 @@ pub struct Resident {
     pub turns: u64,
     #[serde(default)]
     pub needs: u64,
+    /// The Claude Code installed now, when it runs an older one (or any other): a renew starts
+    /// it again on this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outdated: Option<String>,
+    /// Asked to renew: it goes once it rests.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub renewing: bool,
 }

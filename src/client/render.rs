@@ -17,13 +17,14 @@ use ratatui::widgets::{Block, Clear, Widget};
 pub const SIDEBAR_W: u16 = 25;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
-pub(super) const CHORDS: [(&str, &str); 19] = [
+pub(super) const CHORDS: [(&str, &str); 20] = [
     ("n", "summon"),
     ("c", "cast"),
     ("b", "banish"),
     ("r", "recall"),
     ("t", "timetable"),
     ("x", "close"),
+    ("u", "renew"),
     ("j", "next"),
     ("k", "previous"),
     ("a", "needs you"),
@@ -145,6 +146,8 @@ pub enum Button {
     RunRitual,
     ToggleRitual,
     RemoveRitual,
+    /// Everyone behind the installed claude, renewed.
+    Renew,
     /// The departed screen's recall and close, for the resident on it.
     RecallFocused,
     CloseFocused,
@@ -318,7 +321,7 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     if !m.capture {
         buf.set_stringn(inner.x, up(1), "clicks are off: ^] m", w, DIM);
     }
-    let buttons = [
+    let mut buttons = vec![
         ("[summon n]", Button::Summon),
         ("[cast c]", Button::Cast),
         ("[banish b]", Button::Banish),
@@ -327,6 +330,10 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         ("[quit q]", Button::Quit),
         ("[?]", Button::Help),
     ];
+    // Only while someone is behind the installed claude and not yet on the way.
+    if m.residents.iter().any(|r| r.outdated.is_some() && !r.renewing) {
+        buttons.insert(0, ("[renew u]", Button::Renew));
+    }
     if m.leader {
         // Every chord, two a line, where the buttons were: the next key is one of these.
         let lines: Vec<String> = CHORDS
@@ -474,7 +481,18 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         };
         let lead = format!("{slot} {tee}{} ", r.state.glyph());
         let rw = (width(&right) as usize).min(w);
-        buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
+        let (x, _) = buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
+        // Behind the claude installed now, or on its way to it.
+        let end = inner.x + (w - rw) as u16;
+        let glyph = match (r.renewing, r.outdated.is_some()) {
+            (true, _) => Some(" ↻"),
+            (false, true) => Some(" ⇡"),
+            _ => None,
+        };
+        if let Some(g) = glyph.filter(|_| x + 2 <= end) {
+            let mark = if r.state.needs_you() { style } else { style.fg(Color::Yellow) };
+            buf.set_stringn(x, y, g, 2, mark);
+        }
         buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
         // The context, warm or hot as it fills, unless the line is already gold.
         if let Some(c) = t.and_then(|t| t.ctx).filter(|_| !r.state.needs_you()) {

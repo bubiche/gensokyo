@@ -37,6 +37,8 @@ pub enum Modal {
     Cast(Cast),
     Timetable(Timetable),
     Quit,
+    /// Everyone behind the installed claude, by name, to be renewed.
+    Renew(Vec<String>),
     Help,
     /// What was said, newest first.
     History(History),
@@ -77,6 +79,16 @@ impl Modal {
                     Row::yes_no("[quit y]", "[cancel n]"),
                 ],
             ),
+            Modal::Renew(names) => (
+                " renew ".into(),
+                vec![
+                    Row::text(&format!("Renew {}?", names.join(", "))),
+                    Row::dim("Each starts again on the claude installed now,"),
+                    Row::dim("into its conversation, once it rests. Its"),
+                    Row::dim("background tasks, Monitors and /loops end."),
+                    Row::yes_no("[renew y]", "[cancel n]"),
+                ],
+            ),
             Modal::Help => help(),
             Modal::History(hs) => hs.view(m, w, h),
         }
@@ -106,6 +118,7 @@ fn help() -> (String, Vec<Row>) {
     .map(|(s, what)| format!("{} {what}", s.glyph()))
     .collect();
     rows.push(Row::dim(&legend.join("  ")));
+    rows.push(Row::dim("⇡ behind the installed claude (u renews)  ↻ renewing"));
     rows.push(Row::close());
     (" help ".into(), rows)
 }
@@ -156,11 +169,13 @@ impl App {
         }
         match &mut self.m.modal {
             Some(Modal::Help) => self.m.modal = None,
-            Some(Modal::Quit | Modal::Banish { .. } | Modal::Close { .. }) => match k {
-                Key::Enter | Key::Text('y') if self.answer() => self.confirm(),
-                Key::Text('n') => self.m.modal = None,
-                _ => {}
-            },
+            Some(Modal::Quit | Modal::Banish { .. } | Modal::Close { .. } | Modal::Renew(_)) => {
+                match k {
+                    Key::Enter | Key::Text('y') if self.answer() => self.confirm(),
+                    Key::Text('n') => self.m.modal = None,
+                    _ => {}
+                }
+            }
             Some(Modal::Summon(s)) => {
                 let home = self.m.home.clone();
                 if s.key(k, &home) {
@@ -247,6 +262,9 @@ impl App {
             }
             Modal::Close { id, .. } => {
                 self.send(Request::Close { who: id });
+            }
+            Modal::Renew(_) => {
+                self.send(Request::Renew { who: Vec::new() });
             }
             Modal::Recall(r) => {
                 if let Some(r) = r.list.get(r.selected) {

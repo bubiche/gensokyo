@@ -2,22 +2,22 @@
 //! sessionId, name, status, startedAt}` (2.1.260), status `idle`, `busy`, `waiting`, or null for
 //! a headless run. The format is undocumented, and this is the one place that reads it. Asked
 //! every few seconds while anyone is here and may change without a hook, with the spool
-//! replayed on the same beat.
+//! replayed on the same beat. On that beat too, which version of `claude` is installed.
 
 use super::aware::Registry;
 use super::ingest::replay;
 use super::log::log;
 use super::notify::after;
 use super::pty;
-use super::shrine::{Shared, taken, valid_name};
+use super::shrine::{Shared, taken, touch, valid_name};
 use crate::hooks;
 use crate::proto::State;
 use serde::Deserialize;
 use serde_json::json;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +75,7 @@ pub(super) async fn poll(shrine: Shared) {
     loop {
         tokio::time::sleep(POLL).await;
         replay(&shrine, hooks::SPOOL_SETTLE);
-        let (claude, env) = {
+        let (claude, env, ask) = {
             let mut sh = shrine.borrow_mut();
             let live = || sh.entries.iter().filter(|e| e.handle.is_some());
             if live().next().is_none() {
@@ -88,13 +88,17 @@ pub(super) async fn poll(shrine: Shared) {
                 asked.is_none_or(|t| h.last_output() > t)
             });
             let still = !sh.typed && !drew && rev == Some(*sh.changed.borrow());
-            if resting && still && asked.is_some_and(|t| t.elapsed() < POLL_RESTING) {
-                continue;
+            let ask = !(resting && still && asked.is_some_and(|t| t.elapsed() < POLL_RESTING));
+            let Some((claude, env)) = sh.claude("") else { continue };
+            if ask {
+                sh.typed = false;
             }
-            sh.typed = false;
-            let Some(found) = sh.claude("") else { continue };
-            found
+            (claude, env, ask)
         };
+        installed(&shrine, &claude, &env).await;
+        if !ask {
+            continue;
+        }
         // When the snapshot began: a hook that lands during the call is newer than it.
         let at = hooks::now_ms();
         asked = Some(Instant::now());
@@ -103,6 +107,52 @@ pub(super) async fn poll(shrine: Shared) {
         }
         rev = Some(*shrine.borrow().changed.borrow());
     }
+}
+
+/// The `claude` on PATH as it was last asked its version: the file it resolves to, that file's
+/// time and size, what it said (none when it could not say), and when it was asked.
+pub(crate) struct Installed {
+    file: (PathBuf, SystemTime, u64),
+    pub(super) version: Option<String>,
+    at: Instant,
+}
+
+/// How long a `claude` that could not say its version goes unasked: the first run of a new
+/// binary may be held up past the 5 s by the system checking it.
+const VERSION_AGAIN: Duration = Duration::from_secs(60);
+
+/// The installed version, asked again only when the file `claude` resolves to has changed (an
+/// update moves the native installer's link to another version, or writes npm's file over), or
+/// a while after it could not say.
+async fn installed(shrine: &Shared, claude: &Path, env: &[(OsString, OsString)]) {
+    let file = std::fs::canonicalize(claude).ok().and_then(|f| {
+        let m = std::fs::metadata(&f).ok()?;
+        Some((f, m.modified().ok()?, m.len()))
+    });
+    let Some(file) = file else { return };
+    let known = |i: &Installed| i.version.is_some() || i.at.elapsed() < VERSION_AGAIN;
+    if shrine.borrow().installed.as_ref().is_some_and(|i| i.file == file && known(i)) {
+        return;
+    }
+    let version = version(claude, env).await;
+    log(json!({"ev": "claude", "path": file.0, "version": version}));
+    let mut sh = shrine.borrow_mut();
+    sh.installed = Some(Installed { file, version, at: Instant::now() });
+    touch(&sh);
+}
+
+/// `claude --version`'s first word, `2.1.294 (Claude Code)`; at most 5 s.
+async fn version(claude: &Path, env: &[(OsString, OsString)]) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(claude);
+    cmd.arg("--version").env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+    cmd.current_dir("/").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let child = pty::locked(|| cmd.kill_on_drop(true).spawn()).ok()?;
+    let out =
+        tokio::time::timeout(Duration::from_secs(5), child.wait_with_output()).await.ok()?.ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let word = text.split_whitespace().next()?;
+    (out.status.success() && word.starts_with(|c: char| c.is_ascii_digit()))
+        .then(|| crate::tele::clean(word, 40))
 }
 
 /// A registry snapshot: each resident's status, and the name it was renamed to inside.

@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 14;
+pub const PROTO: u32 = 15;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -119,6 +119,13 @@ pub enum Request {
     },
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
+    /// Keeping the Mac from idle-sleeping while work runs turned on or off, and kept in the
+    /// config; with neither, only asked. Answered with `done`: the setting, and whom it holds
+    /// the Mac for.
+    Awake {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<bool>,
+    },
     /// Held until the residents named have news: a turn ended, a dialog or question opened, or
     /// they departed. Answered with `waited`, whether that came or the timeout did.
     Wait(Wait),
@@ -528,6 +535,12 @@ pub enum Reply {
     /// Event, once as a `watch` begins: the notices kept, newest first.
     Notices {
         notices: Vec<Notice>,
+    },
+    /// Event, as a `watch` begins and whenever it changes: whether the daemon keeps the Mac
+    /// from idle-sleeping while work runs, and whether it holds it awake now.
+    Awake {
+        on: bool,
+        held: bool,
     },
 }
 

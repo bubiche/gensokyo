@@ -194,6 +194,41 @@ fn renew_shows_only_while_someone_is_behind_asks_and_a_new_pid_brings_its_new_sc
     assert_eq!(out[0]["who"], "id-Reimu");
 }
 
+#[test]
+fn the_awake_button_shows_the_setting_and_the_chord_or_a_click_turns_it_over() {
+    let mut a = shrine();
+    // Nothing until the daemon says.
+    assert!(!screen(&mut a).iter().any(|l| l.contains("[awake")));
+    host(&mut a, b"\x1dw");
+    let out = sent(&mut a);
+    assert!(!kinds(&out).contains(&"awake"), "{out:?}");
+
+    daemon(&mut a, Reply::Awake { on: true, held: true });
+    assert!(screen(&mut a).iter().any(|l| l.contains("[awake: on, holding w]")));
+    host(&mut a, b"\x1dw");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["awake"]);
+    assert_eq!(out[0]["on"], false);
+
+    daemon(&mut a, Reply::Awake { on: false, held: false });
+    assert!(screen(&mut a).iter().any(|l| l.contains("[awake: off w]")));
+    click(&mut a, "[awake: off w]");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["awake"]);
+    assert_eq!(out[0]["on"], true);
+    daemon(
+        &mut a,
+        Reply::Done {
+            id: out[0]["id"].as_u64().unwrap(),
+            message: "keep-awake is on: nothing is running, so the Mac may sleep".into(),
+        },
+    );
+    daemon(&mut a, Reply::Awake { on: true, held: false });
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("[awake: on w]")), "{rows:#?}");
+    assert!(rows.iter().any(|l| l.contains("keep-awake is on")), "{rows:#?}");
+}
+
 fn screen(a: &mut App) -> Vec<String> {
     let area = Rect::new(0, 0, 120, 40);
     let mut buf = Buffer::empty(area);

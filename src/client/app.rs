@@ -630,6 +630,7 @@ impl App {
                 self.say(Say::Notice, text);
             }
             Reply::Notices { notices } => self.notices(notices),
+            Reply::Awake { on, held } => self.m.awake = Some(render::Awake { on, held }),
             Reply::Cards { cards, unusable, .. } => {
                 if let Some(Modal::Cast(c)) = &mut self.m.modal {
                     (c.cards, c.unusable) = (Some(cards), unusable);
@@ -1148,6 +1149,7 @@ impl App {
                 Button::Quit => self.chord(Chord::Quit),
                 Button::Help => self.chord(Chord::Help),
                 Button::Capture => self.chord(Chord::Capture),
+                Button::Awake => self.chord(Chord::Awake),
                 Button::RecallFocused => self.recall_focused(),
                 Button::CloseFocused => self.chord(Chord::Close),
                 Button::Renew => self.chord(Chord::Renew),
@@ -1220,6 +1222,13 @@ impl App {
                 self.any_motion = false;
                 self.modes();
             }
+            // Answered with what it is now, and whom it holds the Mac for.
+            Chord::Awake => match self.m.awake {
+                Some(a) => {
+                    self.send(Request::Awake { on: Some(!a.on) });
+                }
+                None => self.say(Say::Info, "the daemon has not said yet whether it keeps awake"),
+            },
             Chord::Detach => self.done = Some("detached; the residents keep running".into()),
             // A live one is asked first: its turn and its input line go with it. A departed
             // one just leaves the sidebar.

@@ -10,7 +10,7 @@ use super::notify::looked;
 use super::registry::poll;
 use super::rituals;
 use super::shrine::{
-    SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon,
+    SIZE, Shared, Shrine, View, banish, close, leave_all, list, live, recall, summon, touch,
 };
 use super::store::Store;
 use super::stream::{self, send, send_written, view, writer};
@@ -123,6 +123,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         typed: false,
         waits: Vec::new(),
         installed: None,
+        awake: super::awake::Awake::from_config(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -135,6 +136,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
     super::headless::adopt(&shrine);
     tokio::task::spawn_local(supervise("registry poll", shrine.clone(), poll));
     tokio::task::spawn_local(supervise("ritual clock", shrine.clone(), rituals::clock));
+    tokio::task::spawn_local(supervise("keep awake", shrine.clone(), super::awake::keep));
     let quit = Rc::new(Stop { quit: Notify::new(), left: watch::channel(false).0 });
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
@@ -422,6 +424,13 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 });
                 None
             }
+            Request::Awake { on } => {
+                let mut sh = shrine.borrow_mut();
+                match on.map(|on| super::awake::set(&mut sh, on)) {
+                    Some(Err(e)) => Some(fail(e)),
+                    _ => Some(Reply::Done { id, message: super::awake::status(&sh) }),
+                }
+            }
             Request::Quit => {
                 let (mut left, out) = (stop(&shrine, &quit), out.clone());
                 tokio::task::spawn_local(async move {
@@ -606,6 +615,10 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
             "quit stops every resident, this one too; the user quits from a terminal of their own"
                 .into(),
         ),
+        Request::Awake { on: Some(_) } => Some(
+            "keeping the Mac awake is the user's to turn on or off; tell them if it should change"
+                .into(),
+        ),
         Request::Input { .. }
         | Request::View { .. }
         | Request::Scroll { .. }
@@ -665,6 +678,8 @@ fn refused(sh: &mut Shrine, who: &str, proto: u32, hooks_only: bool) {
 fn stop(shrine: &Shared, s: &Rc<Stop>) -> watch::Receiver<bool> {
     let left = s.left.subscribe();
     if !std::mem::replace(&mut shrine.borrow_mut().quitting, true) {
+        // Nothing holds the Mac awake while everyone leaves.
+        touch(&shrine.borrow());
         super::crash::stopping();
         log(json!({"ev": "stopping"}));
         let (shrine, s) = (shrine.clone(), s.clone());

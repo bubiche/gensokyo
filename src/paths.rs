@@ -43,6 +43,32 @@ pub fn config(key: &str) -> Option<String> {
     hits.next_back().map(|(_, v)| v.into())
 }
 
+/// `KEY=value` in the config file: every line that sets `key` says `value` now, or a line for it
+/// goes at the end; the rest stays as it was, comments too. A config that is a link (into a
+/// dotfiles repo, say) is written where it points.
+pub fn set_config(key: &str, value: &str) -> std::io::Result<()> {
+    let dir = config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("config");
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let text = match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        r => r?,
+    };
+    let line = format!("{key}={value}");
+    let mut found = false;
+    let mut lines: Vec<&str> = text.lines().collect();
+    for l in lines.iter_mut().filter(|l| !l.starts_with('#')) {
+        if l.split_once('=').is_some_and(|(k, _)| k == key) {
+            (*l, found) = (&line, true);
+        }
+    }
+    if !found {
+        lines.push(&line);
+    }
+    crate::daemon::store::write_atomic(&path, format!("{}\n", lines.join("\n")).as_bytes())
+}
+
 /// `$GENSOKYO_SHARE`, else `share/` beside the binary or up to three levels above it (a build
 /// tree), looking from the binary a symlink on `PATH` points at too.
 pub fn share_dir(exe: &Path) -> Option<PathBuf> {

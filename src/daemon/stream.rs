@@ -58,7 +58,8 @@ async fn write_lines(mut w: OwnedWriteHalf, mut rx: mpsc::Receiver<Line>) {
 }
 
 /// A `residents` event now and whenever the shrine changes after, the timetable now and
-/// whenever it changes, the notices kept, and every `notify` and `notice` after. The notices
+/// whenever it changes, the notices kept, every `notify` and `notice` after, and `awake` now
+/// and whenever it changes. The notices
 /// kept are taken, and marked heard, as the stream subscribes: none comes twice, and none is
 /// lost between.
 pub(super) async fn watch(shrine: Shared, out: Out) {
@@ -73,10 +74,22 @@ pub(super) async fn watch(shrine: Shared, out: Out) {
     {
         return;
     }
+    let mut awake = None;
     loop {
         rx.borrow_and_update();
         if !send(&out, &Reply::Residents { residents: list(&shrine, false) }).await {
             return;
+        }
+        let now = {
+            let a = &shrine.borrow().awake;
+            Some((a.on, a.held()))
+        };
+        if now != awake {
+            awake = now;
+            let (on, held) = now.expect("just set");
+            if !send(&out, &Reply::Awake { on, held }).await {
+                return;
+            }
         }
         loop {
             tokio::select! {

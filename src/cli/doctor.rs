@@ -72,6 +72,16 @@ pub fn main() -> Result<(), String> {
         );
     }
     line("daemon", daemon());
+    line(
+        "awake",
+        match request(Request::Awake { on: None }, false) {
+            Ok(Reply::Done { message, .. }) => message,
+            Err(Error::Refused { .. }) => {
+                "the daemon running is an older build; `gensokyo restart` replaces it".into()
+            }
+            _ => awake_in_config(),
+        },
+    );
     line("at login", login::status());
     // A daemon launchd starts has the agent's environment, not this shell's.
     if let login::Agent::Ours(_) = login::agent() {
@@ -132,6 +142,12 @@ fn daemon() -> String {
         }
         Ok(other) => format!("unexpected reply {other:?}"),
     }
+}
+
+/// The setting as the config has it, with no daemon to hold the Mac.
+pub(super) fn awake_in_config() -> String {
+    let on = paths::config("KEEP_AWAKE").as_deref() != Some("off");
+    format!("keep-awake is {}; no daemon is running to hold the Mac", if on { "on" } else { "off" })
 }
 
 /// How much the state dir holds, and its three largest files.

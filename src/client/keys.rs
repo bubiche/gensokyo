@@ -106,6 +106,8 @@ pub enum Chord {
     Help,
     /// Mouse capture on or off (native text selection while off).
     Capture,
+    /// Keeping the Mac awake while residents work, on or off.
+    Awake,
     Detach,
     Close,
     /// Everyone behind the installed claude started again on it, once they rest.
@@ -166,6 +168,7 @@ pub fn chord(c: &Chunk) -> Option<Chord> {
         'q' => Chord::Quit,
         '?' => Chord::Help,
         'm' => Chord::Capture,
+        'w' => Chord::Awake,
         'd' => Chord::Detach,
         'x' => Chord::Close,
         'u' => Chord::Renew,

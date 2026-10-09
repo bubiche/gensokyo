@@ -78,6 +78,7 @@ what comes next:
 | `/` | search back through the resident's scrollback |
 | `y` | copy the resident's last answer |
 | `m` | mouse capture on or off |
+| `w` | keep the Mac awake while residents work, on or off (below) |
 | `d` | detach: the client leaves, the residents keep running |
 | `q` | quit: every resident `/exit`s and the daemon stops |
 | `h` | the history: every message and notice, newest first |
@@ -152,6 +153,14 @@ foreground — asks each to `/exit` as `quit` does, but writes down who was here
 next daemon brings them all back into their own conversations, in their slots. With the login
 agent on, that happens at login, before you open the shrine; the first client is told who came
 back and whose turn the stop cut off.
+
+While a resident is in a turn, or a ritual runs headless, the daemon keeps the Mac from
+idle-sleeping (`caffeinate -i`), and lets it sleep 30 seconds after the work is done. A
+permission prompt, a question or a finished turn waiting for you holds nothing, and neither does
+a ritual waiting for its time. The display still sleeps and the screen still locks, and a closed
+lid still sleeps the Mac. The sidebar's `[awake: on w]` says so, and reads `on, holding` while
+it holds the Mac; `Ctrl-] w` turns it off or on, and `gensokyo awake` says whom it holds the Mac
+for. The setting is kept in the config (`KEEP_AWAKE=off`).
 
 ## When a resident needs you
 
@@ -417,7 +426,8 @@ for to its `allowed_tools`: each fire is a fresh session, and an answer given to
 carry over.
 
 Rituals fire only while the daemon runs, and on a machine that is awake. A laptop whose lid was
-shut through a fire makes it up at the next tick after it wakes.
+shut through a fire makes it up at the next tick after it wakes. A run keeps the Mac awake while
+it goes (`Ctrl-] w`); a ritual waiting for its time does not.
 
 ## Helpers
 
@@ -487,6 +497,7 @@ gensokyo read Marisa [--screen]         # its last answer, kept after it leaves;
 gensokyo ritual …                       # the rituals (above)
 gensokyo quit                           # everyone /exit, then the daemon stops
 gensokyo restart                        # a new daemon, the same residents
+gensokyo awake [on|off]                 # keep the Mac awake while residents work; alone, whom for
 gensokyo help <command>                 # every command has its own
 ```
 
@@ -514,7 +525,7 @@ Run from inside a resident, these have a resident's rights rather than yours. Re
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
 It can close, banish, recall, renew, `wait` on or `read` only its own helpers, and it can't
-`quit` or `restart`. A helper it summons works in its permission mode or a narrower one, and may be let
+`quit`, `restart` or turn keeping awake on or off. A helper it summons works in its permission mode or a narrower one, and may be let
 use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds
 arrives paused, and only you resume, run or `ritual edit` one; its MCP config must already be
 in the config dir. Its file tools are refused in the config dir, where rituals, probes and MCP

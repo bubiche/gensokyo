@@ -4,7 +4,7 @@
 
 use super::log::log;
 use super::rituals::{notice, now, repush};
-use super::shrine::Shared;
+use super::shrine::{Shared, touch};
 use crate::ritual::{self, Dir, Ritual, when};
 use crate::tele;
 use jiff::tz::TimeZone;
@@ -169,7 +169,12 @@ pub(super) fn adopt(shrine: &Shared) {
 /// Counted as running until it ends or is stopped at its limit; then its journal line, its
 /// notice, and the log's last lines.
 fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
-    *shrine.borrow_mut().rites.headless.entry(run.slug.clone()).or_default() += 1;
+    {
+        let mut sh = shrine.borrow_mut();
+        *sh.rites.headless.entry(run.slug.clone()).or_default() += 1;
+        // A run going keeps the Mac awake.
+        touch(&sh);
+    }
     let shrine = shrine.clone();
     tokio::task::spawn_local(async move {
         let limit = headless_limit();
@@ -241,6 +246,7 @@ fn see_out(shrine: &Shared, run: Run, child: Option<tokio::process::Child>) {
         if let Some(n) = sh.rites.headless.get_mut(&run.slug) {
             *n = n.saturating_sub(1);
         }
+        touch(&sh);
         notice(&mut sh, &run.slug, &told);
         drop(sh);
         repush(&shrine);

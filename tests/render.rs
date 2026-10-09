@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
 use gensokyo::client::modal::{self, Cast, History, Modal, Recall, Stage, Summon, Timetable};
-use gensokyo::client::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
+use gensokyo::client::render::{self, Awake, Button, Find, Hit, HitMap, Message, Model, Say};
 use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
@@ -367,6 +367,13 @@ fn screens() -> Vec<(&'static str, Model)> {
             with(&|m| {
                 m.capture = false;
                 m.message = Some(Message::new(Say::Error, "no resident 7"));
+            }),
+        ),
+        (
+            "awake-held",
+            with(&|m| {
+                m.capture = false;
+                m.awake = Some(Awake { on: true, held: true });
             }),
         ),
         ("leader", with(&|m| m.leader = true)),

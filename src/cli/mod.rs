@@ -109,6 +109,16 @@ enum Cmd {
     },
     /// Ask every resident to /exit, then stop the daemon
     Quit,
+    /// Keep the Mac from idle-sleeping while residents work; alone, whether it does and for whom
+    ///
+    /// On by default. A resident in a turn or a headless ritual run holds the Mac awake, with
+    /// caffeinate -i, until 30 s after the work is done; a dialog, a question or a schedule
+    /// does not. The display still sleeps, and a closed lid still sleeps the Mac. Kept in the
+    /// config as KEEP_AWAKE; Ctrl-] w in the shrine does the same.
+    Awake {
+        #[arg(value_parser = ["on", "off"])]
+        to: Option<String>,
+    },
     /// Replace the running daemon, whatever its build, and bring its residents back
     ///
     /// Each is asked to /exit, the daemon stops, this binary's daemon starts, and each is
@@ -214,6 +224,7 @@ pub fn main(args: &[String]) -> ExitCode {
             Err(Error::NotRunning) => Ok(()),
             r => say(r),
         },
+        Cmd::Awake { to } => awake(to.map(|t| t == "on")),
         Cmd::Restart => conn::restart(),
         Cmd::Doctor => doctor::main(),
         Cmd::Login { cmd } => login::main(cmd),
@@ -240,6 +251,24 @@ fn say(r: Result<Reply, Error>) -> Result<(), String> {
             Ok(())
         }
         other => Err(format!("unexpected reply {other:?}")),
+    }
+}
+
+/// Asked of the daemon, which holds the Mac; with none running, set in the config for the next.
+fn awake(on: Option<bool>) -> Result<(), String> {
+    if on.is_some() && std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|v| !v.is_empty()) {
+        return Err("keeping the Mac awake is the user's to turn on or off".into());
+    }
+    match request(Request::Awake { on }, false) {
+        Err(Error::NotRunning) => {
+            if let Some(on) = on {
+                let v = if on { "on" } else { "off" };
+                paths::set_config("KEEP_AWAKE", v).map_err(|e| format!("the config: {e}"))?;
+            }
+            println!("{}", doctor::awake_in_config());
+            Ok(())
+        }
+        r => say(r),
     }
 }
 

@@ -108,6 +108,8 @@ pub(super) struct Shrine {
     pub(super) waits: Vec<Rc<super::lead::Waiting>>,
     /// The `claude` residents start now: the file it resolves to, and what `--version` said.
     pub(super) installed: Option<super::registry::Installed>,
+    /// Keeping the Mac from idle-sleeping while work runs.
+    pub(super) awake: super::awake::Awake,
 }
 
 impl Shrine {

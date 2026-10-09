@@ -1,0 +1,21 @@
+#!/bin/bash
+# tests/stub-caffeinate - stands in for /usr/bin/caffeinate. Each start adds its arguments as a
+# line to $STUB_STATE/caffeinate.calls and leaves its pid in caffeinate.pid, then holds until it
+# is killed or, as the real one does, until the process after -w is gone. bash 3.2 compatible.
+
+set -u
+dir=${STUB_STATE:?}
+mkdir -p "$dir"
+printf '%s\n' "$*" >> "$dir/caffeinate.calls"
+printf '%s\n' "$$" > "$dir/caffeinate.pid"
+w=''
+while [ $# -gt 0 ]; do
+  [ "$1" = -w ] && w=${2:-}
+  shift
+done
+n=0
+while [ $n -lt 3000 ]; do
+  if [ -n "$w" ] && ! kill -0 "$w" 2>/dev/null; then exit 0; fi
+  sleep 0.2
+  n=$((n + 1))
+done

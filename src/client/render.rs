@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 pub const SIDEBAR_W: u16 = 25;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
-pub(super) const CHORDS: [(&str, &str); 20] = [
+pub(super) const CHORDS: [(&str, &str); 21] = [
     ("n", "summon"),
     ("c", "cast"),
     ("b", "banish"),
@@ -33,6 +33,7 @@ pub(super) const CHORDS: [(&str, &str); 20] = [
     ("y", "copy last"),
     ("1-9", "slot"),
     ("m", "mouse"),
+    ("w", "awake"),
     ("d", "detach"),
     ("q", "quit"),
     ("h", "history"),
@@ -73,6 +74,16 @@ pub struct Model {
     pub today: String,
     /// The timetable, once the daemon has sent it.
     pub rituals: Option<Vec<RitualInfo>>,
+    /// Keeping the Mac awake, once the daemon has said.
+    pub awake: Option<Awake>,
+}
+
+/// Whether the daemon keeps the Mac from idle-sleeping while work runs, and whether it holds it
+/// awake now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Awake {
+    pub on: bool,
+    pub held: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -142,6 +153,8 @@ pub enum Button {
     Quit,
     Help,
     Capture,
+    /// Keeping the Mac awake, on or off.
+    Awake,
     /// The open ritual's run now, pause or resume, and remove.
     RunRitual,
     ToggleRitual,
@@ -320,6 +333,16 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     flow(buf, Rect { y, height: 1, ..inner }, capture, style, hits);
     if !m.capture {
         buf.set_stringn(inner.x, up(1), "clicks are off: ^] m", w, DIM);
+    }
+    // Lit while it holds the Mac awake.
+    if let Some(a) = m.awake {
+        let (label, style) = match (a.on, a.held) {
+            (false, _) => ("[awake: off w]", BUTTON),
+            (true, false) => ("[awake: on w]", BUTTON),
+            (true, true) => ("[awake: on, holding w]", Style::new().fg(Color::Yellow)),
+        };
+        let y = up(1);
+        flow(buf, Rect { y, height: 1, ..inner }, &[(label, Button::Awake)], style, hits);
     }
     let mut buttons = vec![
         ("[summon n]", Button::Summon),

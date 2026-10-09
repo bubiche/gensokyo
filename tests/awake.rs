@@ -20,7 +20,6 @@ fn daemon(name: &str, config: Option<&str>, env: &[(&str, &str)]) -> Daemon {
     let mut extra = vec![
         ("STUB_HOOKS".to_string(), "1".to_string()),
         ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
-        ("GENSOKYO_CAFFEINATE".into(), STUB.into()),
         ("GENSOKYO_AWAKE_LINGER_MS".into(), "300".into()),
     ];
     extra.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
@@ -276,6 +275,24 @@ fn the_real_caffeinate_asserts_against_idle_sleep() {
         })
     };
     wait(asserted, "the assertion");
-    drop(d);
+    // Killed outright, the daemon never lets go itself: `-w` is what ends it.
+    // SAFETY: plain kill(2), on the daemon this test started.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     wait(|| !alive(c.parse().unwrap()), "caffeinate to go with the daemon");
+}
+
+#[test]
+fn a_caffeinate_that_would_not_start_is_tried_again_when_turned_back_on() {
+    let bin = fresh("aw-late-bin").join("caffeinate");
+    let d =
+        daemon("late", None, &[("STUB_HOLD", "1"), ("GENSOKYO_CAFFEINATE", bin.to_str().unwrap())]);
+    summon(&d, json!({"name": "Reimu", "prompt": "work"}));
+    wait(|| d.log().iter().any(|e| e["ev"] == "awake" && e["error"].is_string()), "the failure");
+    let r = awake(&d, None);
+    assert!(r["message"].as_str().unwrap().contains("would not start"), "{r}");
+    // Put right while the turn goes on: off and on again tries once more.
+    std::fs::copy(STUB, &bin).unwrap();
+    awake(&d, Some(false));
+    awake(&d, Some(true));
+    wait(|| holding(&d).is_some(), "caffeinate to start");
 }

@@ -34,6 +34,11 @@ pub fn stub_env(dir: &Path) -> Vec<(String, String)> {
             concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude").into(),
         ),
         ("STUB_STATE".into(), under("stub")),
+        // Never the real one, which would keep the machine running the tests awake.
+        (
+            "GENSOKYO_CAFFEINATE".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-caffeinate").into(),
+        ),
         ("CLAUDE_CONFIG_DIR".into(), under("claude")),
     ]
 }

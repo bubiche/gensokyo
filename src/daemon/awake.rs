@@ -133,6 +133,8 @@ pub(super) fn set(sh: &mut Shrine, on: bool) -> Result<(), String> {
     paths::set_config("KEEP_AWAKE", v).map_err(|e| format!("could not write the config: {e}"))?;
     log(json!({"ev": "awake", "on": on}));
     sh.awake.on = on;
+    // Turned off and on again: a caffeinate that would not start is tried once more.
+    sh.awake.failed = false;
     touch(sh);
     step(sh);
     Ok(())

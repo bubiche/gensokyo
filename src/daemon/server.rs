@@ -128,6 +128,17 @@ async fn serve(store: Store) -> std::process::ExitCode {
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
     );
+    // Before the comeback takes its file: a logout just after login would otherwise end the
+    // daemon mid-recall with nobody written down. One that comes now waits for the loop.
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
+    ) else {
+        log(json!({"ev": "exit", "why": "could not take its signals"}));
+        return std::process::ExitCode::FAILURE;
+    };
     // Hooks spooled while no daemon answered: a /clear before the last one stopped, say. Before
     // the first request, so a resume that started this daemon resumes the session it moved to.
     replay(&shrine, 0);
@@ -138,15 +149,6 @@ async fn serve(store: Store) -> std::process::ExitCode {
     tokio::task::spawn_local(supervise("ritual clock", shrine.clone(), rituals::clock));
     tokio::task::spawn_local(supervise("keep awake", shrine.clone(), super::awake::keep));
     let quit = Rc::new(Stop { quit: Notify::new(), left: watch::channel(false).0 });
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
-        signal(SignalKind::terminate()),
-        signal(SignalKind::interrupt()),
-        signal(SignalKind::hangup()),
-    ) else {
-        log(json!({"ev": "exit", "why": "could not take its signals"}));
-        return std::process::ExitCode::FAILURE;
-    };
     loop {
         tokio::select! {
             a = listener.accept() => match a {
@@ -182,7 +184,10 @@ fn signalled(shrine: &Shared, quit: &Rc<Stop>, sig: &str) {
         live.sort_by_key(|e| (e.rec.slot.unwrap_or(u8::MAX), e.rec.launched));
         let mut ids = format!("# {sig}\n");
         for e in &live {
-            let cut = if e.aware.state() == proto::State::Busy { " cut" } else { "" };
+            let cut = match e.aware.state() == proto::State::Busy || e.aware.open() {
+                true => " cut",
+                false => "",
+            };
             ids += &format!("{}{cut}\n", e.rec.id);
         }
         let w = super::store::write_atomic(&path, ids.as_bytes()).err().map(|e| e.to_string());
@@ -226,7 +231,8 @@ fn comeback(shrine: &Shared, running: &HashSet<String>) {
         }
     }
     let Some(sig) = sig.filter(|_| !back.is_empty() || !not.is_empty()) else { return };
-    let mut t = format!("the daemon was stopped by {sig} (a logout or a restart, say)");
+    let why = if sig == "SIGTERM" { " (a logout or a restart, say)" } else { "" };
+    let mut t = format!("the daemon was stopped by {sig}{why}");
     if !back.is_empty() {
         t += &format!("; brought back: {}", back.join(", "));
     }
@@ -436,6 +442,11 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                     .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
             Request::Quit => {
+                // After a signal began the stop: `quit` still leaves everyone departed.
+                let comeback = paths::comeback_path();
+                if std::fs::read_to_string(&comeback).is_ok_and(|ids| ids.starts_with('#')) {
+                    let _ = std::fs::remove_file(&comeback);
+                }
                 let (mut left, out) = (stop(&shrine, &quit), out.clone());
                 tokio::task::spawn_local(async move {
                     let _ = left.wait_for(|l| *l).await;

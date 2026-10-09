@@ -30,7 +30,8 @@ pub fn config_dir() -> PathBuf {
     }
 }
 
-/// The ids `gensokyo restart` hands the next daemon to recall as it starts, one a line.
+/// The ids the next daemon recalls as it starts, one a line: `gensokyo restart`'s, or a daemon's
+/// own as a signal stops it (under a `# <signal>` line).
 pub fn comeback_path() -> PathBuf {
     state_dir().join("run/comeback")
 }

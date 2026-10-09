@@ -239,3 +239,39 @@ fn a_signal_brings_everyone_back_in_order_and_says_whose_turn_it_cut_off() {
     assert!(names(&d).is_empty());
     assert_eq!(notice(&d), None);
 }
+
+#[test]
+fn a_quit_while_a_signal_stops_it_still_leaves_everyone_departed() {
+    let d = daemon("sigquit", &[]);
+    let r = summon(&d, json!({"name": "Reimu", "prompt": "hello"}));
+    // The first /exit is lost, so the stop the signal began is still going when `quit` comes.
+    std::fs::write(d.dir.join(format!("stub/{}.eat-exit", r["id"].as_str().unwrap())), "1\n")
+        .unwrap();
+    let stops = evs(&d, "stopping");
+    // SAFETY: plain kill(2), on the daemon this test started.
+    unsafe { libc::kill(pid(&d) as i32, libc::SIGTERM) };
+    wait(|| evs(&d, "stopping") > stops, "the stop to begin");
+    assert!(d.dir.join("run/comeback").exists());
+    d.cli(&["quit"]);
+    assert!(!d.dir.join("run/comeback").exists());
+    d.cli(&["list"]);
+    assert!(names(&d).is_empty());
+}
+
+#[test]
+fn a_turn_a_signal_cuts_off_at_a_dialog_is_named_too() {
+    let d = daemon("sigdialog", &[("STUB_HOOKS", "1")]);
+    let r = summon(&d, json!({"name": "Marisa"}));
+    let bytes: Vec<u8> = b"/perm\r".to_vec();
+    let (mut w, mut lines) = d.connect();
+    let req = json!({"t": "input", "id": 1, "who": r["id"], "bytes": bytes});
+    writeln!(w, "{req}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    let asks =
+        |d: &Daemon| d.list()[0]["detail"].as_str().is_some_and(|t| t.contains("permission"));
+    wait(|| asks(&d), "the dialog");
+    kill(&d, libc::SIGTERM);
+    d.cli(&["list"]);
+    let said = notice(&d).expect("a notice");
+    assert!(said.contains("turn was cut off: Marisa"), "{said}");
+}

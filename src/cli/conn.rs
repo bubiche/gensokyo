@@ -233,7 +233,8 @@ pub fn restart() -> Result<(), String> {
                 _ => format!("; its {n} residents are asked to /exit first"),
             };
             println!("stopping the daemon (pid {pid}){who}");
-            stop(pid)?;
+            // Left behind, the list would stand in for the one a later signal writes.
+            stop(pid).inspect_err(|_| _ = std::fs::remove_file(paths::comeback_path()))?;
         }
     }
     let s = connect_or_start()?;

@@ -10,6 +10,29 @@ own and report back.
 One Rust binary: a daemon that owns every resident's terminal, and a client that draws the
 shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals mostly work.
 
+## TL;DR: what it adds to Claude Code
+
+- **Every session in one place.** A sidebar shows each one's state, model, context, branch and
+  tags; the one you pick fills the screen. Closing the terminal leaves them all running.
+- **It tells you who needs you.** A permission prompt, a question or a finished turn nobody has
+  read turns that session gold and rings; `Ctrl-] a` goes to the next one.
+- **Sessions survive the daemon.** After a crash, a logout or a restart of the Mac, each session
+  comes back into its own conversation (at login, with the login agent on). A session running an
+  older Claude Code is restarted on the new one once it is idle.
+- **One prompt to many.** Spell cards type a saved prompt into several sessions at once, skipping
+  any with a dialog open or a prompt half typed.
+- **Work on a schedule.** Rituals are prompts on a cron schedule. Each run is a fresh session, a
+  standing one or a headless `claude -p`, with a memory file kept between runs. A probe can make
+  a ritual fire only when something changed, such as a PR's CI turning red, and send that
+  to the session working on the branch. Asking a session sets one up.
+- **Sessions that run sessions.** A session can summon helpers, each in a git worktree of its
+  own, then brief them, wait on them and read their reports.
+- **Roles** are standing instructions (reviewer, implementer, debugger, …) that last through a
+  `/clear` or a `/compact`.
+- **The Mac stays awake while sessions work**, and sleeps once the work is done.
+- **Everything is a command** (`list --json`, `new`, `wait`, `read`, `tag`, …), for your scripts
+  and for the sessions themselves.
+
 ## Requirements
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on

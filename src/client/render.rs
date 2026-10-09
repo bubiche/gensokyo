@@ -570,13 +570,14 @@ fn cut(s: &str, most: usize) -> String {
 }
 
 /// A resident's dim row in `room` columns: `⎇ branch`, `BRANCH_PREFIX` left off, then its tags.
-/// The branch is cut first, to no less than a letter and `…`, then the tags at their end.
+/// The branch is cut first, to no less than half the row, then the tags at their end.
 fn branch_row(r: &Resident, prefix: &str, room: usize) -> String {
     let t = tags(&r.tags);
     let Some(b) = r.branch.as_deref() else { return cut(&t, room) };
     let b = b.strip_prefix(prefix).filter(|b| !b.is_empty()).unwrap_or(b);
     let after = if t.is_empty() { 0 } else { t.len() + 1 };
-    let b = format!("⎇ {}", cut(b, room.saturating_sub(2 + after).max(2)));
+    let most = room.saturating_sub(2 + after).max(room.saturating_sub(2) / 2).max(2);
+    let b = format!("⎇ {}", cut(b, most));
     cut(&if t.is_empty() { b } else { format!("{b} {t}") }, room)
 }
 

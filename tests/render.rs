@@ -532,6 +532,11 @@ fn a_tag_row_is_its_residents_with_or_without_a_branch() {
     render::render(&tagged(), area, &mut buf);
     let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
     assert!((0..16).all(|y| !side(y).contains("=")), "{:?}", (0..16).map(side).collect::<Vec<_>>());
+    // Tags never squeeze a branch below half the row: they are cut instead.
+    let mut buf = Buffer::empty(AREA);
+    render::render(&tagged(), AREA, &mut buf);
+    let row: String = (0..render::SIDEBAR_W).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(row.contains("⎇ padlet-…") && row.contains("pr=#"), "{row:?}");
 }
 
 #[test]

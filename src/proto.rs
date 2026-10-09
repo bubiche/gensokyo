@@ -639,8 +639,12 @@ pub mod pairs {
             }
             fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Tags, A::Error> {
                 let mut t = Tags::new();
-                while let Some(kv) = m.next_entry()? {
-                    t.push(kv);
+                // A key twice (a hand-edited record) is one tag, the last value in its place.
+                while let Some((k, v)) = m.next_entry::<String, String>()? {
+                    match t.iter_mut().find(|(have, _)| *have == k) {
+                        Some(have) => have.1 = v,
+                        None => t.push((k, v)),
+                    }
                 }
                 Ok(t)
             }

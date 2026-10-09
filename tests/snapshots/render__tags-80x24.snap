@@ -4,11 +4,11 @@ expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 1 Reimu · pr=#123 ci=green · ~/dev/gensokyo ⎇ nebel9┐"
 "│1 ○ Reimu              ││line 00                                              │"
-"│  │ ⎇ p… pr=#123 ci=gr…││line 01     ~                                        │"
+"│  │ ⎇ padlet-… pr=#123…││line 01     ~                                        │"
 "│4 ├● Youmu             ││line 02     ~~                                       │"
 "│  │  ⎇ fix-ci          ││line 03     ~~~                                      │"
 "│5 └○ Hieda-no-Akyuu-the││line 04     ~~~~                                     │"
-"│     ⎇ a… pr=#4567 ci=…││line 05     ~~~~~                                    │"
+"│     ⎇ a1b2c3d pr=#456…││line 05     ~~~~~                                    │"
 "│2 ○ Marisa             ││line 06     ~~~~~~                                   │"
 "│    ⎇ main             ││line 07     ~~~~~~~                                  │"
 "│3 · Cirno              ││line 08     ~~~~~~~~                                 │"

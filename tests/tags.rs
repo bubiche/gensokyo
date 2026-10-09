@@ -151,7 +151,28 @@ fn a_resident_tags_itself_and_its_helpers_and_reads_anyone() {
     let o = inside(&d, &reimu, &["tag", "Marisa"]);
     assert_eq!(out(&o).trim(), "Marisa: mine=1", "{}", err(&o));
     assert_eq!(tags(&d, "Marisa"), pairs(&[("mine", "1")]));
+    // Its helper by slot, and departed, and cleared; Marisa by slot is still not its own.
+    let slot = |n: &str| d.list().iter().find(|r| r["name"] == n).unwrap()["slot"].to_string();
+    let o = inside(&d, &reimu, &["tag", &slot("Youmu"), "at=slot"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(!inside(&d, &reimu, &["tag", &slot("Marisa"), "x=1"]).status.success());
+    d.cli(&["banish", "Youmu"]);
+    wait(|| d.list().iter().any(|r| r["name"] == "Youmu" && r["state"] == "departed"), "Youmu");
+    let o = inside(&d, &reimu, &["tag", "Youmu", "--clear", "gone=1"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(tags(&d, "Youmu"), pairs(&[("gone", "1")]));
     let _ = marisa;
+}
+
+#[test]
+fn a_key_twice_in_a_record_is_one_tag_with_the_last_value() {
+    #[derive(serde::Deserialize)]
+    struct R {
+        #[serde(with = "gensokyo::proto::pairs")]
+        tags: gensokyo::proto::Tags,
+    }
+    let r: R = serde_json::from_str(r#"{"tags": {"a": "1", "b": "2", "a": "3"}}"#).unwrap();
+    assert_eq!(r.tags, pairs(&[("a", "3"), ("b", "2")]));
 }
 
 #[test]

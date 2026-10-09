@@ -159,6 +159,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         needs: r.needs,
         outdated: None,
         renewing: false,
+        tags: r.tags.clone(),
     }
 }
 
@@ -522,6 +523,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         departed: None,
         exit: None,
         signal: None,
+        tags: Vec::new(),
     };
     let _ = sh.store.save(&rec);
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid,

@@ -129,6 +129,17 @@ fn branches() -> Model {
     m
 }
 
+/// Tags beside the branches: Reimu's long branch cut to make room for its, Cirno's without a
+/// branch, and Hieda's too many to fit, cut at the end.
+fn tagged() -> Model {
+    let mut m = branches();
+    let tags = |t: &[(&str, &str)]| t.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    m.residents[0].tags = tags(&[("pr", "#123"), ("ci", "green")]);
+    m.residents[2].tags = tags(&[("phase", "review")]);
+    m.residents[4].tags = tags(&[("pr", "#4567"), ("ci", "failing"), ("owner", "reimu")]);
+    m
+}
+
 fn summon(stage: Stage) -> Modal {
     Modal::Summon(Summon {
         stage,
@@ -252,6 +263,7 @@ fn screens() -> Vec<(&'static str, Model)> {
         ("helpers", helpers()),
         ("aware", aware()),
         ("branches", branches()),
+        ("tags", tagged()),
         (
             "aware-focused-gold",
             with(&|m| *m = Model { focused: Some("id-Marisa".into()), ..aware() }),
@@ -506,6 +518,20 @@ fn a_branch_row_is_its_residents_and_goes_when_the_sidebar_is_short() {
     let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
     assert!((0..16).all(|y| !side(y).contains('⎇')), "{:?}", (0..16).map(side).collect::<Vec<_>>());
     assert!(side(6).contains("Chen"));
+}
+
+#[test]
+fn a_tag_row_is_its_residents_with_or_without_a_branch() {
+    let map = hits(&tagged(), AREA);
+    // As with branches, and Cirno's tags under it.
+    for (row, i) in [0, 0, 3, 3, 4, 4, 1, 1, 2, 2, 5].into_iter().enumerate() {
+        assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
+    }
+    let area = Rect::new(0, 0, 120, 16);
+    let mut buf = Buffer::empty(area);
+    render::render(&tagged(), area, &mut buf);
+    let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    assert!((0..16).all(|y| !side(y).contains("=")), "{:?}", (0..16).map(side).collect::<Vec<_>>());
 }
 
 #[test]

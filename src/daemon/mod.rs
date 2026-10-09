@@ -22,4 +22,5 @@ pub mod server;
 mod shrine;
 pub mod store;
 mod stream;
+mod tags;
 mod worktree;

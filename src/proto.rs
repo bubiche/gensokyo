@@ -117,6 +117,15 @@ pub enum Request {
         verb: RitualVerb,
         name: String,
     },
+    /// Resident `who`'s tags changed: each of `set` is `key=value`, or `key=` to remove one;
+    /// with `clear`, all go first. With neither, only asked. Answered with `done`: its tags.
+    Tag {
+        who: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        set: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        clear: bool,
+    },
     /// Everyone is asked to `/exit`, then the daemon stops.
     Quit,
     /// Keeping the Mac from idle-sleeping while work runs turned on or off, and kept in the
@@ -604,4 +613,38 @@ pub struct Resident {
     /// Asked to renew: it goes once it rests.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub renewing: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "pairs")]
+    pub tags: Tags,
+}
+
+/// A resident's tags, `key` and `value`, in the order each key was first set.
+pub type Tags = Vec<(String, String)>;
+
+/// Tags as a JSON object, its keys in their order.
+pub mod pairs {
+    use super::Tags;
+    use serde::de::{MapAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(t: &Tags, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_map(t.iter().map(|(k, v)| (k, v)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Tags, D::Error> {
+        struct InOrder;
+        impl<'de> Visitor<'de> for InOrder {
+            type Value = Tags;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object of tags")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Tags, A::Error> {
+                let mut t = Tags::new();
+                while let Some(kv) = m.next_entry()? {
+                    t.push(kv);
+                }
+                Ok(t)
+            }
+        }
+        d.deserialize_map(InOrder)
+    }
 }

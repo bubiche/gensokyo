@@ -107,6 +107,20 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<rituals::Cmd>,
     },
+    /// Tag a resident with short key=value tokens, shown under it in the sidebar; alone, its tags
+    ///
+    /// key= removes one. At most 4, in the order first set; a key is up to 12 of a-z, 0-9, _
+    /// and -; a value up to 24 letters, digits and _.:/#@-. From inside a resident, only itself
+    /// and its own helpers.
+    Tag {
+        /// A name, a slot or an id
+        who: String,
+        /// key=value, or key= to remove it
+        tags: Vec<String>,
+        /// Remove every tag first
+        #[arg(long)]
+        clear: bool,
+    },
     /// Ask every resident to /exit, then stop the daemon
     Quit,
     /// Keep the Mac from idle-sleeping while residents work; alone, whether it does and for whom
@@ -220,6 +234,9 @@ pub fn main(args: &[String]) -> ExitCode {
             say(request(Request::Read { who, screen, bare: false }, false))
         }
         Cmd::Ritual { cmd } => rituals::main(cmd),
+        Cmd::Tag { who, tags, clear } => {
+            say(request(Request::Tag { who, set: tags, clear }, false))
+        }
         Cmd::Quit => match request(Request::Quit, false) {
             Err(Error::NotRunning) => Ok(()),
             r => say(r),

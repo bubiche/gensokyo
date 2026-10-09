@@ -242,13 +242,18 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
         Some(r) => {
             let slot = r.slot.map_or(String::new(), |s| format!("{s} "));
             let branch = r.branch.as_ref().map_or(String::new(), |b| format!(" ⎇ {b}"));
+            // Its tags ahead of the place, which may be cut: short, and cut in the sidebar.
+            let t = match r.tags.is_empty() {
+                true => String::new(),
+                false => format!(" · {}", tags(&r.tags)),
+            };
             let f = tele::fields(r.telemetry.as_ref(), r.mode.as_deref(), None, false, m.now);
             let f = match f.is_empty() || r.departed.is_some() {
                 true => String::new(),
                 false => format!(" · {f}"),
             };
             let at = tilde(r.here.as_ref().unwrap_or(&r.cwd), &m.home);
-            format!(" {slot}{} · {at}{branch}{f} ", r.name)
+            format!(" {slot}{}{t} · {at}{branch}{f} ", r.name)
         }
         None => " the shrine is empty ".into(),
     };
@@ -446,8 +451,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let mut order = drawn(&m.residents);
     // Those with a helper below them: a lead with helpers, and each helper but the last.
     let held: Vec<usize> = order.windows(2).filter(|p| p[1].1).map(|p| p[0].0).collect();
-    // Each one's branch on a dim row below it, while every row fits.
-    let branches = order.iter().filter(|(i, _)| m.residents[*i].branch.is_some()).count();
+    // Each one's branch and tags on a dim row below it, while every row fits.
+    let has_row = |r: &Resident| r.branch.is_some() || !r.tags.is_empty();
+    let branches = order.iter().filter(|(i, _)| has_row(&m.residents[*i])).count();
     let room = bottom.saturating_sub(inner.y + 1) as usize;
     let two = order.len() + branches <= room;
     // More than fit: as many as do around the one on screen, and a line for those above and
@@ -527,21 +533,18 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         hits.push(line, Hit::Resident(i));
         y += 1;
-        let Some(b) = r.branch.as_deref().filter(|_| two) else { continue };
-        let b = b.strip_prefix(m.prefix.as_str()).filter(|b| !b.is_empty()).unwrap_or(b);
+        if !two || !has_row(r) {
+            continue;
+        }
         let pad = width(&lead) as usize;
-        let room = w.saturating_sub(pad + 2);
-        let b: String = match width(b) as usize > room {
-            true => b.chars().take(room.saturating_sub(1)).chain(['…']).collect(),
-            false => b.into(),
-        };
+        let row = branch_row(r, &m.prefix, w.saturating_sub(pad));
         let line = Rect { y, height: 1, ..inner };
         let under = match Some(&r.id) == m.focused.as_ref() && !r.state.needs_you() {
             true => DIM.bg(Color::Indexed(237)),
             false => DIM,
         };
         buf.set_style(line, under);
-        buf.set_stringn(inner.x + pad as u16, y, format!("⎇ {b}"), w - pad, under);
+        buf.set_stringn(inner.x + pad as u16, y, row, w - pad, under);
         if held.contains(&i) {
             buf.set_stringn(inner.x + width(&slot) + 1, y, "│", 1, under);
         }
@@ -551,6 +554,30 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     if !below.is_empty() && y + 1 < bottom {
         more(buf, Rect { y, height: 1, ..inner }, "↓", &below, m, hits);
     }
+}
+
+/// `key=value` for each tag, in order.
+fn tags(t: &[(String, String)]) -> String {
+    t.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ")
+}
+
+/// `s` in `most` columns, its end cut to `…` when it is wider.
+fn cut(s: &str, most: usize) -> String {
+    match width(s) as usize > most {
+        true => s.chars().take(most.saturating_sub(1)).chain(['…']).collect(),
+        false => s.into(),
+    }
+}
+
+/// A resident's dim row in `room` columns: `⎇ branch`, `BRANCH_PREFIX` left off, then its tags.
+/// The branch is cut first, to no less than a letter and `…`, then the tags at their end.
+fn branch_row(r: &Resident, prefix: &str, room: usize) -> String {
+    let t = tags(&r.tags);
+    let Some(b) = r.branch.as_deref() else { return cut(&t, room) };
+    let b = b.strip_prefix(prefix).filter(|b| !b.is_empty()).unwrap_or(b);
+    let after = if t.is_empty() { 0 } else { t.len() + 1 };
+    let b = format!("⎇ {}", cut(b, room.saturating_sub(2 + after).max(2)));
+    cut(&if t.is_empty() { b } else { format!("{b} {t}") }, room)
 }
 
 /// `calm` while a number is calm, else yellow or red over it.

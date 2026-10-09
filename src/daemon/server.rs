@@ -431,6 +431,10 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                     _ => Some(Reply::Done { id, message: super::awake::status(&sh) }),
                 }
             }
+            Request::Tag { who, set, clear } => Some(
+                super::tags::tag(&shrine, &who, &set, clear)
+                    .map_or_else(fail, |message| Reply::Done { id, message }),
+            ),
             Request::Quit => {
                 let (mut left, out) = (stop(&shrine, &quit), out.clone());
                 tokio::task::spawn_local(async move {
@@ -645,6 +649,9 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         ),
         Request::Renew { who } => who.iter().find_map(|w| mine(&shrine.borrow(), caller, w).err()),
         Request::Wait(w) => w.who.iter().find_map(|who| mine(&shrine.borrow(), caller, who).err()),
+        Request::Tag { who, set, clear } if *clear || !set.is_empty() => {
+            super::tags::may(&shrine.borrow(), caller, who).err()
+        }
         _ => None,
     }
 }

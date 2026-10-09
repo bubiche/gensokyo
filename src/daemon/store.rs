@@ -79,6 +79,8 @@ pub struct Record {
     pub departed: Option<i64>,
     pub exit: Option<i32>,
     pub signal: Option<i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "crate::proto::pairs")]
+    pub tags: crate::proto::Tags,
 }
 
 pub struct Store {

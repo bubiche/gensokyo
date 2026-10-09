@@ -187,6 +187,10 @@ red from 90%; a usage bar does too, and turns yellow from half used if it is ahe
 on course to run out before it resets. The directory is where Claude works now, which follows
 it into a worktree or a subdirectory, and its branch is on a dim line under each resident in the
 sidebar while they all fit. `BRANCH_PREFIX=you/` in the config leaves that prefix off there.
+Its tags follow the branch on that line, and in full in the title: `gensokyo tag Reimu pr=#123
+ci=green` sets them, `ci=` removes one and `--clear` all, and `gensokyo tag Reimu` lists them.
+A resident has at most 4, kept through a resume or a restart; a key is up to 12 of `a-z`, `0-9`,
+`_` and `-`, and a value up to 24 letters, digits and `_.:/#@-`, so a tag is never free text.
 Inside the resident, gensokyo draws its own one-line status line; `STATUSLINE=user` in the
 config runs your own `statusLine` command instead, with the same input.
 
@@ -498,6 +502,7 @@ gensokyo ritual …                       # the rituals (above)
 gensokyo quit                           # everyone /exit, then the daemon stops
 gensokyo restart                        # a new daemon, the same residents
 gensokyo awake [on|off]                 # keep the Mac awake while residents work; alone, whom for
+gensokyo tag Reimu pr=#123 ci=          # set and remove its tags; alone, list them
 gensokyo help <command>                 # every command has its own
 ```
 
@@ -507,7 +512,7 @@ when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
 or `departed`), `detail` (what it waits for), `blocked` (why nothing may be typed into it now),
 `finished`, `owner` (its lead's id), `turns` and `needs` (turns ended and dialogs opened, ever),
 `mode`, `branch` (at `here`), `telemetry`, `outdated` (the installed Claude Code version, when it
-runs another), `renewing`, and for a departed one `departed` (epoch seconds), `exit` and
+runs another), `renewing`, `tags` (an object, in the order they were set), and for a departed one `departed` (epoch seconds), `exit` and
 `signal`. `new --json` prints the new resident the same way.
 
 `wait` holds until each resident named has news (`--any`: one of them), or only the kind
@@ -524,7 +529,8 @@ error; `wait` exits 3 on its timeout and 4 when the daemon went away (a restart:
 Run from inside a resident, these have a resident's rights rather than yours. Residents get
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
-It can close, banish, recall, renew, `wait` on or `read` only its own helpers, and it can't
+It can close, banish, recall, renew, `wait` on or `read` only its own helpers, tag only itself
+and its helpers, and it can't
 `quit`, `restart` or turn keeping awake on or off. A helper it summons works in its permission mode or a narrower one, and may be let
 use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds
 arrives paused, and only you resume, run or `ritual edit` one; its MCP config must already be

@@ -46,7 +46,7 @@ fn save(d: &Dir, s: &BTreeMap<String, Facts>) {
     let _ = super::store::write_atomic(&file(d), &b);
 }
 
-fn token(s: &str, extra: &str, most: usize) -> bool {
+pub(super) fn token(s: &str, extra: &str, most: usize) -> bool {
     let ok = |c: char| c.is_ascii_alphanumeric() || extra.contains(c);
     !s.is_empty() && s.len() <= most && s.chars().all(ok)
 }

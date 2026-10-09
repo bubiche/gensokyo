@@ -146,6 +146,13 @@ everyone back into their own conversations, their turns cut off, and the first c
 is told so (and it stays in the history). A second crash within 10 minutes of that leaves them
 departed, to recall by hand.
 
+`gensokyo quit` is the only stop that leaves residents departed. Any other — a logout or a
+restart of the Mac (launchd's SIGTERM), a `kill` of the daemon, Ctrl-C on one run in the
+foreground — asks each to `/exit` as `quit` does, but writes down who was here first, and the
+next daemon brings them all back into their own conversations, in their slots. With the login
+agent on, that happens at login, before you open the shrine; the first client is told who came
+back and whose turn the stop cut off.
+
 ## When a resident needs you
 
 Every resident is launched with `--settings` carrying a few hooks and a status line (they merge

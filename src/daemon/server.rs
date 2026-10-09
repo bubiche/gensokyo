@@ -154,8 +154,8 @@ async fn serve(store: Store) -> std::process::ExitCode {
             },
             _ = quit.quit.notified() => break,
             // As `quit` does: hooks and the CLI are still heard while everyone leaves.
-            _ = term.recv() => { stop(&shrine, &quit); }
-            _ = int.recv() => { stop(&shrine, &quit); }
+            _ = term.recv() => { signalled(&shrine, &quit, "SIGTERM"); }
+            _ = int.recv() => { signalled(&shrine, &quit, "SIGINT"); }
             _ = hup.recv() => {}
         }
     }
@@ -167,24 +167,76 @@ async fn serve(store: Store) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// Whoever `gensokyo restart` found in the last daemon, recalled in its order: before the
-/// clock's first tick, which would otherwise start a missed ritual run in a kept session's place.
-/// The file goes first, so a recall that brings the daemon down is not tried again. One whose
-/// old claude is still `running` is not resumed under it.
+/// A stop by signal is the system's (launchd at a logout or a restart of the Mac), a `kill`, or
+/// `restart`'s, and everyone comes back with the next daemon. Only `quit`
+/// leaves them departed. Who is here goes to `run/comeback` before anyone is asked to leave:
+/// launchd kills a daemon still stopping after 20 s, sooner than everyone may have gone. A file
+/// `restart` wrote first stands; one already quitting writes none.
+fn signalled(shrine: &Shared, quit: &Rc<Stop>, sig: &str) {
+    let path = paths::comeback_path();
+    if !shrine.borrow().quitting && !path.exists() {
+        let sh = shrine.borrow();
+        let mut live: Vec<_> = sh.entries.iter().filter(|e| e.handle.is_some()).collect();
+        live.sort_by_key(|e| (e.rec.slot.unwrap_or(u8::MAX), e.rec.launched));
+        let mut ids = format!("# {sig}\n");
+        for e in &live {
+            let cut = if e.aware.state() == proto::State::Busy { " cut" } else { "" };
+            ids += &format!("{}{cut}\n", e.rec.id);
+        }
+        let w = super::store::write_atomic(&path, ids.as_bytes()).err().map(|e| e.to_string());
+        log(json!({"ev": "comeback", "signal": sig, "live": live.len(), "error": w}));
+    }
+    stop(shrine, quit);
+}
+
+/// Whoever the last daemon had as it stopped by signal (`restart`'s included), recalled in its
+/// order: before the clock's first tick, which would otherwise start a missed ritual run in a
+/// kept session's place. The file goes first, so a recall that brings the daemon down is not
+/// tried again. One whose old claude is still `running` is not resumed under it. After a stop
+/// the daemon saw itself (`# SIGTERM`), the first client is told who came back; `restart`
+/// says so itself.
 fn comeback(shrine: &Shared, running: &HashSet<String>) {
     let path = paths::comeback_path();
     let Ok(ids) = std::fs::read_to_string(&path) else { return };
     let _ = std::fs::remove_file(&path);
-    for id in ids.lines().map(str::trim).filter(|l| !l.is_empty()) {
+    let sig = ids.lines().find_map(|l| l.strip_prefix('#')).map(str::trim);
+    let (mut back, mut cut, mut not) = (Vec::new(), Vec::new(), Vec::new());
+    for line in ids.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let mut words = line.split_whitespace();
+        let Some(id) = words.next() else { continue };
         let r = match running.contains(id) {
             true => Err("its claude would not stop".into()),
             false => recall(shrine, id, None),
         };
         match r {
-            Ok(r) => log(json!({"ev": "comeback", "id": id, "name": r.name})),
-            Err(e) => log(json!({"ev": "comeback", "id": id, "error": e})),
+            Ok(r) => {
+                log(json!({"ev": "comeback", "id": id, "name": r.name}));
+                if words.next() == Some("cut") {
+                    cut.push(r.name.clone());
+                }
+                back.push(r.name);
+            }
+            Err(e) => {
+                log(json!({"ev": "comeback", "id": id, "error": e}));
+                let name = shrine.borrow().store.load_departed_id(id).map(|r| r.name);
+                not.push(format!("{} ({e})", name.as_deref().unwrap_or(id)));
+            }
         }
     }
+    let Some(sig) = sig.filter(|_| !back.is_empty() || !not.is_empty()) else { return };
+    let mut t = format!("the daemon was stopped by {sig} (a logout or a restart, say)");
+    if !back.is_empty() {
+        t += &format!("; brought back: {}", back.join(", "));
+    }
+    if !cut.is_empty() {
+        let whose = if cut.len() == 1 { "turn was" } else { "turns were" };
+        t += &format!("; the {whose} cut off: {}", cut.join(", "));
+    }
+    if !not.is_empty() {
+        t += &format!("; left departed: {}", not.join(", "));
+    }
+    // Kept as missed: no client can be watching yet.
+    shrine.borrow_mut().notice(&t);
 }
 
 /// A task the daemon cannot do without (the registry poll, the ritual clock), started again

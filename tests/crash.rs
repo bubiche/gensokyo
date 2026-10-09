@@ -1,7 +1,8 @@
 //! A daemon that dies without stopping: the next one ends whatever claude it left running,
 //! brings its residents back once into their own conversations and keeps the notice, missed
 //! until a client comes; a second crash soon after leaves them to the user, and a stop is never
-//! a crash.
+//! a crash. A stop by signal (launchd at a logout or restart) brings everyone back too; `quit`
+//! alone leaves them departed.
 
 mod common;
 
@@ -168,13 +169,16 @@ fn a_stop_of_any_kind_is_never_taken_for_a_crash() {
     d.cli(&["list"]);
     assert!(names(&d).is_empty());
 
+    // A signal is the system stopping it (a logout, a restart): everyone comes back.
     start(&d);
     kill(&d, libc::SIGTERM);
     d.cli(&["list"]);
-    assert!(names(&d).is_empty());
+    assert_eq!(names(&d), ["Reimu"]);
+    d.cli(&["quit"]);
+    d.cli(&["list"]);
 
     // Killed partway through its stop, as launchd does at logout to one that takes too long:
-    // the /exit is never heard, so the record is still live when it dies.
+    // the /exit is never heard, so the record is still live when it dies. Still a stop.
     let r = summon(&d, json!({"name": "Reimu", "prompt": "hello"}));
     let eat = d.dir.join(format!("stub/{}.eat-exit", r["id"].as_str().unwrap()));
     std::fs::write(eat, "9\n").unwrap();
@@ -185,7 +189,9 @@ fn a_stop_of_any_kind_is_never_taken_for_a_crash() {
     assert!(d.dir.join(format!("residents/{}.json", r["id"].as_str().unwrap())).exists());
     kill(&d, libc::SIGKILL);
     d.cli(&["list"]);
-    assert!(names(&d).is_empty());
+    assert_eq!(names(&d), ["Reimu"]);
+    d.cli(&["quit"]);
+    d.cli(&["list"]);
 
     // `restart` brings them back itself.
     start(&d);
@@ -195,4 +201,41 @@ fn a_stop_of_any_kind_is_never_taken_for_a_crash() {
     assert_eq!(evs(&d, "crash"), 0);
     assert_eq!(notice(&d), None);
     assert!(!d.dir.join("run/crash").exists());
+}
+
+#[test]
+fn a_signal_brings_everyone_back_in_order_and_says_whose_turn_it_cut_off() {
+    let d = daemon("signal", &[]);
+    let reimu = summon(&d, json!({"name": "Reimu", "prompt": "hello"}));
+    let cirno = summon(&d, json!({"name": "Cirno"}));
+    let sanae = summon(&d, json!({"name": "Sanae", "prompt": "hello"}));
+    let slots: Vec<Value> = d.list().iter().map(|r| r["slot"].clone()).collect();
+    // Sanae is mid-turn when the stop comes.
+    let sid = sanae["id"].as_str().unwrap();
+    std::fs::write(d.dir.join(format!("stub/{sid}.status")), "busy").unwrap();
+    wait(|| d.list().iter().any(|r| r["name"] == "Sanae" && r["state"] == "busy"), "busy");
+    kill(&d, libc::SIGTERM);
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", reimu["id"].as_str().unwrap())))
+        .unwrap();
+
+    d.cli(&["list"]);
+    // As `restart` brings them: Cirno, who never had a conversation, starts afresh.
+    assert_eq!(names(&d), ["Reimu", "Cirno", "Sanae"]);
+    let back: Vec<Value> = d.list().iter().map(|r| r["slot"].clone()).collect();
+    assert_eq!(back, slots);
+    assert_eq!(d.list()[1]["id"], cirno["id"]);
+    let args = d.stub(&reimu["id"], "args");
+    assert!(args.contains(&format!("--resume {}", reimu["id"].as_str().unwrap())), "{args}");
+    let said = notice(&d).expect("a notice");
+    assert!(said.contains("the daemon was stopped by SIGTERM"), "{said}");
+    assert!(said.contains("brought back: Reimu, Cirno, Sanae"), "{said}");
+    assert!(said.contains("turn was cut off: Sanae"), "{said}");
+    assert_eq!(notice(&d), None);
+    assert_eq!(evs(&d, "crash"), 0);
+
+    // `quit` is the one stop that leaves them departed, and says nothing after.
+    d.cli(&["quit"]);
+    d.cli(&["list"]);
+    assert!(names(&d).is_empty());
+    assert_eq!(notice(&d), None);
 }

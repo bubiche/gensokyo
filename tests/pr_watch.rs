@@ -1,7 +1,7 @@
 //! The PR watcher's probe, `share/probes/gh-prs`, against a stand-in `gh` that answers with
 //! recorded GraphQL replies (`tests/pr-watch/`): the same PRs must print the same bytes, a real
-//! change must not, GitHub out of reach prints the last list as it was, and a failure the user
-//! must fix prints it with a sentence.
+//! change must not, GitHub out of reach prints the last list as it was, a failure the user
+//! must fix prints it with a sentence, and a GitHub with no stacks still gives the list.
 
 mod common;
 
@@ -64,9 +64,14 @@ fn the_same_prs_print_the_same_bytes_and_a_change_does_not() {
         v["prs"][1],
         json!({"repo": "example/alpha", "number": 12, "title": "Add retry to the uploader",
                "url": "https://github.com/example/alpha/pull/12", "ci": "FAILURE",
-               "review": "CHANGES_REQUESTED", "mergeable": "MERGEABLE", "draft": false})
+               "review": "CHANGES_REQUESTED", "mergeable": "MERGEABLE", "draft": false,
+               "stack": {"number": 4, "position": 1, "size": 3}})
     );
     assert_eq!((&v["prs"][0]["draft"], &v["prs"][3]["ci"]), (&json!(true), &Value::Null));
+    assert_eq!(
+        (&v["prs"][0]["stack"]["position"], &v["prs"][2]["stack"]),
+        (&json!(2), &Value::Null)
+    );
     assert!(!a.contains("updatedAt") && !a.contains("2026-10-06T"), "{a}");
 
     // UNKNOWN with nothing to carry forward stays UNKNOWN.
@@ -100,4 +105,38 @@ fn a_failure_prints_the_last_list_with_a_sentence_and_the_same_one_twice() {
     let junk = saved(&dir, "junk.out", "not json\n");
     let v: Value = serde_json::from_str(&probe("a", Some(&junk), &[])).unwrap();
     assert_eq!(v["prs"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn a_stack_that_moves_is_a_change_and_a_github_without_stacks_still_gives_the_list() {
+    let dir = common::fresh("gh-prs-stack");
+    let a = probe("a", None, &[]);
+    let last = saved(&dir, "a.out", &a);
+    // The third PR of the stack merged: the two left are a stack of two.
+    let mut reply: Value = serde_json::from_str(
+        &std::fs::read_to_string(here().join("tests/pr-watch/answer-a.json")).unwrap(),
+    )
+    .unwrap();
+    for pr in reply["data"]["viewer"]["pullRequests"]["nodes"].as_array_mut().unwrap() {
+        if !pr["stackEntry"].is_null() {
+            pr["stackEntry"]["stack"]["size"] = json!(2);
+        }
+    }
+    let smaller = saved(&dir, "smaller.json", &reply.to_string());
+    let out = probe("a", Some(&last), &[("STUB_GH_ANSWER", smaller.to_str().unwrap())]);
+    assert_ne!(out, a);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["prs"][1]["stack"], json!({"number": 4, "position": 1, "size": 2}));
+
+    // Stacks gone from GitHub's API: the same list, every PR on its own, not a stale page.
+    let out = probe("a", Some(&last), &[("STUB_GH_NO_STACKS", "1")]);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert!(v.get("failure").is_none(), "{out}");
+    let mut was: Value = serde_json::from_str(&a).unwrap();
+    for pr in was["prs"].as_array_mut().unwrap() {
+        pr["stack"] = Value::Null;
+    }
+    assert_eq!(v, was);
+    // Offline is still offline, not a GitHub without stacks.
+    assert_eq!(probe("a", Some(&last), &[("STUB_GH_DOWN", "1"), ("STUB_GH_NO_STACKS", "1")]), a);
 }

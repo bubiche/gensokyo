@@ -1,10 +1,16 @@
 #!/bin/sh
 # A stand-in for gh: `api graphql` prints $STUB_GH_ANSWER, or fails with STUB_GH_DOWN set;
 # `auth token` fails with STUB_GH_LOGGED_OUT set, and `auth status` with either, since it asks
-# GitHub.
+# GitHub. With STUB_GH_NO_STACKS set, a query asking for stacks fails as GitHub's would without
+# them; a query that does not ask gets the answer without them.
 case "$1 $2" in
-  "api graphql") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] && exec cat "$STUB_GH_ANSWER"
-    echo "error connecting to api.github.com" >&2; exit 1 ;;
+  "api graphql") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] || {
+      echo "error connecting to api.github.com" >&2; exit 1; }
+    case "$*" in
+      *stackEntry*) [ -z "${STUB_GH_NO_STACKS:-}" ] && exec cat "$STUB_GH_ANSWER"
+        echo "gh: Field 'stackEntry' doesn't exist on type 'PullRequest'" >&2; exit 1 ;;
+      *) exec jq 'walk(if type == "object" then del(.stackEntry) else . end)' "$STUB_GH_ANSWER" ;;
+    esac ;;
   "auth token") [ -z "${STUB_GH_LOGGED_OUT:-}" ] && echo gho_stub ;;
   "auth status") [ -z "${STUB_GH_DOWN:-}" ] && [ -z "${STUB_GH_LOGGED_OUT:-}" ] ;;
   *) echo "stub gh: $*" >&2; exit 2 ;;

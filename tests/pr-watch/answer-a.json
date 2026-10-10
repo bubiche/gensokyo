@@ -24,6 +24,13 @@
          }
         }
        ]
+      },
+      "stackEntry": {
+       "position": 1,
+       "stack": {
+        "number": 4,
+        "size": 3
+       }
       }
      },
      {
@@ -47,7 +54,8 @@
          }
         }
        ]
-      }
+      },
+      "stackEntry": null
      },
      {
       "number": 7,
@@ -70,6 +78,13 @@
          }
         }
        ]
+      },
+      "stackEntry": {
+       "position": 2,
+       "stack": {
+        "number": 4,
+        "size": 3
+       }
       }
      },
      {
@@ -91,7 +106,8 @@
          }
         }
        ]
-      }
+      },
+      "stackEntry": null
      }
     ]
    }

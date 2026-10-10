@@ -5,7 +5,10 @@
 # and PRs sorted, so the same PRs print the same bytes and a change is a real one: no
 # updatedAt (a bot comment moves it), and a `mergeable` GitHub has not worked out yet
 # (UNKNOWN) keeps the value it had last time ($GENSOKYO_PROBE_LAST). Titles are the one piece
-# of GitHub's text in it; no comment or review body ever is.
+# of GitHub's text in it; no comment or review body ever is. A PR in one of GitHub's stacks
+# carries `stack`: {number, position, size}, its stack's number in the repository, its place in
+# it (1 targets the base branch, 2 is on top of 1), and how many PRs it has, some maybe not the
+# user's; null otherwise.
 #
 # GitHub out of reach prints the last list as it was, so a dropped connection starts no run and
 # the page's date says how old it is. A failure the user must fix prints the last list with a
@@ -30,18 +33,22 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 command -v gh >/dev/null 2>&1 || failed "gh is not installed"
 
-query='query {
+# Stacks are a GitHub preview: if asking for them fails, the list without them beats none.
+stacks='stackEntry { position stack { number size } }'
+ask() {
+  gh api graphql -f query="query {
   viewer {
     pullRequests(states: OPEN, first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes {
-        number title url isDraft mergeable reviewDecision
+        number title url isDraft mergeable reviewDecision $1
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
   }
-}'
-if ! raw=$(gh api graphql -f query="$query"); then
+}"
+}
+if ! raw=$(ask "$stacks") && ! raw=$(ask ""); then
   # `gh auth status` asks GitHub, and offline would say logged out; this looks only here.
   gh auth token >/dev/null 2>&1 || failed "gh is not logged in (gh auth login)"
   [ "$last" = /dev/null ] || { cat "$last"; exit 0; }
@@ -57,7 +64,8 @@ printf '%s' "$raw" | jq -cS --arg d "$(date +%F)" --slurpfile was "$last" '
       draft: .isDraft,
       review: .reviewDecision,
       ci: (.commits.nodes[0].commit.statusCheckRollup.state // null),
-      mergeable
+      mergeable,
+      stack: (.stackEntry as $e | if $e.stack then {number: $e.stack.number, position: $e.position, size: $e.stack.size} else null end)
     } | .mergeable = (if .mergeable == "UNKNOWN" then ($known[key] // "UNKNOWN") else .mergeable end)
     ] | sort_by(.repo, .number))}
 ' || failed "GitHub sent something this probe cannot read"

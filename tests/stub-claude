@@ -27,12 +27,12 @@
 # with (else default) as Claude Code names the mode it is in, a permission Notification on /perm
 # (the registry says `waiting` until /esc, which dismisses it and ends the turn with no Stop, as
 # Esc or a denial does), AskUserQuestion's PreToolUse on /ask <q> and its PostToolUse on /answer.
-# /fail is a prompt whose turn ends in StopFailure (an API error); /hang one with no Stop at
-# all, whose idle_prompt Notification comes $STUB_IDLE seconds later (default 2); /flood <n>
-# one whose answer is <n> bytes; /busy <s> one whose tools fire PreToolUse every 0.2 s for <s>
-# seconds, Ctrl-C or not, as a turn started again by a queued message does; a paste meanwhile
-# is queued, with no Stop of its own. With STUB_HOLD=1 the command line's prompt gets no Stop until
-# /finish: a run still going.
+# /fail is a prompt whose turn ends in StopFailure (an API error); /hang one with no Stop at all,
+# busy in the registry until its idle_prompt Notification $STUB_IDLE seconds later (default 2);
+# /flood <n> one whose answer is <n> bytes; /busy <s> one whose tools fire PreToolUse every 0.2 s
+# for <s> seconds, Ctrl-C or not, as a turn started again by a queued message does; a paste
+# meanwhile is queued, with no Stop of its own. With STUB_HOLD=1 the command line's prompt gets no
+# Stop until /finish: a run still going.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -307,8 +307,10 @@ $more"
     /esc) printf 'idle\n' > "$STUB_STATE/$session.status"; echo "dismissed" ;;
     /fail) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/fail"'; echo "> /fail"; submitted "$line"
            fire StopFailure ', "error": "rate_limit", "error_details": "429"'; echo "API Error: rate limited" ;;
-    /hang) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/hang"'; echo "> /hang"; submitted "$line"
-           ( sleep "${STUB_IDLE:-2}"; fire Notification ', "notification_type": "idle_prompt", "message": "Claude is waiting for your input"' ) & ;;
+    /hang) printf 'busy\n' > "$STUB_STATE/$session.status"
+           fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/hang"'; echo "> /hang"; submitted "$line"
+           ( sleep "${STUB_IDLE:-2}"; printf 'idle\n' > "$STUB_STATE/$session.status"
+             fire Notification ', "notification_type": "idle_prompt", "message": "Claude is waiting for your input"' ) & ;;
     /flood\ *) n=${line#/flood }
                fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/flood"'; echo "> $line"; submitted "$line"
                fire Stop ", \"permission_mode\": \"$mode\", \"last_assistant_message\": \"flood $n\\n$(head -c "$n" /dev/zero | tr '\0' x)\""

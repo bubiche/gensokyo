@@ -514,19 +514,25 @@ fn a_headless_run_that_ended_between_daemons_is_journaled_by_the_next() {
     d.clock(T0 + 3600 + 5);
     let runs = d.dir.join("rituals/quiet/runs");
     wait(|| pid_file(&runs).is_some(), "the run's pid file");
-    let (_, pid) = pid_file(&runs).unwrap();
+    let (p, pid) = pid_file(&runs).unwrap();
+    // `<pid> <ident> <started>`, in wall seconds, as the daemon times the run.
+    let started: u64 =
+        std::fs::read_to_string(&p).unwrap().split_whitespace().nth(2).unwrap().parse().unwrap();
     d.cli(&["quit"]);
     // It finishes, and writes its result, while no daemon is there.
     wait(|| !alive(pid), "the run to finish on its own");
+    let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let gone = wall.as_secs() - started;
     assert!(d.evs("quiet", "done").is_empty());
-    // A while later: the time it took is to its last write, not to the next daemon.
+    // A while later: the time it took is to its last write, by when it was seen gone, not to
+    // the next daemon.
     std::thread::sleep(Duration::from_secs(4));
     d.cli(&["list"]);
     wait(|| !d.evs("quiet", "done").is_empty(), "the next daemon's journal line");
     let done = d.evs("quiet", "done");
     assert!(done[0].contains(": stub -p ran in "), "{done:?}");
     let secs = done[0].strip_prefix("done (headless, ").and_then(|t| t.split('s').next());
-    assert!(secs.and_then(|s| s.parse::<u64>().ok()).is_some_and(|s| s <= 4), "{done:?}");
+    assert!(secs.and_then(|s| s.parse::<u64>().ok()).is_some_and(|s| s <= gone), "{done:?}");
     assert!(pid_file(&runs).is_none(), "its pid file stayed");
 }
 
@@ -1302,14 +1308,21 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     d.minute(3);
     wait(|| typed() == 2, "the failure back");
 
+    // A turn ends in `dir`: its branch. The registry says idle too, as it does after a real
+    // Stop; still busy, its next ask would have the resident busy again.
+    let go = |dir: &std::path::Path| {
+        std::fs::write(d.dir.join(format!("stub/{}.status", id.as_str().unwrap())), "idle")
+            .unwrap();
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+        let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": dir});
+        let (mut w, mut lines) = d.connect();
+        let list = json!({"t": "list", "id": 2});
+        writeln!(w, "{}\n{list}", json!({"t": "hook", "resident": id, "hook": hook})).unwrap();
+        next(&mut lines)["residents"][0]["branch"].clone()
+    };
     // Sakuya moves into the worktree: main's news has nobody, fix's reaches it. A key and a
     // fact that are not tokens are left out, each said once.
-    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
-    let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": wt});
-    let (mut w, mut lines) = d.connect();
-    let list = json!({"t": "list", "id": 2});
-    writeln!(w, "{}\n{list}", json!({"t": "hook", "resident": id, "hook": hook})).unwrap();
-    assert_eq!(next(&mut lines)["residents"][0]["branch"], "nebel95/fix");
+    assert_eq!(go(&wt), "nebel95/fix");
     feed(json!({
         "acme/app:main": {"ci": "FAILURE@def5678"},
         "acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED", "Title": "Fix it", "note": "two words"},
@@ -1339,14 +1352,6 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
 
     // Held, and Sakuya leaves the branch before it is free: dropped, unrecorded. Back on it, the
     // next fire brings the news.
-    let go = |dir: &std::path::Path| {
-        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
-        let hook = json!({"event": "Stop", "at": at.as_millis() as i64, "cwd": dir});
-        let (mut w, mut lines) = d.connect();
-        let list = json!({"t": "list", "id": 2});
-        writeln!(w, "{}\n{list}", json!({"t": "hook", "resident": id, "hook": hook})).unwrap();
-        next(&mut lines)["residents"][0]["branch"].clone()
-    };
     d.busy(&id, true);
     feed(json!({"acme/app:nebel95/fix": {"review": "CHANGES_REQUESTED", "conflicts": true}}));
     d.minute(7);

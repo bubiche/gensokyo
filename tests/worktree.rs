@@ -59,7 +59,8 @@ fn summon(d: &Daemon, cwd: &Path, extra: Value) -> Value {
 fn a_worktree_starts_from_the_fetched_default_and_is_reused_by_its_name() {
     let (d, work) = setup("new", "me/");
     let tip = git(&d.dir.join("remote.git"), &["rev-parse", "main"]);
-    let r = summon(&d, &work, json!({"worktree": {"slug": "fix"}}));
+    // Named, or the pick could be Youmu, taken below.
+    let r = summon(&d, &work, json!({"name": "Sakuya", "worktree": {"slug": "fix"}}));
     assert_eq!(r["t"], "summoned", "{r}");
     let wt = work.join(".claude/worktrees/fix");
     assert_eq!(r["resident"]["cwd"], json!(wt));

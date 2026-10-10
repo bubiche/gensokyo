@@ -106,7 +106,7 @@ helper and what it asks, and that `Ctrl-] a` jumps to the one that needs them. T
 
 ## Finish
 
-When the work is in, `gensokyo close <name>` each helper (it is asked to `/exit`, and stays in
+When the work is in, `gensokyo close <name> [<name> …]` your helpers (each is asked to `/exit`, and stays in
 recall), then tell the user what each did and where it landed: they saw little of it. Never
 leave helpers running at the end of the job. `gensokyo list --json` lists them under `owner`
 with your id.

@@ -515,8 +515,8 @@ gensokyo new ~/dev/x -n Marisa -m haiku # summon; also -e effort, -p permission 
 gensokyo new ~/dev/x --role reviewer    # with a role (Roles); --system-prompt TEXT, your own
 gensokyo new ~/dev/x --worktree fix     # in a worktree of its own (below); --branch, --base
 gensokyo resume Marisa                  # bring a departed one back (list --all shows them)
-gensokyo banish Marisa                  # hang up: HUP, then TERM, then KILL
-gensokyo close Marisa                   # ask it to /exit; a departed one leaves the sidebar
+gensokyo banish Marisa [Sanae …]        # hang up: HUP, then TERM, then KILL
+gensokyo close Marisa [Sanae …]         # ask it to /exit; a departed one leaves the sidebar
 gensokyo renew [Marisa …]               # start again on the installed claude, once it rests
 gensokyo broadcast status-report all    # cast a spell card
 gensokyo wait Marisa Sanae --any        # until they have news: a turn ended, a dialog, gone

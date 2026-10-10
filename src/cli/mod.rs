@@ -53,15 +53,17 @@ enum Cmd {
         /// Names, slots or ids
         who: Vec<String>,
     },
-    /// Hang up on a resident; it stays in the shrine as departed, to resume or close
+    /// Hang up on residents; each stays in the shrine as departed, to resume or close
     Banish {
-        /// A name, a slot or an id
-        who: String,
+        /// Names, slots or ids
+        #[arg(required = true)]
+        who: Vec<String>,
     },
-    /// Ask a resident to /exit; a departed one leaves the shrine
+    /// Ask residents to /exit; a departed one leaves the shrine
     Close {
-        /// A name, a slot or an id
-        who: String,
+        /// Names, slots or ids
+        #[arg(required = true)]
+        who: Vec<String>,
     },
     /// Hold until residents have news (a turn ended, a dialog opened, or gone), then one JSON line each
     ///
@@ -226,8 +228,8 @@ pub fn main(args: &[String]) -> ExitCode {
         Cmd::New(n) => new(*n),
         Cmd::Resume { who } => resume(&who),
         Cmd::Renew { who } => say(request(Request::Renew { who }, false)),
-        Cmd::Banish { who } => say(request(Request::Banish { who }, false)),
-        Cmd::Close { who } => say(request(Request::Close { who }, false)),
+        Cmd::Banish { who } => each(who, |who| Request::Banish { who }),
+        Cmd::Close { who } => each(who, |who| Request::Close { who }),
         Cmd::Broadcast { card, targets, with } => broadcast(card, targets, with),
         Cmd::Wait { who, any, until, timeout } => return wait(who, any, until, &timeout),
         Cmd::Read { who, screen } => {
@@ -269,6 +271,20 @@ fn say(r: Result<Reply, Error>) -> Result<(), String> {
         }
         other => Err(format!("unexpected reply {other:?}")),
     }
+}
+
+/// One request per resident, all asked at once, each said in the order named; any that failed
+/// fails the whole, the rest still done.
+fn each(mut who: Vec<String>, req: fn(String) -> Request) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    who.retain(|w| seen.insert(w.clone()));
+    let asks: Vec<_> =
+        who.into_iter().map(|w| std::thread::spawn(move || request(req(w), false))).collect();
+    let failed: Vec<String> = asks
+        .into_iter()
+        .filter_map(|a| say(a.join().unwrap_or_else(|_| Err(Error::Io("panicked".into())))).err())
+        .collect();
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("\ngensokyo: ")) }
 }
 
 /// Asked of the daemon, which holds the Mac; with none running, set in the config for the next.

@@ -272,6 +272,33 @@ fn a_departed_helper_can_still_be_read_and_only_by_its_lead_or_the_user() {
     assert!(err(&o).contains("has departed"), "{}", err(&o));
 }
 
+#[test]
+fn a_lead_closes_several_helpers_at_once_and_one_refused_leaves_the_rest_done() {
+    let d = daemon("many", &[]);
+    let lead = summon(&d, "Reimu");
+    summon(&d, "Youmu");
+    for name in ["Ran", "Chen", "Mystia"] {
+        helper(&d, &lead, name);
+    }
+    let o = inside(&d, &lead, &["close", "Ran", "Youmu", "Chen", "Ran"]);
+    assert!(!o.status.success());
+    assert_eq!(out(&o), "Ran has left (/exit)\nChen has left (/exit)\n");
+    assert_eq!(err(&o), "gensokyo: Youmu is not one of your helpers; only the user can do that\n");
+    wait(|| ["Ran", "Chen"].iter().all(|n| me(&d, n)["state"] == "departed"), "both gone");
+    assert_ne!(me(&d, "Youmu")["state"], "departed");
+
+    let o = inside(&d, &lead, &["banish", "Mystia", "Nobody"]);
+    assert!(!o.status.success());
+    assert_eq!(out(&o), "banished Mystia\n");
+    assert!(err(&o).contains("Nobody is not one of your helpers"), "{}", err(&o));
+    // Departed, they leave the shrine.
+    let o = inside(&d, &lead, &["close", "Ran", "Mystia"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o), "closed Ran\nclosed Mystia\n");
+    let names: Vec<Value> = d.list().iter().map(|r| r["name"].clone()).collect();
+    assert_eq!(names, [json!("Reimu"), json!("Youmu"), json!("Chen")]);
+}
+
 /// What `_hook` inside `me` prints for a SessionStart from `source`.
 fn session_start(d: &Daemon, me: &Value, source: &str) -> String {
     let mut c = spawn(d, me, &["_hook"]);

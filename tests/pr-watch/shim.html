@@ -5,8 +5,9 @@
 // A stand-in for the artifact viewer's `window.claude`: `use("db")` gives one doc whose
 // snapshots come from the fixture the URL's #hash names; `shim(name)` sends another, as a
 // live write would. #nodb is a view with no database.
-const PR = (repo, number, title, ci, review, mergeable, draft = false) =>
-  ({ repo, number, title, url: `https://github.com/${repo}/pull/${number}`, ci, review, mergeable, draft });
+const PR = (repo, number, title, ci, review, mergeable, draft = false, stack = null) =>
+  ({ repo, number, title, url: `https://github.com/${repo}/pull/${number}`, ci, review, mergeable, draft, stack });
+const S = (number, position, size) => ({ number, position, size });
 const today = new Date().toLocaleDateString("sv");
 const list = [
   PR("example/alpha", 12, "Add retry to the uploader", "FAILURE", "APPROVED", "MERGEABLE"),
@@ -17,6 +18,14 @@ const list = [
   PR("example/gamma", 41, "Cache the session lookup", "PENDING", "REVIEW_REQUIRED", "MERGEABLE"),
   PR("example/delta", 2, "Try a new parser", "SUCCESS", null, "UNKNOWN"),
   PR("example/delta", 5, "WIP: split the worker", "PENDING", null, "MERGEABLE", true),
+  // Stacks: 1 of 3 ready and 3 of 3 failing go together under Needs you, 2 of 3 not the user's;
+  // 2 before 1 in the list, drawn 1 first; the same stack number in another repo is another stack.
+  PR("example/epsilon", 30, "Split the config loader out", "SUCCESS", "APPROVED", "MERGEABLE", false, S(7, 1, 3)),
+  PR("example/epsilon", 32, "Read the config from the environment too", "FAILURE", "REVIEW_REQUIRED", "MERGEABLE", false, S(7, 3, 3)),
+  PR("example/epsilon", 35, "Show the queue length", "PENDING", "REVIEW_REQUIRED", "MERGEABLE", false, S(8, 2, 2)),
+  PR("example/epsilon", 34, "Count the queue", "SUCCESS", "REVIEW_REQUIRED", "MERGEABLE", false, S(8, 1, 2)),
+  PR("example/zeta", 6, "A stack of one, here", "PENDING", "REVIEW_REQUIRED", "MERGEABLE", false, S(7, 2, 2)),
+  PR("example/zeta", 9, "A stack that is not one", "PENDING", "REVIEW_REQUIRED", "MERGEABLE", false, { number: "7", position: 1 }),
   { ...PR("evil/repo", 1, "A link that is not GitHub's", "SUCCESS", null, "MERGEABLE"), url: "javascript:alert(1)" },
   // What no probe writes, which must not stop the rest drawing.
   null, 7, PR("odd/repo", 9, "Fields with inherited names", "constructor", "__proto__", "toString"),

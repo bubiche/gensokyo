@@ -36,6 +36,10 @@ ul { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 
 li { display: grid; grid-template-columns: 1fr auto; gap: .2rem 1rem; padding: .65rem .85rem;
   border-top: 1px solid var(--line); }
 li:first-child { border-top: 0; }
+/* One of GitHub's stacks: its PRs in one block, behind a bar that stops short of the next one's. */
+li.stack { display: block; padding: .3rem 0; }
+.stack ul { border: 0; border-left: 3px solid var(--accent); border-radius: 0; background: none; }
+.stack li { padding: .35rem .85rem .35rem calc(.85rem - 3px); border-top-style: dashed; }
 li > * { min-width: 0; }
 .ref { font: 500 .8rem var(--mono); color: var(--mute); }
 .ref a { color: var(--accent); text-decoration: none; }
@@ -84,6 +88,12 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
   // A value the db holds is looked up only as a key of these tables' own.
   const pick = (table, k) => (typeof k === "string" && Object.hasOwn(table, k) ? table[k] : null);
 
+  // A stack's number in its repository, the PR's place in it, and its size; anything else is none.
+  function stackOf(p) {
+    const s = p.stack;
+    return s && typeof s === "object" && [s.number, s.position, s.size].every(Number.isInteger) ? s : null;
+  }
+
   function group(p) {
     if (p.draft) return "draft";
     if (p.ci === "FAILURE" || p.ci === "ERROR" || p.review === "CHANGES_REQUESTED" || p.mergeable === "CONFLICTING") return "needs";
@@ -110,6 +120,8 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
       ref.append(a);
     } else ref.textContent = name;
     const chips = el("div", "chips");
+    const stack = stackOf(p);
+    if (stack) chips.append(chip([`stack ${stack.position}/${stack.size}`, ""]));
     const ci = pick(CI, p.ci), review = pick(REVIEW, p.review), merge = pick(MERGE, p.mergeable);
     if (ci) chips.append(chip(ci)); else if (!p.draft) chips.append(chip(["no checks", ""]));
     if (review) chips.append(chip(review));
@@ -137,9 +149,21 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
     alert.replaceChildren();
     if (doc.failure) alert.append(el("b", null, "The last check failed: "), String(doc.failure),
       el("span", null, doc.failure && prs.length ? ". The list below is from the check before." : "."));
+    // A stack stays one block, in the group of its most urgent PR, the one on the base branch first.
+    const blocks = new Map();
+    for (const p of prs) {
+      const s = stackOf(p), key = s ? `${p.repo}#${s.number}` : p;
+      if (!blocks.has(key)) blocks.set(key, []);
+      blocks.get(key).push(p);
+    }
+    const rank = Object.fromEntries(GROUPS.map(([k], i) => [k, i]));
     const by = Object.fromEntries(GROUPS.map(([k]) => [k, []]));
-    for (const p of prs) by[group(p)].push(p);
-    tally.textContent = GROUPS.filter(([k]) => by[k].length).map(([k, t]) => `${t} ${by[k].length}`).join(" · ");
+    for (const ps of blocks.values()) {
+      if (ps.length > 1) ps.sort((a, b) => stackOf(a).position - stackOf(b).position);
+      by[GROUPS[Math.min(...ps.map(p => rank[group(p)]))][0]].push(ps);
+    }
+    const count = k => by[k].flat().length;
+    tally.textContent = GROUPS.filter(([k]) => by[k].length).map(([k, t]) => `${t} ${count(k)}`).join(" · ");
     board.replaceChildren();
     if (!prs.length) {
       board.append(el("p", "empty", doc.failure ? "No pull requests to show." : "You have no open pull requests."));
@@ -149,8 +173,14 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-
     for (const [k, title] of GROUPS) {
       if (!by[k].length) continue;
       const s = el("section");
-      const h = el("h2", null, title); h.append(el("span", "n", String(by[k].length)));
-      const ul = el("ul"); by[k].forEach(p => ul.append(row(p)));
+      const h = el("h2", null, title); h.append(el("span", "n", String(count(k))));
+      const ul = el("ul");
+      for (const ps of by[k]) {
+        if (!stackOf(ps[0])) { ul.append(row(ps[0])); continue; }
+        const li = el("li", "stack"), inner = el("ul");
+        ps.forEach(p => inner.append(row(p)));
+        li.append(inner); ul.append(li);
+      }
       s.append(h, ul); wrap.append(s);
     }
     board.append(wrap);

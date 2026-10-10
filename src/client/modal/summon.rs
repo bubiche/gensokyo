@@ -192,9 +192,9 @@ impl Summon {
 }
 
 impl App {
-    /// The directory, once it is one, moves on to the name, the name to the role; the role
-    /// summons, or in a repository the worktree does, and the modal stays until the daemon says
-    /// how that went.
+    /// The directory, once it is one, moves on to the name, the name (one the daemon would take)
+    /// to the role; the role summons, or in a repository the worktree does, and the modal stays
+    /// until the daemon says how that went.
     pub(super) fn summon_confirm(&mut self, mut s: Summon) {
         let home = self.m.home.clone();
         if s.waiting {
@@ -203,8 +203,15 @@ impl App {
         }
         if s.stage == Stage::Name {
             let name = s.name.trim();
-            if !name.is_empty() && !proto::valid_name(name) {
-                s.error = Some(proto::NAME_RULE.into());
+            let here = self.m.residents.iter().any(|r| r.name.eq_ignore_ascii_case(name));
+            let error = match name {
+                "" => None,
+                n if !proto::valid_name(n) => Some(proto::NAME_RULE.to_string()),
+                n if here => Some(format!("{n} is already here")),
+                _ => None,
+            };
+            if error.is_some() {
+                s.error = error;
                 self.m.modal = Some(super::Modal::Summon(s));
                 return;
             }

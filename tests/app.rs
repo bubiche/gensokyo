@@ -806,9 +806,12 @@ fn a_name_the_daemon_would_refuse_is_caught_at_the_name() {
         Some(Modal::Summon(s)) => Some((s.stage, s.error.clone())),
         _ => None,
     };
-    for bad in ["Big Sis", "9lives", "Ran!"] {
+    let here = "marisa is already here";
+    for (bad, why) in
+        [("Big Sis", NAME_RULE), ("9lives", NAME_RULE), ("Ran!", NAME_RULE), ("marisa", here)]
+    {
         host(&mut a, format!("{bad}\r").as_bytes());
-        assert_eq!(at(&a), Some((Stage::Name, Some(NAME_RULE.into()))), "{bad}");
+        assert_eq!(at(&a), Some((Stage::Name, Some(why.into()))), "{bad}");
         // Typing again clears it.
         for _ in 0..bad.len() {
             host(&mut a, b"\x7f");

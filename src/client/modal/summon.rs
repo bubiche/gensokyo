@@ -144,9 +144,16 @@ impl Summon {
             }
             (Stage::Name, Key::Back) => {
                 self.name.pop();
+                self.error = None;
             }
-            (Stage::Name, Key::Text(ch)) => self.name.push(ch),
-            (Stage::Name, Key::Paste(t)) => self.name.push_str(t.trim()),
+            (Stage::Name, Key::Text(ch)) => {
+                self.name.push(ch);
+                self.error = None;
+            }
+            (Stage::Name, Key::Paste(t)) => {
+                self.name.push_str(t.trim());
+                self.error = None;
+            }
             (Stage::Role, Key::Up) => self.role = self.role.saturating_sub(1),
             (Stage::Role, Key::Down) => self.role = (self.role + 1).min(self.roles.len()),
             (Stage::Role, Key::Back) => {
@@ -195,6 +202,12 @@ impl App {
             return;
         }
         if s.stage == Stage::Name {
+            let name = s.name.trim();
+            if !name.is_empty() && !proto::valid_name(name) {
+                s.error = Some(proto::NAME_RULE.into());
+                self.m.modal = Some(super::Modal::Summon(s));
+                return;
+            }
             let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
             s.roles = crate::role::names(share.as_deref());
             s.role = s.role.min(s.roles.len());

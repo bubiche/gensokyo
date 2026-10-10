@@ -14,6 +14,15 @@ pub const PROTO: u32 = 15;
 /// off, is never cut.
 pub const NOTICE_MOST: usize = 1000;
 
+/// A resident's name: a letter first, so it is never mistaken for a slot, then letters, digits,
+/// `_` `.` `-`. Checked by the summon dialog as it is typed and by the daemon on every summon.
+pub fn valid_name(n: &str) -> bool {
+    n.starts_with(|c: char| c.is_ascii_alphabetic())
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+}
+
+pub const NAME_RULE: &str = "a name starts with a letter and uses letters, digits, _ . - only";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Envelope {
     #[serde(default)]

@@ -5,7 +5,7 @@ use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::client::render::grid_rect;
-use gensokyo::proto::{Card, Notice, Reply, Resident, RitualInfo, State};
+use gensokyo::proto::{Card, NAME_RULE, Notice, Reply, Resident, RitualInfo, State};
 use gensokyo::vt::{Frame, Modes, Run, Style, Vt};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
@@ -794,6 +794,30 @@ fn leader_h_opens_the_history_which_scrolls_like_the_scrollback_and_closes() {
     }
     // Nothing went to the resident.
     assert!(sent(&mut a).iter().all(|r| r["t"] != "input"));
+}
+
+#[test]
+fn a_name_the_daemon_would_refuse_is_caught_at_the_name() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dn");
+    host(&mut a, b"/\r");
+    sent(&mut a);
+    let at = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => Some((s.stage, s.error.clone())),
+        _ => None,
+    };
+    for bad in ["Big Sis", "9lives", "Ran!"] {
+        host(&mut a, format!("{bad}\r").as_bytes());
+        assert_eq!(at(&a), Some((Stage::Name, Some(NAME_RULE.into()))), "{bad}");
+        // Typing again clears it.
+        for _ in 0..bad.len() {
+            host(&mut a, b"\x7f");
+        }
+        assert_eq!(at(&a), Some((Stage::Name, None)), "{bad}");
+    }
+    assert!(sent(&mut a).is_empty());
+    host(&mut a, b" Ran \r");
+    assert_eq!(at(&a), Some((Stage::Role, None)));
 }
 
 #[test]

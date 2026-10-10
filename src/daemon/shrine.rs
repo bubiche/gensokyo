@@ -8,7 +8,7 @@ use super::pty;
 use super::resident::{self, Handle};
 use super::rituals::Rites;
 use super::store::{self, Record, Store};
-use crate::proto::{self, Reply, State, Summon, Telemetry};
+use crate::proto::{self, NAME_RULE, Reply, State, Summon, Telemetry, valid_name};
 use crate::role;
 use crate::tele;
 use serde_json::json;
@@ -209,12 +209,6 @@ pub(super) fn find(shrine: &Shrine, who: &str) -> Option<usize> {
     })
 }
 
-pub(super) fn valid_name(n: &str) -> bool {
-    // A letter first, so a name can never be mistaken for a slot.
-    n.starts_with(|c: char| c.is_ascii_alphabetic())
-        && n.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
-}
-
 /// Starts `claude` for a resident: the argv, the environment and the PTY at the shrine's size,
 /// with the record following its exit. Gives the program and argv for the record.
 fn launch(
@@ -384,11 +378,7 @@ pub(super) fn may_summon(
             return Err("the daemon is stopping".into());
         }
         match &s.name {
-            Some(n) if !valid_name(n) => {
-                return Err(
-                    "a name starts with a letter and uses letters, digits, _ . - only".into()
-                );
-            }
+            Some(n) if !valid_name(n) => return Err(NAME_RULE.into()),
             Some(n) if taken(&sh, n) => return Err(format!("{n} is already here")),
             _ => {}
         }
@@ -471,9 +461,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         .ok_or_else(|| format!("no such directory: {}", s.cwd))?;
     let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
     let name = match s.name {
-        Some(n) if !valid_name(&n) => {
-            return Err("a name starts with a letter and uses letters, digits, _ . - only".into());
-        }
+        Some(n) if !valid_name(&n) => return Err(NAME_RULE.into()),
         Some(n) if taken(&sh, &n) => return Err(format!("{n} is already here")),
         Some(n) => n,
         None => pick_name(&sh, &share),

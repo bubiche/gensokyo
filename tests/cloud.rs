@@ -139,7 +139,13 @@ fn the_courier_carries_its_gate_and_nothing_else() {
     let tools = args.iter().position(|a| a == "--tools").unwrap();
     assert_eq!(args[tools + 1], "RemoteTrigger");
     assert_eq!(args[args.len() - 2], "--");
-    assert!(args.last().unwrap().ends_with(&format!("\n{call}")));
+    // A field a line, not the call whole: haiku copied a whole one a brace too long.
+    let fields = "\naction: \"get_run_log\"\nsession_id: \"cse_01A\"";
+    assert!(args.last().unwrap().ends_with(fields), "{}", args.last().unwrap());
+    let create = json!({"action": "create", "body": {"name": "d", "events": [{"x": "}"}]}});
+    let asked = cloud::prompt(&create);
+    assert!(asked.ends_with(&format!("\nbody: {}", create["body"])), "{asked}");
+    assert!(!asked.contains(&create.to_string()));
     let p = |input: Value| {
         json!({"hook_event_name": "PreToolUse", "tool_name": "RemoteTrigger",
                                   "tool_input": input})

@@ -21,11 +21,17 @@ pub fn valid_id(id: &str, prefix: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-/// The call on its own last line, as the tool's input.
+/// The call as the tool's input, a field a line. Given the whole call on one line, haiku
+/// wrote `{"action": "create", "body": ` itself, copied the line from the body on, the call's
+/// own last brace too, and closed it again (2.1.296): most creates came out a brace too long.
 pub fn prompt(call: &Value) -> String {
+    let all = call.as_object().into_iter().flatten();
+    let fields: String = all.map(|(k, v)| format!("\n{k}: {v}")).collect();
     format!(
-        "Call the RemoteTrigger tool exactly once, with exactly this input and nothing added, \
-         then reply OK and stop. Whatever the result says, make no other call.\n{call}"
+        "Call the RemoteTrigger tool once, with an input of exactly these fields, each value \
+         exactly as given (a JSON value; nothing added), then reply OK and stop. Only if the tool \
+         says the input could not be parsed, send it again; whatever else the result says, make \
+         no other call.{fields}"
     )
 }
 

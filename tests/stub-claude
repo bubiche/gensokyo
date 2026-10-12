@@ -97,10 +97,10 @@ printing=''
 for a in "$@"; do
   case $a in --) break ;; -p|--print) printing=1; break ;; esac
 done
-# A cloud courier (`-p` with only RemoteTrigger): the one call its prompt's last line asks for,
-# put to the gate in its --settings as Claude Code would, and answered from
-# $STUB_CLOUD/<action>[-<trigger_id or session_id>].txt ("HTTP <code>", then the body), else a
-# 404. Each call is a line of courier.calls, and whole in courier.json; STUB_COURIER_CALL makes
+# A cloud courier (`-p` with only RemoteTrigger): the one call its gate allows, as a model that
+# read its prompt right would make it, put to the gate in its --settings as Claude Code would,
+# and answered from $STUB_CLOUD/<action>[-<trigger_id or session_id>].txt ("HTTP <code>", then
+# the body), else a 404. Each call is a line of courier.calls, and whole in courier.json; STUB_COURIER_CALL makes
 # it another call, as a model that read something it should not have might, and a call the gate
 # refuses leaves gate.denied.
 courier='' prev=''
@@ -117,13 +117,15 @@ if [ -n "$printing" ] && [ -n "$courier" ]; then
     esac
     shift
   done
-  call=${STUB_COURIER_CALL:-$(printf '%s\n' "$prompt" | tail -n 1)}
+  gate=$(printf '%s' "$settings" | sed -n 's/.*"command":"\(.*\)","type":"command".*/\1/p' |
+    sed 's/\\"/"/g; s/\\\\/\\/g')
+  # The call is the gate's first word after `_gate`, as the shell gives it to gensokyo.
+  call=${STUB_COURIER_CALL:-$(sh -c "said() { printf '%s' \"\$2\"; }; $(printf '%s' "$gate" |
+    sed "s/^'[^']*' _gate /said _gate /")")}
   action=$(printf '%s' "$call" | sed -n 's/.*"action":"\([a-z_]*\)".*/\1/p')
   trig=$(printf '%s' "$call" | sed -nE 's/.*"(trigger_id|session_id)":"([A-Za-z0-9_]*)".*/\2/p')
   echo "$action${trig:+ $trig}" >> "$STUB_STATE/courier.calls"
   printf '%s\n' "$call" >> "$STUB_STATE/courier.json"
-  gate=$(printf '%s' "$settings" | sed -n 's/.*"command":"\(.*\)","type":"command".*/\1/p' |
-    sed 's/\\"/"/g; s/\\\\/\\/g')
   said=$(printf '{"hook_event_name": "PreToolUse", "tool_name": "RemoteTrigger", "tool_input": %s}' "$call" |
     sh -c "$gate")
   case $said in

@@ -146,8 +146,8 @@ pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
 pub fn error_of(body: &str) -> String {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     match v["error"]["message"].as_str() {
-        Some(m) => crate::tele::clean(m, 200),
-        None => crate::tele::clean(body, 200),
+        Some(m) => plain(m, 200),
+        None => plain(body, 200),
     }
 }
 
@@ -228,16 +228,24 @@ fn epoch(v: &Value) -> Option<i64> {
     v.as_str()?.parse::<jiff::Timestamp>().ok().map(|t| t.as_second())
 }
 
-/// Bidi controls and zero-width marks: they could reorder or hide what is shown next to them.
+/// Bidi controls and invisible marks: they could reorder or hide what is shown next to them.
 fn hidden(c: &char) -> bool {
-    matches!(*c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069)
+    matches!(
+        *c as u32,
+        0x061C | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2069 | 0xFEFF
+    )
 }
 
-/// A name or title, one line of it, with nothing that could reorder or hide what is shown next
-/// to it.
-fn text(v: &Value, max: usize) -> String {
-    let s: String = v.as_str().unwrap_or("").chars().filter(|c| !hidden(c)).collect();
+/// One line of what claude.ai said, with nothing that could reorder or hide what is shown
+/// next to it.
+fn plain(s: &str, max: usize) -> String {
+    let s: String = s.chars().filter(|c| !hidden(c)).collect();
     crate::tele::clean(&s, max)
+}
+
+/// A name or title, as `plain`.
+fn text(v: &Value, max: usize) -> String {
+    plain(v.as_str().unwrap_or(""), max)
 }
 
 /// A run's id from its link, as the API pairs them: `…/code/session_X` is `cse_X`.
@@ -279,10 +287,7 @@ pub fn routines(body: &str) -> Result<(Vec<Routine>, bool), String> {
             id: r["id"].as_str().unwrap_or_default().into(),
             name: text(&r["name"], 80),
             enabled: r["enabled"] == true,
-            cron: r["cron_expression"]
-                .as_str()
-                .filter(|c| !c.is_empty())
-                .map(|c| crate::tele::clean(c, 80)),
+            cron: r["cron_expression"].as_str().filter(|c| !c.is_empty()).map(|c| plain(c, 80)),
             next_run: epoch(&r["next_run_at"]),
             last_fired: epoch(&r["last_fired_at"]),
         })

@@ -474,7 +474,7 @@ fn a_runs_log_is_shown_as_lines_with_nothing_a_terminal_would_act_on() {
         assert_eq!(cloud::run_id(no), None, "{no}");
     }
     let body = "{\"session_id\":\"cse_A\",\"next_cursor\":null}\n\n[t] user: hi\x1b]52;c;eA==\x07\n\
-                [t] result: \u{202E}ok\tdone\r\n";
+                [t] result: \u{202E}ok\u{61C}\u{2066}\u{FEFF}\tdone\r\n";
     assert_eq!(cloud::run_log(body, "cse_A"), "[t] user: hi]52;c;eA==\n[t] result: ok done");
     let more = "{\"next_cursor\":\"c2\"}\n[t] user: hi";
     assert_eq!(

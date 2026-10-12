@@ -6,7 +6,7 @@ use super::{Key, Modal};
 use crate::client::app::App;
 use crate::client::render::{DIM, ERROR, Model, Row, Say, ago, mark, width, window, wrap};
 use crate::paths::tilde;
-use crate::proto::{Request, RitualInfo, RitualVerb, RoutineInfo};
+use crate::proto::{CloudWatch, Request, RitualInfo, RitualVerb, RoutineInfo};
 use ratatui::style::{Color, Style};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,7 +82,7 @@ impl Timetable {
         let order = timetable_order(rituals);
         let sel = self.selected.min(order.len() + cloud.len() - 1);
         let names = rituals.iter().map(|r| &r.name).chain(cloud.iter().map(|r| &r.name));
-        let nw = names.map(|n| width(n)).max().unwrap_or(0).min(20) as usize;
+        let nw = names.map(|n| width(n)).max().unwrap_or(0).clamp(1, 20) as usize;
         let next = |l: &Option<String>, on: bool| match (l, on) {
             (_, false) => "paused".to_string(),
             (Some(l), true) => when_short(l, &m.today),
@@ -273,19 +273,28 @@ impl App {
 
     /// The daemon's timetable: the selection stays on the ritual it was on, and one opened that
     /// has gone is closed (nothing to act on, or to confirm removing).
-    pub(in crate::client) fn rituals(&mut self, rituals: Vec<RitualInfo>) {
-        let order = |m: &Model| timetable_order(m.rituals.as_deref().unwrap_or(&[]));
+    pub(in crate::client) fn rituals(
+        &mut self,
+        rituals: Vec<RitualInfo>,
+        cloud: Option<CloudWatch>,
+    ) {
+        // What is selected, by name for a ritual and by id for a routine below them.
+        let pick = |m: &Model, at: usize| {
+            let list = m.rituals.as_deref().unwrap_or_default();
+            let order = timetable_order(list);
+            match order.get(at) {
+                Some(&i) => Some((false, list[i].name.clone())),
+                None => routines(m).get(at - order.len()).map(|r| (true, r.id.clone())),
+            }
+        };
         let was = match &self.m.modal {
-            Some(Modal::Timetable(tt)) => order(&self.m)
-                .get(tt.selected)
-                .and_then(|&i| self.m.rituals.as_ref()?.get(i))
-                .map(|r| r.name.clone()),
+            Some(Modal::Timetable(tt)) => pick(&self.m, tt.selected),
             _ => None,
         };
-        self.m.rituals = Some(rituals);
-        let now = order(&self.m);
+        (self.m.rituals, self.m.cloud) = (Some(rituals), cloud);
+        let n = self.m.rituals.as_ref().map_or(0, Vec::len) + routines(&self.m).len();
+        let at = was.and_then(|w| (0..n).find(|&i| pick(&self.m, i).as_ref() == Some(&w)));
         let list = self.m.rituals.as_deref().unwrap_or_default();
-        let at = was.and_then(|n| now.iter().position(|&i| list[i].name == n));
         if let Some(Modal::Timetable(tt)) = &mut self.m.modal {
             if let Some(at) = at {
                 tt.selected = at;

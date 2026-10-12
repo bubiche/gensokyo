@@ -87,7 +87,7 @@ fn list() -> Result<(), String> {
     };
     let now = crate::daemon::store::now();
     match w.listed {
-        Some(t) => println!("listed {} ago", crate::tele::age(now.saturating_sub(t) as u64)),
+        Some(t) => println!("listed {} ago", crate::tele::age((now - t).max(0) as u64)),
         None => println!("not listed yet: the watch looks once the daemon has been up a minute"),
     }
     if let Some(e) = &w.failing {
@@ -111,7 +111,7 @@ fn list() -> Result<(), String> {
         };
         let going = match r.ran {
             Some(_) if r.going => " (going)".to_string(),
-            Some(t) => format!(" ({} ago)", crate::tele::age(now.saturating_sub(t) as u64)),
+            Some(t) => format!(" ({} ago)", crate::tele::age((now - t).max(0) as u64)),
             None => String::new(),
         };
         println!("  {:<18} {on:<4} {cron:<18} {next:<26} {}{going}", r.name, r.url);

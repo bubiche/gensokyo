@@ -346,6 +346,7 @@ fn the_routines_on_claude_ai_are_listed_below_the_rituals_and_only_opened() {
     let mut a = shrine();
     host(&mut a, b"\x1dt");
     let routine = |name: &str, url: &str, going| RoutineInfo {
+        id: format!("trig_{name}"),
         name: name.into(),
         enabled: true,
         url: url.into(),
@@ -389,6 +390,23 @@ fn the_routines_on_claude_ai_are_listed_below_the_rituals_and_only_opened() {
     }
     host(&mut a, b"r");
     assert!(sent(&mut a).iter().all(|r| r["t"] != "ritual"));
+
+    // A ritual added, and the routines listed in another order: the selection stays on it.
+    let ritual = |name: &str| RitualInfo { name: name.into(), enabled: true, ..Default::default() };
+    let cloud = CloudWatch {
+        listed: Some(0),
+        failing: None,
+        routines: vec![
+            routine("other", "https://claude.ai/code/session_B", false),
+            routine("pr-sweep", "https://example.com/x", false),
+        ],
+    };
+    let rituals = vec![ritual("alpha"), ritual("aaa")];
+    daemon(&mut a, Reply::Rituals { id: 0, rituals, unusable: vec![], cloud: Some(cloud) });
+    match &a.m.modal {
+        Some(Modal::Timetable(tt)) => assert_eq!(tt.selected, 3),
+        m => panic!("the timetable closed: {m:?}"),
+    }
 }
 
 #[test]

@@ -86,7 +86,7 @@ impl Schedule {
 
 /// Five fields, or None. `every N` takes only a length that divides its unit: `every 45m`
 /// would fire at :00 and :45 and then wait fifteen minutes.
-fn desugar(spec: &str) -> Option<String> {
+pub fn desugar(spec: &str) -> Option<String> {
     let fixed = match spec {
         "@hourly" => "0 * * * *",
         "@daily" | "@midnight" => "0 0 * * *",

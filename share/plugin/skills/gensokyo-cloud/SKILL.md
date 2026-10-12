@@ -12,8 +12,9 @@ on this machine: no files, no residents, no probes, no gensokyo. It reports only
 does, such as a Slack message or a PR comment, so its prompt has to say where the report goes.
 
 Never use the built-in `schedule` skill or `claude --cloud` for this. `RemoteTrigger` is turned
-off for you. Everything goes through `gensokyo cloud`, which makes each routine paused and with
-only the connectors named.
+off for you, and you must not reach it any other way (a nested `claude -p`, say). Everything
+goes through `gensokyo cloud`, which makes each routine paused and with only the connectors
+named.
 
 ## A ritual or a routine
 
@@ -57,7 +58,8 @@ gensokyo cloud add standup-digest --schedule "0 9 * * 1-5" --prompt-file /tmp/di
 - **The schedule** is cron in local time, as for a ritual.
   - It runs at most hourly.
   - gensokyo refuses a schedule that no UTC cron keeps all year. That happens when the zone
-    changes its clocks, or when a date crosses midnight in UTC; offer weekdays instead.
+    changes its clocks, or when a time falls on another day in UTC and the schedule names
+    dates or months: then offer days of the week, in every month.
 - **The prompt** is at most 4000 characters.
 - **It arrives paused.** Tell the user it is ready and that `gensokyo cloud resume <name>` starts
   it: that command shows them what it does and asks. You cannot resume or run a routine, and

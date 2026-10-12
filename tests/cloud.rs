@@ -112,7 +112,10 @@ fn run_gate(args: &[String], payload: &Value) -> String {
 #[test]
 fn the_courier_carries_its_gate_and_nothing_else() {
     let call = json!({"action": "get_run_log", "session_id": "cse_01A"});
-    let args = cloud::args(&call, common::BIN);
+    let ticket = common::fresh("cl-ticket").join("ticket");
+    let issue = || std::fs::write(&ticket, "").unwrap();
+    issue();
+    let args = cloud::args(&call, common::BIN, &ticket);
     for f in [
         "-p",
         "stream-json",
@@ -130,7 +133,15 @@ fn the_courier_carries_its_gate_and_nothing_else() {
         json!({"hook_event_name": "PreToolUse", "tool_name": "RemoteTrigger",
                                   "tool_input": input})
     };
+    // Another call is refused, and it leaves the one call allowed.
+    let other: Value =
+        serde_json::from_str(&run_gate(&args, &p(json!({"action": "run"})))).unwrap();
+    assert_eq!(other["hookSpecificOutput"]["permissionDecision"], "deny");
     assert_eq!(run_gate(&args, &p(call.clone())), "");
+    // Once: the same call again is refused, as it would be from any later turn.
+    let again: Value = serde_json::from_str(&run_gate(&args, &p(call.clone()))).unwrap();
+    assert!(again.to_string().contains("made already"), "{again}");
+    issue();
     let denied: Value =
         serde_json::from_str(&run_gate(&args, &p(json!({"action": "run"})))).unwrap();
     let out = &denied["hookSpecificOutput"];
@@ -140,7 +151,7 @@ fn the_courier_carries_its_gate_and_nothing_else() {
     );
     // A gate that cannot run (gensokyo moved by an update) blocks: any status but 2 would let
     // the call through.
-    let gone = cloud::args(&call, "/nonexistent/gensokyo");
+    let gone = cloud::args(&call, "/nonexistent/gensokyo", &ticket);
     assert_eq!(gate_says(&gone, &p(call.clone())).0, Some(2));
     assert!(args.windows(2).any(|w| w[0] == "--max-turns"));
     // Nothing it can read, and no call to allow: refused either way.
@@ -556,8 +567,18 @@ fn the_routines_are_listed_and_opened_from_what_the_watch_saw_and_a_log_is_the_u
 
 #[test]
 fn a_local_schedule_becomes_the_one_utc_cron_that_keeps_it_all_year_or_none() {
+    use gensokyo::cron::Schedule;
     let tz = |n: &str| jiff::tz::TimeZone::get(n).unwrap();
-    let utc = |spec: &str, zone: &str| cloud::utc_cron(spec, &tz(zone), T0);
+    // Accepted, and the same moments as the local schedule for 28 years: every way leap years
+    // and weekdays fall on dates.
+    let utc = |spec: &str, zone: &str| {
+        let u = cloud::utc_cron(spec, &tz(zone), T0)?;
+        let far = T0 + 28 * 366 * 86400;
+        let local = Schedule::parse(spec).unwrap().between(T0, far, &tz(zone));
+        let there = Schedule::parse(&u).unwrap().between(T0, far, &jiff::tz::TimeZone::UTC);
+        assert!(local == there, "{spec} in {zone} is not {u}");
+        Ok::<_, String>(u)
+    };
     let saigon = "Asia/Ho_Chi_Minh";
     assert_eq!(utc("0 9 * * 1-5", saigon).unwrap(), "0 2 * * 1-5");
     // Across midnight the weekdays move with it.
@@ -566,10 +587,17 @@ fn a_local_schedule_becomes_the_one_utc_cron_that_keeps_it_all_year_or_none() {
     assert_eq!(utc("@daily", saigon).unwrap(), "0 17 * * *");
     assert_eq!(utc("0 */6 * * *", saigon).unwrap(), "0 5,11,17,23 * * *");
     assert_eq!(utc("0 9 * * *", "Asia/Kolkata").unwrap(), "30 3 * * *");
+    // Dates and months stay as they are while no fire changes date.
     assert_eq!(utc("0 9 15 * *", saigon).unwrap(), "0 2 15 * *");
-    assert_eq!(utc("@hourly", "UTC").unwrap(), "0 * * * *");
-    // A date that crosses midnight has no cron; nor has a zone that changes its clocks.
-    assert!(utc("0 6 1 * *", saigon).unwrap_err().contains("no UTC cron"));
+    assert_eq!(utc("0 9 5,12,19,26 2 *", saigon).unwrap(), "0 2 5,12,19,26 2 *");
+    assert_eq!(utc("0 9 * 1 1", saigon).unwrap(), "0 2 * 1 1");
+    assert_eq!(utc("0 0 1 1 *", "UTC").unwrap(), "0 0 1 1 *");
+    assert_eq!(utc("0 9 * 6-8 *", "America/New_York").unwrap(), "0 13 * 6-8 *");
+    // A date or a month that crosses midnight would be other days in another year; a zone
+    // that changes its clocks keeps no UTC time.
+    for spec in ["0 6 1 * *", "0 6 1 3 *", "0 6 L 2 *", "0 6 * 1 1", "0 6 * 1 0", "0 0 1 1 *"] {
+        assert!(utc(spec, saigon).unwrap_err().contains("no UTC cron"), "{spec}");
+    }
     assert!(utc("0 9 * * *", "America/New_York").unwrap_err().contains("no UTC cron"));
     assert!(utc("*/30 * * * *", saigon).unwrap_err().contains("hourly"));
     assert!(utc("0 9 30 2 *", saigon).unwrap_err().contains("within a year"));
@@ -681,9 +709,12 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     );
     std::fs::write(&prompt, &text).unwrap();
     let p = prompt.display().to_string();
+    // Each by a name of its own: one that was made, even not as asked, is not made again.
+    let made = std::cell::Cell::new(0);
     let adding = |extra: &[&str]| {
-        let mut a =
-            vec!["cloud", "add", "other", "--schedule", "0 9 * * 1-5", "--prompt-file", &p];
+        made.set(made.get() + 1);
+        let name = format!("try{}", made.get());
+        let mut a = vec!["cloud", "add", &name, "--schedule", "0 9 * * 1-5", "--prompt-file", &p];
         a.extend(extra);
         d.command(&a).stdin(Stdio::null()).output().unwrap()
     };
@@ -767,6 +798,14 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     answer(&d, "create", 403, denied);
     let o = adding(&["--repo", "org/app"]);
     assert!(common::err(&o).contains("Claude GitHub App"), "{}", common::err(&o));
+    // On, or with a reply that leaves out what would show it is not, is not as asked either.
+    answer(&d, "create", 200, json!({"trigger": trigger("N", "other", true, &[])}));
+    assert!(common::err(&adding(&[])).contains("not as asked (it is on)"));
+    let mut bare = trigger("N", "other", false, &[]);
+    bare.as_object_mut().unwrap().remove("mcp_connections");
+    answer(&d, "create", 200, json!({"trigger": bare}));
+    let e = common::err(&adding(&[]));
+    assert!(e.contains("the reply does not say it is paused with only those connectors"), "{e}");
 
     // Paused by anyone, by name.
     answer(&d, "update-trig_R1", 200, json!({"trigger": trigger("R1", "morning", false, &[])}));
@@ -797,9 +836,12 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
         json!({"t": "hello", "proto": gensokyo::proto::PROTO, "who": "cli", "resident": "x"});
     writeln!(w2, "{hello}").unwrap();
     common::next(&mut back);
-    writeln!(w2, "{}", json!({"t": "cloud_act", "id": 7, "who": "morning", "act": "run"})).unwrap();
-    let r = common::next(&mut back);
-    assert!(r["error"].as_str().unwrap().contains("the user runs and resumes routines"), "{r}");
+    for act in ["run", "resume"] {
+        writeln!(w2, "{}", json!({"t": "cloud_act", "id": 7, "who": "trig_R1", "act": act}))
+            .unwrap();
+        let r = common::next(&mut back);
+        assert!(r["error"].as_str().unwrap().contains("the user runs and resumes"), "{r}");
+    }
     assert_eq!(asked(&d).len(), n);
 
     answer(&d, "get-trig_R1", 200, trigger("R1", "morning", false, &[]));
@@ -841,4 +883,9 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let o = d.command(&["cloud", "pause", "morning"]).output().unwrap();
     assert!(common::err(&o).contains("give its id (trig_"), "{}", common::err(&o));
     assert_eq!(common::out(&d.cli(&["cloud", "pause", "trig_R1"])), "paused morning\n");
+    let made = trigger("L", "late", false, &[]);
+    answer(&d, "create", 200, json!({"trigger": made}));
+    let late = ["cloud", "add", "late", "--schedule", "@daily", "--prompt-file", &p];
+    let said = common::out(&d.cli(&late));
+    assert!(said.contains("(gensokyo cloud resume trig_L)"), "{said}");
 }

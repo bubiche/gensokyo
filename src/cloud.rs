@@ -31,11 +31,17 @@ pub fn prompt(call: &Value) -> String {
 
 /// The courier's flags, after `claude`: one tool, no MCP servers, no skills, no transcript
 /// left behind, a budget, a few turns, nobody to ask, and the gate. `exe` is gensokyo, which
-/// the gate runs.
-pub fn args(call: &Value, exe: &str) -> Vec<String> {
+/// the gate runs; `ticket` a file the gate takes away with the one call it allows, so the call
+/// is made once: a run fired twice could post twice.
+pub fn args(call: &Value, exe: &str, ticket: &std::path::Path) -> Vec<String> {
     // Claude Code lets a call through when its hook fails any way but exit 2 (2.1.296: a gate
     // that could not be found let `list` run), so a gate that cannot run refuses.
-    let gate = format!("{} _gate {} || exit 2", sh_quote(exe), sh_quote(&call.to_string()));
+    let gate = format!(
+        "{} _gate {} {} || exit 2",
+        sh_quote(exe),
+        sh_quote(&call.to_string()),
+        sh_quote(&ticket.to_string_lossy())
+    );
     let settings = json!({"hooks": {"PreToolUse": [
         {"matcher": "*", "hooks": [{"type": "command", "command": gate}]}
     ]}});
@@ -83,9 +89,9 @@ pub fn gate(payload: &Value, call: &Value) -> Option<String> {
     (payload["tool_input"] != *call).then(|| format!("gate: only {call}, not this {action}"))
 }
 
-/// `gensokyo _gate <call>`: Claude Code's PreToolUse payload on stdin; a denial on stdout, or
-/// nothing to let the call through.
-pub fn gate_main(call: &str) {
+/// `gensokyo _gate <call> <ticket>`: Claude Code's PreToolUse payload on stdin; a denial on
+/// stdout, or nothing to let the call through, once: it takes the ticket away.
+pub fn gate_main(call: &str, ticket: &str) {
     let mut b = Vec::new();
     let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut b);
     let payload: Value = serde_json::from_slice(&b).unwrap_or(Value::Null);
@@ -93,6 +99,8 @@ pub fn gate_main(call: &str) {
         Ok(call) => gate(&payload, &call),
         Err(_) => Some("gate: no call to allow".into()),
     };
+    let once = || ticket.is_empty() || std::fs::remove_file(ticket).is_err();
+    let why = why.or_else(|| once().then(|| "gate: that call was made already".into()));
     if let Some(why) = why {
         let out = json!({"hookSpecificOutput": {"hookEventName": "PreToolUse",
             "permissionDecision": "deny", "permissionDecisionReason": why}});
@@ -513,9 +521,9 @@ pub fn about(t: &Value, tz: &jiff::tz::TimeZone) -> String {
         format!("  page        {}", routine_link(&r.id)),
         "  prompt".into(),
     ];
-    let prompt = t["derived_state"]["prompt"].as_str();
+    // The message a run is started with, as it is sent; the summary only without one.
     let first = &t["job_config"]["ccr"]["events"][0]["data"]["message"]["content"];
-    let prompt = prompt.or(first.as_str()).unwrap_or("");
+    let prompt = first.as_str().or(t["derived_state"]["prompt"].as_str()).unwrap_or("");
     out.extend(lines(prompt).into_iter().map(|l| format!("    {l}")));
     if conns != "none" {
         out.push(format!(
@@ -525,35 +533,49 @@ pub fn about(t: &Value, tz: &jiff::tz::TimeZone) -> String {
     out.join("\n")
 }
 
-/// A cron in local time as claude.ai keeps routines: in UTC. Only when one UTC cron fires at
-/// exactly the same moments for a year from `now` (a zone that changes its clocks has none);
-/// and at most hourly, as claude.ai runs them.
+/// A cron in local time as claude.ai keeps routines: in UTC (claude.ai then fires within
+/// minutes of it). The days are carried over as they are when no fire changes date in UTC.
+/// When every fire moves a day the same way, only a weekly schedule moves with it (a daily one
+/// whatever the moves): a date or a month would land on other days in another year. Then the result must fire at the same
+/// moments as the local cron for a year, which a zone that changes its clocks does not; and at
+/// most hourly, as claude.ai runs them.
 pub fn utc_cron(spec: &str, tz: &jiff::tz::TimeZone, now: i64) -> Result<String, String> {
     use crate::cron::Schedule;
     use jiff::tz::TimeZone;
     use std::collections::BTreeSet;
     let year = now + 366 * 86400;
     let fires = Schedule::parse(spec)?.between(now, year, tz);
-    if fires.is_empty() {
+    let five = crate::cron::desugar(spec.trim()).unwrap_or_default();
+    let local: Vec<&str> = five.split_whitespace().collect();
+    if fires.is_empty() || local.len() != 5 {
         return Err(format!("{spec} does not come round within a year"));
     }
     if fires.windows(2).any(|w| w[1] - w[0] < HOURLY) {
         return Err(format!("{spec} comes round more often than claude.ai runs a routine: hourly"));
     }
-    let at: Vec<jiff::Zoned> = fires
+    let none = || {
+        format!(
+            "{spec} has no UTC cron that keeps its local times, and claude.ai keeps a routine's \
+             schedule in UTC: a zone that changes its clocks has none, and a time that falls on \
+             another day in UTC keeps only days of the week, in every month"
+        )
+    };
+    let stamp = |t: &i64| jiff::Timestamp::from_second(*t).ok();
+    let at: Vec<jiff::Zoned> =
+        fires.iter().filter_map(stamp).map(|t| t.to_zoned(TimeZone::UTC)).collect();
+    let moved: BTreeSet<i32> = fires
         .iter()
-        .filter_map(|t| jiff::Timestamp::from_second(*t).ok())
-        .map(|t| t.to_zoned(TimeZone::UTC))
+        .filter_map(stamp)
+        .zip(&at)
+        .map(|(t, u)| (u.date() - t.to_zoned(tz.clone()).date()).get_days())
         .collect();
-    let field = |f: &dyn Fn(&jiff::Zoned) -> i8, lo: i8, hi: i8| {
-        let set: BTreeSet<i8> = at.iter().map(f).collect();
+    let field = |set: BTreeSet<i8>, lo: i8, hi: i8| {
         if set.len() == (hi - lo + 1) as usize {
             return "*".to_string();
         }
         // Runs of three or more as a range.
-        let mut out: Vec<String> = Vec::new();
         let v: Vec<i8> = set.into_iter().collect();
-        let mut i = 0;
+        let (mut out, mut i) = (Vec::new(), 0);
         while i < v.len() {
             let mut j = i;
             while j + 1 < v.len() && v[j + 1] == v[j] + 1 {
@@ -568,24 +590,19 @@ pub fn utc_cron(spec: &str, tz: &jiff::tz::TimeZone, now: i64) -> Result<String,
         }
         out.join(",")
     };
-    let min = field(&|z| z.minute(), 0, 59);
-    let hour = field(&|z| z.hour(), 0, 23);
-    let day = field(&|z| z.day(), 1, 31);
-    let month = field(&|z| z.month(), 1, 12);
-    let week = field(&|z| z.weekday().to_sunday_zero_offset(), 0, 6);
-    let tries = [
-        format!("{min} {hour} * {month} *"),
-        format!("{min} {hour} * {month} {week}"),
-        format!("{min} {hour} {day} {month} *"),
-    ];
-    let same = |c: &String| {
-        Schedule::parse(c).is_ok_and(|s| s.between(now, year, &TimeZone::UTC) == fires)
+    let min = field(at.iter().map(|z| z.minute()).collect(), 0, 59);
+    let hour = field(at.iter().map(|z| z.hour()).collect(), 0, 23);
+    let any = |f: &str| matches!(f, "*" | "?");
+    let days = match moved.iter().collect::<Vec<_>>()[..] {
+        [0] => format!("{} {} {}", local[2], local[3], local[4]),
+        _ if any(local[2]) && local[3] == "*" && any(local[4]) => "* * *".into(),
+        [_] if any(local[2]) && local[3] == "*" => {
+            let week = at.iter().map(|z| z.weekday().to_sunday_zero_offset()).collect();
+            format!("* * {}", field(week, 0, 6))
+        }
+        _ => return Err(none()),
     };
-    tries.into_iter().find(same).ok_or_else(|| {
-        format!(
-            "{spec} has no UTC cron that keeps its local times all year, and claude.ai keeps a \
-             routine's schedule in UTC (a zone that changes its clocks has none; a day that \
-             crosses midnight in UTC needs a weekday, not a date)"
-        )
-    })
+    let utc = format!("{min} {hour} {days}");
+    let same = Schedule::parse(&utc).is_ok_and(|s| s.between(now, year, &TimeZone::UTC) == fires);
+    same.then_some(utc).ok_or_else(none)
 }

@@ -391,20 +391,28 @@ pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> 
     landed(shrine, &r);
     let mut want: Vec<String> = conns.iter().map(|c| c.uuid.clone()).collect();
     want.sort();
-    if r.enabled || cloud::connected(&t) != want {
+    // Only what the reply says outright: a field it leaves out proves nothing.
+    let why = match (&t["enabled"], t["mcp_connections"].is_array()) {
+        (Value::Bool(false), true) if cloud::connected(&t) == want => None,
+        (Value::Bool(false), true) => Some("it has other connectors"),
+        (Value::Bool(true), _) => Some("it is on"),
+        _ => Some("the reply does not say it is paused with only those connectors"),
+    };
+    if let Some(why) = why {
         return Err(format!(
-            "{} was made, but not as asked ({}): fix or delete it before it runs, at {}",
+            "{} was made, but not as asked ({why}): fix or delete it before it runs, at {}",
             r.name,
-            if r.enabled { "it is on" } else { "it has other connectors" },
             cloud::routine_link(&r.id)
         ));
     }
+    // A name is known only to the watch.
+    let by = if on() { &r.name } else { &r.id };
     Ok(format!(
-        "made {name}, paused, from {} local: it runs once the user resumes it (gensokyo cloud \
-         resume {name})\n{}",
+        "made {}, paused, from {} local: it runs once the user resumes it (gensokyo cloud resume \
+         {by})\n{}",
+        r.name,
         a.schedule,
         cloud::about(&t, &tz),
-        name = r.name,
     ))
 }
 
@@ -484,11 +492,27 @@ async fn ask(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
     // Empty, and outside any repository: nothing there for Claude Code to load.
     let cwd = dir().join("courier");
     std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
-    let mut cmd = tokio::process::Command::new(&claude);
-    cmd.args(cloud::args(&call, &exe))
+    let ticket = dir().join(format!("ticket-{}", cloud::uuid4().map_err(|e| e.to_string())?));
+    std::fs::write(&ticket, "").map_err(|e| format!("{}: {e}", ticket.display()))?;
+    let r = courier(&claude, &env, &exe, &cwd, &ticket, &call).await;
+    let _ = std::fs::remove_file(&ticket);
+    r
+}
+
+/// The courier itself, given its ticket.
+async fn courier(
+    claude: &std::path::Path,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    exe: &str,
+    cwd: &std::path::Path,
+    ticket: &std::path::Path,
+    call: &Value,
+) -> Result<(u16, String), String> {
+    let mut cmd = tokio::process::Command::new(claude);
+    cmd.args(cloud::args(call, exe, ticket))
         .env_clear()
         .envs(env.iter().map(|(k, v)| (k, v)))
-        .current_dir(&cwd)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -508,7 +532,7 @@ async fn ask(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
         Err(_) => return Err(format!("a courier took over {}s", COURIER_LIMIT.as_secs())),
     };
     let stream = String::from_utf8_lossy(&out.stdout);
-    let r = cloud::reply(&stream, &call);
+    let r = cloud::reply(&stream, call);
     log(json!({"ev": "cloud", "call": call, "exit": out.status.code(), "ok": r.is_ok()}));
     r.map_err(|e| match stream.trim().is_empty() {
         true => format!(

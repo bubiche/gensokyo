@@ -37,8 +37,8 @@ pub enum Cmd {
     /// Make a routine on claude.ai, paused: it runs once the user resumes it
     ///
     /// The schedule is cron in this Mac's time, as a ritual's; claude.ai keeps it in UTC, and
-    /// runs a routine at most hourly. A connector is named as a `CLOUD_CONNECTOR_<name>=<uuid>
-    /// <url>` line in the config names it, and every tool of each runs unasked, writes too.
+    /// runs a routine at most hourly. Each connector needs a `CLOUD_CONNECTOR_<name>=<uuid>
+    /// <url>` line in the config, and every tool of each runs unasked, writes too.
     /// `CLOUD_ENV=env_…` in the config names the cloud environment runs start in.
     Add {
         name: String,
@@ -108,7 +108,17 @@ fn act(who: String, act: CloudAct, yes: bool) -> Result<(), String> {
              show); tell them it is ready"
         ));
     }
-    say(request(Request::CloudShow { who: who.clone() }, false))?;
+    // What is resumed is what was shown: by its id, whatever a list in between says.
+    let shown = match request(Request::CloudShow { who: who.clone() }, false)? {
+        Reply::Done { message, .. } => message,
+        other => return Err(format!("unexpected reply {other:?}")),
+    };
+    println!("{shown}");
+    let page = shown.lines().find_map(|l| l.trim_start().strip_prefix("page"));
+    let id = page.and_then(|p| p.trim().strip_prefix(&cloud::routine_link("")));
+    let id =
+        id.filter(|id| cloud::valid_id(id, "trig_")).ok_or("no routine's id in what was shown")?;
+    let doing = || request(Request::CloudAct { who: id.to_string(), act }, false);
     if !yes {
         let q = if act == CloudAct::Run { "run it now" } else { "resume it" };
         if !std::io::stdin().is_terminal() {

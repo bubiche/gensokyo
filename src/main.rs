@@ -26,7 +26,8 @@ fn main() -> ExitCode {
         Some("_gate") => {
             std::panic::set_hook(Box::new(|_| {}));
             let call = args.get(1).cloned().unwrap_or_default();
-            match std::panic::catch_unwind(|| gensokyo::cloud::gate_main(&call)) {
+            let ticket = args.get(2).cloned().unwrap_or_default();
+            match std::panic::catch_unwind(|| gensokyo::cloud::gate_main(&call, &ticket)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => ExitCode::from(2),
             }

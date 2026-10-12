@@ -986,3 +986,56 @@ fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends(
     let o = d.command(&["cloud", "say", "nobody", "hi"]).output().unwrap();
     assert!(common::err(&o).contains("no routine nobody"), "{}", common::err(&o));
 }
+
+#[test]
+fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
+    let d = watching("teleport", true, &[]);
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("B", "idle", T0 - 50), ("A", "idle", T0 - 90)]));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+    let summon = |extra: Value| {
+        let mut req = json!({"t": "summon", "id": 7, "cwd": d.dir});
+        req.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        d.req(req)
+    };
+    let argv = |r: &Value| -> Vec<String> {
+        let id = r["resident"]["id"].as_str().unwrap();
+        let rec = std::fs::read_to_string(d.dir.join(format!("residents/{id}.json"))).unwrap();
+        let rec: Value = serde_json::from_str(&rec).unwrap();
+        rec["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().into()).collect()
+    };
+    let after = |a: &[String], f: &str| a.iter().position(|x| x == f).map(|i| a[i + 1].clone());
+
+    // By a link, and by a routine's name for its newest run; on its own session, named.
+    let r = summon(json!({"name": "Taker", "teleport": "https://claude.ai/code/session_Z"}));
+    let a = argv(&r);
+    let at = a.iter().position(|x| x == "--teleport").unwrap();
+    assert_eq!(
+        a[at..at + 4],
+        ["--teleport", "cse_Z", "--session-id", r["resident"]["id"].as_str().unwrap()]
+    );
+    assert_eq!(after(&a, "--disallowed-tools").as_deref(), Some("CronCreate"));
+    let r2 = summon(json!({"name": "Second", "teleport": "morning"}));
+    assert_eq!(after(&argv(&r2), "--teleport").as_deref(), Some("cse_B"));
+    let r3 = summon(json!({"name": "Third", "teleport": "nobody"}));
+    assert!(r3["error"].as_str().unwrap().contains("no routine nobody"), "{r3}");
+
+    // Not a resident's to take, from the CLI or by its own request.
+    let o = d
+        .command(&["new", "--teleport", "cse_Z"])
+        .env("GENSOKYO_RESIDENT", r["resident"]["id"].as_str().unwrap())
+        .current_dir(&d.dir)
+        .output()
+        .unwrap();
+    assert!(common::err(&o).contains("stays out of residents' reach"), "{}", common::err(&o));
+
+    // Back after a banish, it resumes what it copied: it is not copied again.
+    d.stub(&r["resident"]["id"], "ready");
+    d.cli(&["banish", "Taker"]);
+    let gone = || d.list().iter().all(|x| x["name"] != "Taker" || !x["departed"].is_null());
+    common::wait(gone, "Taker gone");
+    let back = d.req(json!({"t": "recall", "id": 8, "who": "Taker"}));
+    assert_eq!(back["t"], "summoned", "{back}");
+    assert_eq!(after(&argv(&back), "--teleport"), None);
+}

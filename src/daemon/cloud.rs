@@ -310,10 +310,7 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
 /// `cloud_log`: a page of a run's log. A routine's newest run is the one the watch last saw:
 /// nothing is listed to find it, so with the watch off, only a run's id or link will do.
 pub(super) async fn run_log(shrine: &Shared, who: &str) -> Result<String, String> {
-    let id = match cloud::run_id(who) {
-        Some(id) => id,
-        None => newest(&shrine.borrow(), who)?,
-    };
+    let id = run_of(&shrine.borrow(), who)?;
     let (code, body) = ask(shrine, json!({"action": "get_run_log", "session_id": id})).await?;
     match code {
         200 => Ok(cloud::run_log(&body, &id)),
@@ -348,6 +345,11 @@ fn routine_id(sh: &Shrine, who: &str) -> Result<String, String> {
             .into());
     }
     named(sh, who).map(|r| r.id.clone())
+}
+
+/// A run's id: given, by its link, or as a routine's newest run.
+pub(super) fn run_of(sh: &Shrine, who: &str) -> Result<String, String> {
+    cloud::run_id(who).map_or_else(|| newest(sh, who), Ok)
 }
 
 /// The newest run the watch has seen of a routine, by name or id.
@@ -509,10 +511,7 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
     if text.trim().is_empty() {
         return Err("nothing to say".into());
     }
-    let id = match cloud::run_id(who) {
-        Some(id) => id,
-        None => newest(&shrine.borrow(), who)?,
-    };
+    let id = run_of(&shrine.borrow(), who)?;
     let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
     let cwd = dir().join("courier");
     std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;

@@ -473,6 +473,7 @@ gensokyo cloud resume digest         # shows it, asks, then starts it; also paus
 gensokyo cloud open [digest]         # its newest run in the browser, to read or continue
 gensokyo cloud say digest "and the PRs?"  # its newest run's next turn; told when it ends
 gensokyo cloud log digest            # a page of its newest run's log
+gensokyo new --teleport digest       # its newest run's conversation, as a resident here
 ```
 
 - **The watch.** With it on, the daemon lists the routines hourly and after each one's time.
@@ -490,8 +491,13 @@ gensokyo cloud log digest            # a page of its newest run's log
   outside gensokyo, lists both.
 - **Residents.**
   - They make routines through the `gensokyo-cloud` skill, and may show and pause them.
-  - Resuming, running, saying something to a run and reading its log are yours.
+  - Resuming, running, saying something to a run, reading its log and taking it over are
+    yours.
   - `RemoteTrigger` is turned off for residents.
+- **Taking a run over.** `new --teleport` copies a run's conversation into a resident here,
+  in the directory you summon it in (a checkout of the run's repository, for one that has
+  one). The run goes on by itself on claude.ai. The resident has a resident's tools and hooks,
+  but teleport leaves gensokyo's words out of its system prompt.
 - **Deleting** a routine, or editing one, is done on the web, at claude.ai/code/routines.
 
 ## Helpers

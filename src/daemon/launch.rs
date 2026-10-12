@@ -30,6 +30,8 @@ pub struct Options<'a> {
     pub role: Option<&'a Path>,
     /// The user's own words for the system prompt.
     pub system_prompt: Option<&'a str>,
+    /// A cloud run to copy the conversation of, at a first start only.
+    pub teleport: Option<&'a str>,
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -125,6 +127,9 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     if o.resume {
         a.extend(["--resume".into(), o.session.into()]);
     } else {
+        if let Some(run) = o.teleport {
+            a.extend(["--teleport".into(), run.into()]);
+        }
         a.extend(["--session-id".into(), o.session.into(), "--name".into(), o.name.into()]);
         // `--` keeps a prompt that starts with `-` from being read as a flag.
         if let Some(prompt) = o.prompt {

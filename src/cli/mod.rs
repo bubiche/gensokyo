@@ -219,6 +219,11 @@ struct New {
     /// What a new branch starts from; the remote's default branch, fetched, when left out
     #[arg(long, value_name = "REF", requires = "worktree")]
     base: Option<String>,
+    /// Take over a cloud run here: its conversation, copied from claude.ai (claude --teleport).
+    /// A run's id or link, or a routine's name or id for its newest run. It has a resident's
+    /// tools and hooks, but not gensokyo's words in its system prompt: teleport leaves them out
+    #[arg(long, value_name = "RUN")]
+    teleport: Option<String>,
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -431,6 +436,7 @@ fn new(n: New) -> Result<(), String> {
         role,
         system_prompt: n.system_prompt.filter(|p| !p.trim().is_empty()),
         worktree: n.worktree.map(|slug| WorktreeAsk { slug, branch: n.branch, base: n.base }),
+        teleport: n.teleport,
     };
     let reply = request(Request::Summon(s), true)?;
     if let Reply::Summoned { note: Some(note), .. } = &reply {

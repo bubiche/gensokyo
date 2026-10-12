@@ -519,6 +519,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
         quiet: r.quiet(),
         role: r.role.clone(),
         system_prompt: None,
+        teleport: None,
     };
     start(shrine, s).map(|res| res.id)
 }

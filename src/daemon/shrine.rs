@@ -302,6 +302,11 @@ pub(super) fn summon(
     caller: Option<&str>,
 ) -> Result<proto::Resident, String> {
     may_summon(shrine, &s, caller, Path::new(&s.cwd))?;
+    // Resolved now: with the watch on, a routine's newest run may be another by the next look.
+    let teleport = match s.teleport.as_deref() {
+        Some(who) => Some(super::cloud::run_of(&shrine.borrow(), who)?),
+        None => None,
+    };
     let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
     let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
     // Named, so a helper never starts in the user's defaultMode where that is wider.
@@ -328,6 +333,7 @@ pub(super) fn summon(
             owner,
             role,
             system_prompt,
+            teleport,
             ..Start::default()
         },
     )
@@ -384,6 +390,11 @@ pub(super) fn may_summon(
             Some(n) if taken(&sh, n) => return Err(format!("{n} is already here")),
             _ => {}
         }
+    }
+    if caller.is_some() && s.teleport.is_some() {
+        return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
+                    of residents' reach: the user takes a run over (gensokyo new --teleport)"
+            .into());
     }
     // A resident's summon is a helper of its own.
     if let Some(c) = caller {
@@ -450,6 +461,8 @@ pub(super) struct Start {
     pub(super) role: Option<String>,
     /// The user's own words for its system prompt.
     pub(super) system_prompt: Option<String>,
+    /// A cloud run, by id, whose conversation it starts from.
+    pub(super) teleport: Option<String>,
 }
 
 pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String> {
@@ -485,6 +498,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         lead: lead.as_deref(),
         role: role.as_deref(),
         system_prompt: s.system_prompt.as_deref(),
+        teleport: s.teleport.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -620,6 +634,8 @@ pub(super) fn come_back(
         lead: lead.as_deref(),
         role: role.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
+        // What it copied is its own conversation now, resumed as any other.
+        teleport: None,
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
     Ok((program, argv, handle, resume))

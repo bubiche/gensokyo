@@ -401,6 +401,11 @@ pub struct Summon {
     /// A checkout of its own, `<repo>/.claude/worktrees/<slug>`, made (or found) first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeAsk>,
+    /// A cloud run taken over here, its conversation copied from claude.ai (`claude
+    /// --teleport`): a run's id or link, or a routine, by name or id, for its newest run. The
+    /// user's alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teleport: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

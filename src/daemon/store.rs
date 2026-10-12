@@ -52,6 +52,10 @@ pub struct Record {
     /// The user's own words appended to its system prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// The cloud run it was taken over from, by id: every launch builds its system prompt afresh,
+    /// since the one Claude Code recorded is the run's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teleport: Option<String>,
     /// The resident that summoned this one, its lead, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,

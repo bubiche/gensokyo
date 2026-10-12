@@ -27,7 +27,7 @@ pub struct Summon {
     /// The roles there are, by name (`role.rs`).
     pub roles: Vec<String>,
     /// The one picked: 0 is none, else one past its index in `roles`; one past the last role is
-    /// a cloud run taken over, which keeps the system prompt it had.
+    /// a cloud run taken over, here with no role or words (`new --teleport` takes both).
     pub role: usize,
     /// Words of the user's own for its system prompt, with the role.
     pub words: String,

@@ -962,7 +962,7 @@ fn the_role_stage_sends_the_role_picked_and_the_words_typed() {
 }
 
 /// Last in the role list, a cloud run taken over: what is typed names the run, and it goes
-/// with no role and no words, which teleport would drop. The words typed for a role stay its.
+/// with no role and no words. The words typed for a role stay its.
 #[test]
 fn the_role_stage_takes_a_cloud_run_over_instead_of_a_role() {
     let mut a = shrine();

@@ -33,6 +33,10 @@ pub struct Options<'a> {
     pub system_prompt: Option<&'a str>,
     /// A cloud run to copy the conversation of, at a first start only.
     pub teleport: Option<&'a str>,
+    /// Taken over from a cloud run, at this start or an earlier one. The copy brings the run's
+    /// recorded system prompt, which Claude Code reuses at every resume whatever a launch
+    /// passes; built afresh instead, it has our paragraph, the role and the user's words.
+    pub taken_over: bool,
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -128,6 +132,9 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     a.extend(["--append-system-prompt".into(), system.into()]);
     if let Some(r) = o.role {
         a.extend(["--append-system-prompt-file".into(), r.into()]);
+    }
+    if o.taken_over {
+        a.extend(["--system-prompt-snapshot".into(), "off".into()]);
     }
     for (flag, v) in [("--model", o.model), ("--effort", o.effort), ("--permission-mode", o.mode)] {
         if let Some(v) = v {

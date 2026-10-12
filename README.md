@@ -499,8 +499,9 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
 - **Taking a run over.** `new --teleport`, or in the summon dialog the role list's last
   entry, "a cloud run, taken over", copies a run's conversation into a resident here,
   in the directory you summon it in (a checkout of the run's repository, for one that has
-  one). The run goes on by itself on claude.ai. The resident has a resident's tools and hooks,
-  but teleport leaves gensokyo's words out of its system prompt.
+  one). The run goes on by itself on claude.ai. The resident has a resident's tools, hooks and
+  system prompt (a role and words of your own too, from the command line), not the run's:
+  each of its launches builds the system prompt afresh (`--system-prompt-snapshot off`).
 - **Deleting** a routine, or editing one, is done on the web, at claude.ai/code/routines.
 
 ## Helpers

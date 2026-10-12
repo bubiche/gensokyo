@@ -220,8 +220,8 @@ struct New {
     #[arg(long, value_name = "REF", requires = "worktree")]
     base: Option<String>,
     /// Take over a cloud run here: its conversation, copied from claude.ai (claude --teleport).
-    /// A run's id or link, or a routine's name or id for its newest run. It has a resident's
-    /// tools and hooks, but not gensokyo's words in its system prompt: teleport leaves them out
+    /// A run's id or link, or a routine's name or id for its newest run. It is a resident like
+    /// any other: its tools, hooks and system prompt are gensokyo's, not the run's
     #[arg(long, value_name = "RUN")]
     teleport: Option<String>,
 }

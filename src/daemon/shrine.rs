@@ -394,11 +394,6 @@ pub(super) fn may_summon(
             _ => {}
         }
     }
-    if s.teleport.is_some() && (s.role.is_some() || s.system_prompt.is_some()) {
-        return Err("a run taken over keeps the system prompt it had: teleport leaves out a \
-                    role and words of your own"
-            .into());
-    }
     if caller.is_some() && s.teleport.is_some() {
         return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
                     of residents' reach: the user takes a run over (gensokyo new --teleport)"
@@ -507,6 +502,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         role: role.as_deref(),
         system_prompt: s.system_prompt.as_deref(),
         teleport: s.teleport.as_deref(),
+        taken_over: s.teleport.is_some(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -524,6 +520,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         extra: s.extra,
         role: s.role,
         system_prompt: s.system_prompt,
+        teleport: s.teleport,
         owner: s.owner,
         quiet: s.quiet,
         turns: 0,
@@ -644,6 +641,7 @@ pub(super) fn come_back(
         system_prompt: rec.system_prompt.as_deref(),
         // What it copied is its own conversation now, resumed as any other.
         teleport: None,
+        taken_over: rec.teleport.is_some(),
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
     Ok((program, argv, handle, resume))

@@ -1016,10 +1016,20 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
         ["--teleport", "cse_Z", "--session-id", r["resident"]["id"].as_str().unwrap()]
     );
     assert_eq!(after(&a, "--disallowed-tools").as_deref(), Some("CronCreate"));
+    // The run's recorded system prompt is not kept: ours is built at every launch.
+    let fresh = |a: &[String]| a.iter().filter(|x| *x == "--system-prompt-snapshot").count();
+    assert_eq!((fresh(&a), after(&a, "--system-prompt-snapshot").as_deref()), (1, Some("off")));
     let r2 = summon(json!({"name": "Second", "teleport": "morning"}));
     assert_eq!(after(&argv(&r2), "--teleport").as_deref(), Some("cse_B"));
-    let r4 = summon(json!({"name": "Fourth", "teleport": "cse_Z", "role": "reviewer"}));
-    assert!(r4["error"].as_str().unwrap().contains("teleport leaves out a role"), "{r4}");
+    // A role and words of the user's own go with it, as with any resident.
+    let r4 = summon(json!({"name": "Fourth", "teleport": "cse_Z", "role": "reviewer",
+                           "system_prompt": "mind the SQL"}));
+    let a4 = argv(&r4);
+    assert!(after(&a4, "--append-system-prompt-file").unwrap().ends_with("reviewer.md"), "{a4:?}");
+    assert!(after(&a4, "--append-system-prompt").unwrap().ends_with("mind the SQL"));
+    assert_eq!(fresh(&a4), 1);
+    let plain = summon(json!({"name": "Plain"}));
+    assert_eq!(fresh(&argv(&plain)), 0, "only a run taken over");
     let r3 = summon(json!({"name": "Third", "teleport": "nobody"}));
     assert!(r3["error"].as_str().unwrap().contains("no routine nobody"), "{r3}");
 
@@ -1039,5 +1049,7 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
     common::wait(gone, "Taker gone");
     let back = d.req(json!({"t": "recall", "id": 8, "who": "Taker"}));
     assert_eq!(back["t"], "summoned", "{back}");
-    assert_eq!(after(&argv(&back), "--teleport"), None);
+    let a = argv(&back);
+    assert_eq!(after(&a, "--teleport"), None);
+    assert_eq!(fresh(&a), 1, "every launch, not only the first: {a:?}");
 }

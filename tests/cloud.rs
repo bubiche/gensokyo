@@ -42,6 +42,17 @@ fn the_reply_is_the_tools_own_result_for_the_call_asked() {
 }
 
 #[test]
+fn a_call_claude_code_could_not_read_never_ran_and_the_next_is_the_one() {
+    // As haiku sent a create (2.1.296): a brace too many, refused before any hook, then again.
+    let call = json!({"action": "create", "body": {"name": "d", "enabled": false}});
+    let slip = json!({"__unparsedToolInput": {"raw": format!("{call}}}"), "len": 52}});
+    let refused = "<tool_use_error>InputValidationError: RemoteTrigger was called with input \
+                   that could not be parsed as JSON.";
+    let s = stream(&[(slip, json!(refused)), (call.clone(), json!("HTTP 200\n{}"))]);
+    assert_eq!(cloud::reply(&s, &call).unwrap(), (200, "{}".into()));
+}
+
+#[test]
 fn a_courier_that_strays_from_its_one_call_gets_no_reply() {
     let list = json!({"action": "list"});
     let deny = fixture("cloud-stream-deny.jsonl");

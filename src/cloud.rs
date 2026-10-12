@@ -64,7 +64,7 @@ pub fn args(call: &Value, exe: &str, ticket: &std::path::Path) -> Vec<String> {
         "--permission-prompts",
         "none",
         "--max-turns",
-        "3",
+        "4",
         "--max-budget-usd",
         BUDGET,
         "--settings",
@@ -109,8 +109,10 @@ pub fn gate_main(call: &str, ticket: &str) {
 }
 
 /// From a courier's stream-json: the API's reply to `call`, its HTTP status and its body as the
-/// tool gave it. Only from the first `tool_use`, and only when its input is the call: any call
-/// after it met the gate, which allows nothing else.
+/// tool gave it. Only from the first `tool_use` Claude Code could read, and only when its input
+/// is the call: any call after it met the gate, which allows nothing else. One it could not read
+/// as JSON (haiku copying a long body may slip a brace) never ran: it was refused before any
+/// hook, and the model tries again.
 pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     let lines: Vec<Value> = stream.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let blocks = |kind: &'static str| {
@@ -119,7 +121,9 @@ pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
             .filter(move |l| l["type"] == kind)
             .flat_map(|l| l["message"]["content"].as_array().into_iter().flatten())
     };
-    let uses: Vec<&Value> = blocks("assistant").filter(|b| b["type"] == "tool_use").collect();
+    let read =
+        |b: &&Value| b["type"] == "tool_use" && b["input"].get("__unparsedToolInput").is_none();
+    let uses: Vec<&Value> = blocks("assistant").filter(read).collect();
     let end = lines.iter().rev().find(|l| l["type"] == "result");
     let said = || end.and_then(|e| e["result"].as_str()).map(|s| crate::tele::clean(s, 200));
     let Some(use_) = uses.first() else {

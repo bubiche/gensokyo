@@ -193,9 +193,13 @@ fn list() -> Result<(), String> {
     if w.listed.is_some() && w.routines.is_empty() {
         println!("no routines on claude.ai: {}routines", cloud::WEB);
     }
+    let wide = w.routines.iter().map(|r| r.name.chars().count()).max().unwrap_or(0).max(7);
     for (i, r) in w.routines.iter().enumerate() {
         if i == 0 {
-            println!("  {:<18} {:<4} {:<18} {:<26} newest run", "routine", "", "schedule", "next");
+            println!(
+                "  {:<wide$} {:<4} {:<18} {:<26} newest run",
+                "routine", "", "schedule", "next"
+            );
         }
         let on = if r.enabled { "on" } else { "off" };
         let cron = r.cron.as_ref().map_or("by hand".into(), |c| format!("{c} UTC"));
@@ -211,7 +215,7 @@ fn list() -> Result<(), String> {
             Some(t) => format!(" ({} ago)", crate::tele::age((now - t).max(0) as u64)),
             None => String::new(),
         };
-        println!("  {:<18} {on:<4} {cron:<18} {next:<26} {}{going}", r.name, r.url);
+        println!("  {:<wide$} {on:<4} {cron:<18} {next:<26} {}{going}", r.name, r.url);
     }
     Ok(())
 }

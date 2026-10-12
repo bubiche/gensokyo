@@ -389,6 +389,25 @@ pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> 
     };
     let r = cloud::routine(&t).ok_or("no routine in the reply")?;
     landed(shrine, &r);
+    // Made with none, it has every connector the account has: cleared before anything else.
+    let mut t = t;
+    if conns.is_empty() && !cloud::connected(&t).is_empty() {
+        let clear = json!({"action": "update", "trigger_id": r.id,
+            "body": {"clear_mcp_connections": true}});
+        let cleared = match ask(shrine, clear).await {
+            Ok((200, body)) => cloud::trigger(&body),
+            Ok((code, body)) => Err(format!("HTTP {code}: {}", cloud::error_of(&body))),
+            Err(e) => Err(e),
+        };
+        t = cleared.map_err(|e| {
+            format!(
+                "{} was made, paused, with every connector, and clearing them failed ({e}): \
+                 delete it before it runs, at {}",
+                r.name,
+                cloud::routine_link(&r.id)
+            )
+        })?;
+    }
     let mut want: Vec<String> = conns.iter().map(|c| c.uuid.clone()).collect();
     want.sort();
     // Only what the reply says outright: a field it leaves out proves nothing.
@@ -457,7 +476,7 @@ pub(super) async fn act(shrine: &Shared, who: &str, act: CloudAct) -> Result<Str
             None => format!("resumed {}", r.name),
         },
         CloudAct::Run => {
-            let v: Value = serde_json::from_str(&body).unwrap_or_default();
+            let v = cloud::json(&body).unwrap_or_default();
             let run = v["session_id"].as_str().and_then(cloud::run_id);
             match run.as_deref().and_then(|id| id.strip_prefix("cse_")) {
                 Some(s) => format!("{} runs now: {}session_{s}", r.name, cloud::WEB),

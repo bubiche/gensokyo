@@ -154,9 +154,20 @@ pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     Ok((code, body.to_string()))
 }
 
+/// The JSON a reply's body starts with. The tool may follow it with a line of its own ("→ no
+/// run sessions recorded…", 2.1.296).
+pub fn json(body: &str) -> Result<Value, String> {
+    let mut values = serde_json::Deserializer::from_str(body).into_iter::<Value>();
+    match values.next() {
+        Some(Ok(v)) => Ok(v),
+        Some(Err(e)) => Err(format!("not JSON: {e}")),
+        None => Err("no JSON".into()),
+    }
+}
+
 /// The message of an API error body, or the start of whatever came.
 pub fn error_of(body: &str) -> String {
-    let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let v: Value = json(body).unwrap_or(Value::Null);
     match v["error"]["message"].as_str() {
         Some(m) => plain(m, 200),
         None => plain(body, 200),
@@ -295,7 +306,7 @@ pub fn run_log(body: &str, id: &str) -> String {
 /// The routines in a `list` body, and whether there are more than it holds. One whose id is not
 /// an id is left out.
 pub fn routines(body: &str) -> Result<(Vec<Routine>, bool), String> {
-    let v: Value = serde_json::from_str(body).map_err(|e| format!("list: not JSON: {e}"))?;
+    let v = json(body).map_err(|e| format!("list: {e}"))?;
     let data = v["data"].as_array().ok_or("list: no data")?;
     Ok((data.iter().filter_map(routine).collect(), v["has_more"] == true))
 }
@@ -316,7 +327,7 @@ pub fn routine(r: &Value) -> Option<Routine> {
 /// The runs in a `list_runs` body, newest first as it gives them. One whose id or link is not
 /// what the API gives is left out.
 pub fn runs(body: &str) -> Result<Vec<Run>, String> {
-    let v: Value = serde_json::from_str(body).map_err(|e| format!("list_runs: not JSON: {e}"))?;
+    let v = json(body).map_err(|e| format!("list_runs: {e}"))?;
     let data = v["data"].as_array().ok_or("list_runs: no data")?;
     Ok(data
         .iter()
@@ -432,7 +443,8 @@ fn repo(r: &str) -> Result<String, String> {
 }
 
 /// The `create` call for a routine, paused: claude.ai makes it as gensokyo writes it here and
-/// nowhere else, with exactly the connectors named (none named would be every one).
+/// nowhere else, with exactly the connectors named. None named, claude.ai gives it every one
+/// the account has (as it does with the list left out), which `add` then clears.
 pub fn create(
     a: &crate::proto::CloudAdd,
     cron: &str,
@@ -482,7 +494,7 @@ pub fn create(
 
 /// The routine in a write's or `get`'s reply: `{trigger: …}`, or the routine itself.
 pub fn trigger(body: &str) -> Result<Value, String> {
-    let v: Value = serde_json::from_str(body).map_err(|e| format!("not JSON: {e}"))?;
+    let v = json(body)?;
     let t = if v["trigger"].is_object() { v["trigger"].clone() } else { v };
     routine(&t).ok_or("no routine in the reply")?;
     Ok(t)

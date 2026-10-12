@@ -195,6 +195,9 @@ fn routines_and_runs_from_their_bodies_and_nothing_that_is_not_an_id_or_a_link()
             Routine { id: "trig_01B".into(), name: "once".into(), ..Default::default() },
         ]
     );
+    // With none, the tool says so after the JSON (2.1.296).
+    let none = "{\"note\":\"(content…)\",\"data\":[],\"next_cursor\":null}\n\n→ no run sessions";
+    assert_eq!(cloud::runs(none).unwrap(), vec![]);
     let runs = json!({"trigger_id": "trig_01KGA", "next_cursor": null, "data": [
         {"id": "cse_011t", "title": "⚡ morning slack\u{1b}[2J", "status": "active",
          "worker_status": "idle", "created_at": "2026-10-12T07:09:10.473741Z",
@@ -809,6 +812,19 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     answer(&d, "create", 403, denied);
     let o = adding(&["--repo", "org/app"]);
     assert!(common::err(&o).contains("Claude GitHub App"), "{}", common::err(&o));
+    // Made with none, claude.ai gives it every connector: they are cleared at once, or it says.
+    let all = [("Slack", SLACK), ("Linear", "fc20e568-094c-443c-a394-06a164b5b7ec")];
+    answer(&d, "create", 200, json!({"trigger": trigger("C", "try9", false, &all)}));
+    answer(&d, "update-trig_C", 500, json!({"error": {"message": "overloaded"}}));
+    let e = common::err(&adding(&[]));
+    assert!(e.contains("with every connector, and clearing them failed (HTTP 500: overloaded)"));
+    assert!(e.contains("https://claude.ai/code/routines/trig_C"), "{e}");
+    answer(&d, "update-trig_C", 200, json!({"trigger": trigger("C", "try9", false, &[])}));
+    let o = adding(&[]);
+    assert!(common::out(&o).contains("connectors  none"), "{}", common::err(&o));
+    let clear = json!({"action": "update", "trigger_id": "trig_C",
+        "body": {"clear_mcp_connections": true}});
+    assert_eq!(wrote(&d), clear);
     // On, or with a reply that leaves out what would show it is not, is not as asked either.
     answer(&d, "create", 200, json!({"trigger": trigger("N", "other", true, &[])}));
     assert!(common::err(&adding(&[])).contains("not as asked (it is on)"));

@@ -304,9 +304,18 @@ pub(super) async fn run_log(shrine: &Shared, who: &str) -> Result<String, String
 }
 
 /// A routine the watch has listed, by name or id.
+/// A routine the watch has listed, by id, or by a name only one has: what the user reads and
+/// what they resume must be the same routine.
 fn named<'a>(sh: &'a Shrine, who: &str) -> Result<&'a Routine, String> {
-    let r = sh.cloud.routines.iter().find(|r| r.id == who || r.name == who);
-    r.ok_or_else(|| format!("no routine {who} on claude.ai (gensokyo cloud lists them)"))
+    let rs = &sh.cloud.routines;
+    if let Some(r) = rs.iter().find(|r| r.id == who) {
+        return Ok(r);
+    }
+    match rs.iter().filter(|r| r.name == who).collect::<Vec<_>>()[..] {
+        [r] => Ok(r),
+        [] => Err(format!("no routine {who} on claude.ai (gensokyo cloud lists them)")),
+        _ => Err(format!("more than one routine is named {who}: give its id (trig_…)")),
+    }
 }
 
 /// A routine's id: given, or by its name as the watch last listed it.
@@ -338,6 +347,13 @@ fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
 
 /// `cloud_add`: a routine made on claude.ai, paused, with the connectors named and no others.
 pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> {
+    if let Some(r) = shrine.borrow().cloud.routines.iter().find(|r| r.name == a.name) {
+        return Err(format!(
+            "a routine named {} is on claude.ai already: {}",
+            r.name,
+            cloud::routine_link(&r.id)
+        ));
+    }
     let env = paths::config("CLOUD_ENV").ok_or(
         "no cloud environment to run routines in: CLOUD_ENV=env_… in the config names it (Claude \
          Code's /schedule lists them, outside gensokyo)",

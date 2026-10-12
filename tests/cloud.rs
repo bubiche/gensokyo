@@ -673,11 +673,17 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let d = watching("make", true, &[("TZ", "Asia/Ho_Chi_Minh")]);
     let conf = d.dir.join("conf/config");
     let prompt = d.dir.join("prompt.md");
-    std::fs::write(&prompt, "Read \"#me\".\nPost what needs me.").unwrap();
+    // Text a resident wrote goes into the gate's command line: nothing in it is the shell's.
+    let pwned = d.dir.join("pwned");
+    let text = format!(
+        "Don't post \"#me\" $(touch {0}) `touch {0}` ${{HOME}}\\n back\\slash — ✓\nThen stop.",
+        pwned.display()
+    );
+    std::fs::write(&prompt, &text).unwrap();
     let p = prompt.display().to_string();
     let adding = |extra: &[&str]| {
         let mut a =
-            vec!["cloud", "add", "digest", "--schedule", "0 9 * * 1-5", "--prompt-file", &p];
+            vec!["cloud", "add", "other", "--schedule", "0 9 * * 1-5", "--prompt-file", &p];
         a.extend(extra);
         d.command(&a).stdin(Stdio::null()).output().unwrap()
     };
@@ -735,10 +741,16 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     );
     assert_eq!(body["mcp_connections"][0]["connector_uuid"], SLACK);
     let content = &body["job_config"]["ccr"]["events"][0]["data"]["message"]["content"];
-    assert_eq!(content, "Read \"#me\".\nPost what needs me.");
+    assert_eq!(content.as_str(), Some(text.as_str()));
+    assert!(!pwned.exists() && !d.dir.join("stub/gate.denied").exists());
     // The watch lists them all again, now.
     common::wait(|| calls(&d).iter().filter(|c| *c == "list").count() == 2, "a list after");
 
+    // A name the watch lists is not made twice.
+    let again = ["cloud", "add", "morning", "--schedule", "@daily", "--prompt-file", &p];
+    let e = common::err(&d.command(&again).output().unwrap());
+    let link = "https://claude.ai/code/routines/trig_R1";
+    assert!(e.contains(&format!("a routine named morning is on claude.ai already: {link}")), "{e}");
     // Given more than it was asked for, it says so, with where to fix it.
     let more =
         json!({"trigger": trigger("N", "digest", false, &[("Slack", SLACK), ("Linear", "0000")])});
@@ -806,6 +818,23 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let o = common::out(&d.cli(&["cloud", "run", "trig_R1", "--yes"]));
     assert!(o.ends_with("morning runs now: https://claude.ai/code/session_F1\n"), "{o}");
     assert_eq!(wrote(&d), json!({"action": "run", "trigger_id": "trig_R1"}));
+
+    // Two named alike (one made on the web, say): neither is resumed by a name.
+    let mut twins = listing(&[("R1", T0 + 3600, T0 - 100), ("R3", T0 + 3600, T0 - 100)], false);
+    twins["data"][1]["name"] = json!("morning");
+    answer(&d, "list", 200, twins);
+    let lists = || calls(&d).iter().filter(|c| *c == "list").count();
+    let before = lists();
+    answer(&d, "update-trig_R1", 200, json!({"trigger": trigger("R1", "morning", false, &[])}));
+    d.cli(&["cloud", "pause", "trig_R1"]);
+    common::wait(|| lists() > before, "a list after");
+    common::wait(
+        || {
+            let o = d.command(&["cloud", "resume", "morning", "--yes"]).output().unwrap();
+            common::err(&o).contains("more than one routine is named morning: give its id")
+        },
+        "the twins listed",
+    );
 
     // With the watch off no name is known, and an id still does.
     d.cli(&["cloud", "watch", "off"]);

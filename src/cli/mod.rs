@@ -1,5 +1,6 @@
 //! The plumbing verbs: one request over the socket, starting the daemon when nobody answers.
 
+mod cloud;
 mod conn;
 mod doctor;
 mod install;
@@ -108,6 +109,11 @@ enum Cmd {
     Ritual {
         #[command(subcommand)]
         cmd: Option<rituals::Cmd>,
+    },
+    /// Routines on claude.ai: whether the daemon watches them
+    Cloud {
+        #[command(subcommand)]
+        cmd: Option<cloud::Cmd>,
     },
     /// Tag a resident with short key=value tokens, shown under it in the sidebar; alone, its tags
     ///
@@ -236,6 +242,7 @@ pub fn main(args: &[String]) -> ExitCode {
             say(request(Request::Read { who, screen, bare: false }, false))
         }
         Cmd::Ritual { cmd } => rituals::main(cmd),
+        Cmd::Cloud { cmd } => cloud::main(cmd),
         Cmd::Tag { who, tags, clear } => {
             say(request(Request::Tag { who, set: tags, clear }, false))
         }

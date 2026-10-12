@@ -110,6 +110,8 @@ pub(super) struct Shrine {
     pub(super) installed: Option<super::registry::Installed>,
     /// Keeping the Mac from idle-sleeping while work runs.
     pub(super) awake: super::awake::Awake,
+    /// The user's routines on claude.ai, while they have the watch on.
+    pub(super) cloud: super::cloud::Watch,
 }
 
 impl Shrine {

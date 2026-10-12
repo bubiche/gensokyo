@@ -3,6 +3,7 @@
 pub mod card;
 pub mod cli;
 pub mod client;
+pub mod cloud;
 pub mod cron;
 pub mod daemon;
 pub mod frontmatter;

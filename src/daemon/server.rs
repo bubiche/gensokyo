@@ -124,6 +124,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         waits: Vec::new(),
         installed: None,
         awake: super::awake::Awake::from_config(),
+        cloud: Default::default(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),

@@ -82,6 +82,7 @@ pub fn main() -> Result<(), String> {
             _ => awake_in_config(),
         },
     );
+    line("cloud", super::cloud::status());
     line("at login", login::status());
     // A daemon launchd starts has the agent's environment, not this shell's.
     if let login::Agent::Ours(_) = login::agent() {

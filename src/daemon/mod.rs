@@ -4,6 +4,7 @@ mod awake;
 pub mod aware;
 mod branch;
 pub mod cards;
+mod cloud;
 mod crash;
 mod headless;
 mod ingest;

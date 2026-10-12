@@ -21,6 +21,16 @@ fn main() -> ExitCode {
             };
             ExitCode::SUCCESS
         }
+        // The courier's gate: a call it cannot vouch for is refused, a panic included (exit 2
+        // blocks the call; any other failure would let it through).
+        Some("_gate") => {
+            std::panic::set_hook(Box::new(|_| {}));
+            let call = args.get(1).cloned().unwrap_or_default();
+            match std::panic::catch_unwind(|| gensokyo::cloud::gate_main(&call)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::from(2),
+            }
+        }
         Some(_) => gensokyo::cli::main(&args),
         None => gensokyo::client::app::main(),
     }

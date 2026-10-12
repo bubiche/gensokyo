@@ -31,12 +31,11 @@ pub struct Options<'a> {
     pub role: Option<&'a Path>,
     /// The user's own words for the system prompt.
     pub system_prompt: Option<&'a str>,
-    /// A cloud run to copy the conversation of, at a first start only.
+    /// The cloud run it is taken over from: its conversation is copied when there is none to
+    /// resume. The copy brings the run's recorded system prompt, which Claude Code reuses at
+    /// every resume whatever a launch passes; built afresh instead, at every start, it has our
+    /// paragraph, the role and the user's words.
     pub teleport: Option<&'a str>,
-    /// Taken over from a cloud run, at this start or an earlier one. The copy brings the run's
-    /// recorded system prompt, which Claude Code reuses at every resume whatever a launch
-    /// passes; built afresh instead, it has our paragraph, the role and the user's words.
-    pub taken_over: bool,
 }
 
 /// This binary, as the hooks and the status line run it.
@@ -133,7 +132,7 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     if let Some(r) = o.role {
         a.extend(["--append-system-prompt-file".into(), r.into()]);
     }
-    if o.taken_over {
+    if o.teleport.is_some() {
         a.extend(["--system-prompt-snapshot".into(), "off".into()]);
     }
     for (flag, v) in [("--model", o.model), ("--effort", o.effort), ("--permission-mode", o.mode)] {
@@ -189,12 +188,14 @@ pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
 
 /// The daemon's environment minus what belongs to the terminal or session it was started from,
 /// plus what a resident needs. `bin` goes first on PATH so the skills' `gensokyo` resolves to
-/// this copy; `shim`, a resident's or headless run's, before it, so its `claude` is gensokyo's.
+/// this copy; gensokyo's own `claude` in `shim` before it for a resident or headless run (`id`),
+/// and nowhere for the rest: a courier started through a wrapper that runs `claude` by name
+/// needs RemoteTrigger, and a daemon started from a resident's shell has it on its PATH.
 pub fn env(
     base: impl IntoIterator<Item = (OsString, OsString)>,
     id: &str,
     bin: &Path,
-    shim: Option<&Path>,
+    shim: &Path,
     socket: &Path,
 ) -> Vec<(OsString, OsString)> {
     // Whatever names or describes the host terminal: the resident's terminal is ours.
@@ -242,14 +243,14 @@ pub fn env(
         .is_some_and(|v| v.to_ascii_lowercase().replace('-', "").contains("utf8"));
     // Joined by hand: `join_paths` refuses the whole list over one entry holding a `:`.
     let mut path = OsString::new();
-    if let Some(d) = shim {
-        path.push(d);
+    if !id.is_empty() {
+        path.push(shim);
         path.push(":");
     }
     path.push(bin);
     let old = env.iter().position(|(k, _)| k == "PATH").map(|i| env.remove(i).1);
     for d in old.iter().flat_map(std::env::split_paths) {
-        if !d.as_os_str().is_empty() && d != bin && Some(d.as_path()) != shim {
+        if !d.as_os_str().is_empty() && d != bin && d != shim {
             path.push(":");
             path.push(d);
         }

@@ -501,7 +501,8 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
   in the directory you summon it in (a checkout of the run's repository, for one that has
   one). The run goes on by itself on claude.ai. The resident has a resident's tools, hooks and
   system prompt (a role and words of your own too, from the command line), not the run's:
-  each of its launches builds the system prompt afresh (`--system-prompt-snapshot off`).
+  each of its launches builds the system prompt afresh (`--system-prompt-snapshot off`), so
+  its role file must still be there. Recalled before anything was copied, it copies the run then.
 - **Deleting** a routine, or editing one, is done on the web, at claude.ai/code/routines.
 
 ## Helpers

@@ -126,13 +126,12 @@ impl Shrine {
     }
 
     /// `claude` on PATH, and the environment it runs in for resident `id` (none: the registry,
-    /// a courier, a card). Only a resident or headless run gets gensokyo's `claude` on its PATH:
-    /// a courier started through a wrapper that runs `claude` by name needs RemoteTrigger.
+    /// a courier, a card).
     pub(super) fn claude(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
         let program = launch::claude(std::env::var_os("PATH").as_deref())?;
         let bin = self.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
-        let shim = (!id.is_empty()).then(crate::shim::dir);
-        Some((program, launch::env(std::env::vars_os(), id, &bin, shim.as_deref(), &self.socket)))
+        let shim = crate::shim::dir();
+        Some((program, launch::env(std::env::vars_os(), id, &bin, &shim, &self.socket)))
     }
 }
 
@@ -502,7 +501,6 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         role: role.as_deref(),
         system_prompt: s.system_prompt.as_deref(),
         teleport: s.teleport.as_deref(),
-        taken_over: s.teleport.is_some(),
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -617,10 +615,13 @@ pub(super) fn come_back(
     // nothing to resume: it starts afresh on that session, with the same name.
     let resume = launch::has_conversation(&rec.session);
     // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
-    // it, so a role file gone since does not keep it away; a fresh start would go without.
+    // it, so a role file gone since does not keep it away; a fresh start would go without, as
+    // would one taken over, whose prompt is built afresh at every start.
     let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())).transpose() {
         Ok(found) => found,
-        Err(e) if !resume => return Err(format!("{} cannot come back: {e}", rec.name)),
+        Err(e) if !resume || rec.teleport.is_some() => {
+            return Err(format!("{} cannot come back: {e}", rec.name));
+        }
         Err(e) => {
             log(json!({"ev": "role_gone", "id": rec.id, "error": e}));
             None
@@ -639,9 +640,7 @@ pub(super) fn come_back(
         lead: lead.as_deref(),
         role: role.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
-        // What it copied is its own conversation now, resumed as any other.
-        teleport: None,
-        taken_over: rec.teleport.is_some(),
+        teleport: rec.teleport.as_deref(),
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
     Ok((program, argv, handle, resume))

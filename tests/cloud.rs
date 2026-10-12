@@ -68,8 +68,9 @@ fn a_courier_that_strays_from_its_one_call_gets_no_reply() {
     // A second call met the gate; the first was the one asked for, and stands.
     let then = stream(&[(list.clone(), ok.clone()), (json!({"action": "run"}), json!("denied"))]);
     assert_eq!(cloud::reply(&then, &list).unwrap(), (200, "{}".into()));
+    // Refused first, then mended: the gate let the call through, and its reply is the one.
     let first = stream(&[(json!({"action": "run"}), json!("denied")), (list.clone(), ok.clone())]);
-    assert!(cloud::reply(&first, &list).is_err());
+    assert_eq!(cloud::reply(&first, &list).unwrap(), (200, "{}".into()));
     let extra = json!({"action": "list", "trigger_id": "trig_x"});
     assert!(cloud::reply(&stream(&[(extra, ok)]), &list).is_err());
     let none = stream(&[]);
@@ -473,8 +474,7 @@ fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_stil
     rounds(&d, 3);
     let failed = d.log().into_iter().filter(|e| e["routine"] == "trig_R1").count();
     assert_eq!(failed, 1);
-    // R2 fires, and its run is not listed yet.
-    answer(&d, "list_runs-trig_R1", 200, runs(&[("X", "idle", T0 - 90)]));
+    // R2 fires, and its run is not listed yet; R1 still fails, and slows the look at R2 none.
     let mut fired = both(T0 + 3601);
     fired["data"][1]["next_run_at"] = json!(at(T0 + 7200));
     answer(&d, "list", 200, fired);
@@ -488,12 +488,13 @@ fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_stil
         200,
         runs(&[("B", "starting", T0 + 3650), ("A", "idle", T0 - 90)]),
     );
-    clock(&d, T0 + 3730);
-    rounds(&d, 8);
+    // A minute on, no gap in the ticking: the look at a run pending.
+    clock(&d, T0 + 3725);
+    rounds(&d, 9);
     assert_eq!(told(&d), Vec::<String>::new());
     answer(&d, "list_runs-trig_R2", 200, runs(&[("B", "idle", T0 + 3790), ("A", "idle", T0 - 90)]));
     clock(&d, T0 + 3800);
-    rounds(&d, 10);
+    rounds(&d, 12);
     assert_eq!(told(&d), ["nR2: finished https://claude.ai/code/session_B"]);
 }
 
@@ -1021,13 +1022,6 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
     assert_eq!((fresh(&a), after(&a, "--system-prompt-snapshot").as_deref()), (1, Some("off")));
     let r2 = summon(json!({"name": "Second", "teleport": "morning"}));
     assert_eq!(after(&argv(&r2), "--teleport").as_deref(), Some("cse_B"));
-    // A role and words of the user's own go with it, as with any resident.
-    let r4 = summon(json!({"name": "Fourth", "teleport": "cse_Z", "role": "reviewer",
-                           "system_prompt": "mind the SQL"}));
-    let a4 = argv(&r4);
-    assert!(after(&a4, "--append-system-prompt-file").unwrap().ends_with("reviewer.md"), "{a4:?}");
-    assert!(after(&a4, "--append-system-prompt").unwrap().ends_with("mind the SQL"));
-    assert_eq!(fresh(&a4), 1);
     let plain = summon(json!({"name": "Plain"}));
     assert_eq!(fresh(&argv(&plain)), 0, "only a run taken over");
     let r3 = summon(json!({"name": "Third", "teleport": "nobody"}));
@@ -1042,14 +1036,35 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
         .unwrap();
     assert!(common::err(&o).contains("stays out of residents' reach"), "{}", common::err(&o));
 
-    // Back after a banish, it resumes what it copied: it is not copied again.
-    d.stub(&r["resident"]["id"], "ready");
-    d.cli(&["banish", "Taker"]);
-    let gone = || d.list().iter().all(|x| x["name"] != "Taker" || !x["departed"].is_null());
-    common::wait(gone, "Taker gone");
-    let back = d.req(json!({"t": "recall", "id": 8, "who": "Taker"}));
-    assert_eq!(back["t"], "summoned", "{back}");
-    let a = argv(&back);
+    // Back after a banish with nothing copied (the run was not reached), it is copied then;
+    // with a conversation, it resumes what it copied, and is not copied again.
+    let back = |name: &str, r: &Value| {
+        let id = r["resident"]["id"].as_str().unwrap();
+        d.stub(&json!(id), "ready");
+        d.cli(&["banish", name]);
+        let gone = || d.list().iter().all(|x| x["name"] != name || !x["departed"].is_null());
+        common::wait(gone, "it gone");
+        let back = d.req(json!({"t": "recall", "id": 8, "who": name}));
+        (back["t"] == "summoned").then(|| argv(&back)).ok_or(back)
+    };
+    let talked = |r: &Value| {
+        let convo = format!("claude/projects/stub/{}.jsonl", r["resident"]["id"].as_str().unwrap());
+        std::fs::create_dir_all(d.dir.join("claude/projects/stub")).unwrap();
+        std::fs::write(d.dir.join(convo), "{}\n").unwrap();
+    };
+    let a = back("Taker", &r).unwrap();
+    assert_eq!((after(&a, "--teleport").as_deref(), fresh(&a)), (Some("cse_Z"), 1));
+    talked(&r);
+    let a = back("Taker", &r).unwrap();
     assert_eq!(after(&a, "--teleport"), None);
+    assert!(after(&a, "--resume").is_some(), "{a:?}");
     assert_eq!(fresh(&a), 1, "every launch, not only the first: {a:?}");
+    // Its prompt is built afresh even then, so a role file gone since keeps it away.
+    let role = d.dir.join("mine.md");
+    std::fs::write(&role, "Only read.").unwrap();
+    let r4 = summon(json!({"name": "Fourth", "teleport": "cse_Z", "role": role}));
+    talked(&r4);
+    std::fs::remove_file(&role).unwrap();
+    let e = back("Fourth", &r4).unwrap_err();
+    assert!(e["error"].as_str().unwrap().contains("Fourth cannot come back"), "{e}");
 }

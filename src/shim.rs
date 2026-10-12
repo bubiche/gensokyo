@@ -5,7 +5,8 @@
 
 use crate::daemon::launch::{DISALLOWED, sh_quote};
 use serde_json::{Value, json};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -30,35 +31,44 @@ pub fn write(exe: &Path) -> std::io::Result<()> {
 }
 
 /// `args` with the refused tools added to the deny list of the `--settings` they give, or of
-/// one of their own. Claude Code keeps only the last `--settings`, so theirs is taken out and
-/// the merged one goes first, before any subcommand and any `--`. `read` reads a settings file.
+/// one of their own put first, before any subcommand. Theirs stays in its place, where it ends
+/// the list a flag such as `--allowedTools` starts; Claude Code keeps only the last, so each is
+/// replaced by that one merged. `read` reads a settings file.
 pub fn args(
     args: &[OsString],
-    read: impl Fn(&str) -> std::io::Result<String>,
+    read: impl Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Vec<OsString>, String> {
-    let (mut rest, mut given) = (Vec::new(), None);
+    // Where in `out` a settings value is.
+    let (mut out, mut at) = (Vec::<OsString>::new(), Vec::new());
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        match a.to_str() {
-            Some("--") => {
-                rest.push(a.clone());
-                rest.extend(it.by_ref().cloned());
-            }
-            Some("--settings") => {
-                let v = it.next().ok_or("--settings needs a value")?;
-                given = Some(v.to_string_lossy().into_owned());
-            }
-            Some(s) if s.starts_with("--settings=") => given = Some(s[11..].to_string()),
-            _ => rest.push(a.clone()),
+        if a == "--" {
+            out.push(a.clone());
+            out.extend(it.by_ref().cloned());
+        } else if a == "--settings" {
+            out.push(a.clone());
+            at.push(out.len());
+            out.push(it.next().ok_or("--settings needs a value")?.clone());
+        } else if let Some(v) = a.as_bytes().strip_prefix(b"--settings=") {
+            out.push("--settings".into());
+            at.push(out.len());
+            out.push(OsStr::from_bytes(v).into());
+        } else {
+            out.push(a.clone());
         }
     }
     let parse = |s: &str, from: &str| {
         serde_json::from_str::<Value>(s).map_err(|e| format!("--settings {from}: {e}"))
     };
-    let mut settings = match given {
+    let mut settings = match at.last().map(|&i| Path::new(&out[i])) {
         None => json!({}),
-        Some(v) if v.trim_start().starts_with('{') => parse(&v, "")?,
-        Some(f) => parse(&read(&f).map_err(|e| format!("--settings {f}: {e}"))?, &f)?,
+        Some(v) => match v.to_str().filter(|s| s.trim_start().starts_with('{')) {
+            Some(inline) => parse(inline, "")?,
+            None => {
+                let f = v.display().to_string();
+                parse(&read(v).map_err(|e| format!("--settings {f}: {e}"))?, &f)?
+            }
+        },
     };
     let deny = settings
         .as_object_mut()
@@ -72,8 +82,13 @@ pub fn args(
             deny.push(t.into());
         }
     }
-    let mut out = vec!["--settings".into(), settings.to_string().into()];
-    out.extend(rest);
+    if at.is_empty() {
+        out.splice(0..0, ["--settings".into(), OsString::new()]);
+        at.push(1);
+    }
+    for i in at {
+        out[i] = settings.to_string().into();
+    }
     Ok(out)
 }
 

@@ -45,7 +45,7 @@ pub(super) struct Watch {
     /// The routines as last listed.
     pub(super) routines: Vec<Routine>,
     seen: Option<Seen>,
-    /// Why the last round failed.
+    /// Why the last round failed, wholly or for one routine.
     failed: Option<String>,
     /// A routine was changed from here: the next tick lists them again.
     again: bool,
@@ -122,10 +122,10 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
         let mut sh = shrine.borrow_mut();
         sh.cloud.busy = false;
         sh.cloud.pace.listed = Some(now);
-        sh.cloud.failed = r.as_ref().err().cloned();
+        sh.cloud.failed = r.clone().unwrap_or_else(Some);
         let p = &mut sh.cloud.pace;
         match r {
-            Ok(()) => {
+            Ok(_) => {
                 if p.fails >= FAILS_TOLD {
                     tell(&mut sh, "cloud watch", "it works again");
                 }
@@ -185,8 +185,9 @@ fn tell(sh: &mut Shrine, name: &str, text: &str) {
 
 /// The routines listed, then the runs of each that fired or has one going. What is seen is
 /// kept after each routine, so a round that fails part way tells nothing twice; and one
-/// routine's failure (a run's title can lead its courier astray) holds up none of the others.
-async fn round(shrine: &Shared, now: i64) -> Result<(), String> {
+/// routine's failure (a run's title can lead its courier astray), the first returned, holds up
+/// none of the others, nor the next look at them. Only a failure to list is backed off from.
+async fn round(shrine: &Shared, now: i64) -> Result<Option<String>, String> {
     let (code, body) = ask(shrine, json!({"action": "list"})).await?;
     if code != 200 {
         return Err(format!("list: HTTP {code}: {}", cloud::error_of(&body)));
@@ -245,7 +246,7 @@ async fn round(shrine: &Shared, now: i64) -> Result<(), String> {
     let overdue = routines.iter().any(|r| r.enabled && late(r));
     let p = &mut shrine.borrow_mut().cloud.pace;
     p.pending = (going || overdue || awaited).then(|| p.pending.unwrap_or(now));
-    failed.map_or(Ok(()), Err)
+    Ok(failed)
 }
 
 /// A routine's newest runs; none when it has been deleted.

@@ -115,10 +115,10 @@ pub fn gate_main(call: &str, ticket: &str) {
 }
 
 /// From a courier's stream-json: the API's reply to `call`, its HTTP status and its body as the
-/// tool gave it. Only from the first `tool_use` Claude Code could read, and only when its input
-/// is the call: any call after it met the gate, which allows nothing else. One it could not read
-/// as JSON (haiku copying a long body may slip a brace) never ran: it was refused before any
-/// hook, and the model tries again.
+/// tool gave it. From the first `tool_use` whose input is the call: the gate let that one through
+/// and no other, so one refused before it (a slip the model then mended) ran nothing. One Claude
+/// Code could not read as JSON (haiku copying a long body may slip a brace) never ran either: it
+/// was refused before any hook.
 pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     let lines: Vec<Value> = stream.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let blocks = |kind: &'static str| {
@@ -132,16 +132,17 @@ pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     let uses: Vec<&Value> = blocks("assistant").filter(read).collect();
     let end = lines.iter().rev().find(|l| l["type"] == "result");
     let said = || end.and_then(|e| e["result"].as_str()).map(|s| crate::tele::clean(s, 200));
-    let Some(use_) = uses.first() else {
+    let Some(first) = uses.first() else {
         let why = said().filter(|s| !s.is_empty()).unwrap_or("no reply at all".into());
         return Err(format!("the courier made no call: {why}"));
     };
-    if use_["name"] != "RemoteTrigger" || use_["input"] != *call {
+    let asked = |u: &&Value| u["name"] == "RemoteTrigger" && u["input"] == *call;
+    let Some(use_) = uses.iter().copied().find(asked) else {
         // Its words are whatever it read: the action alone, as an id is.
-        let action = use_["input"]["action"].as_str().unwrap_or("");
+        let action = first["input"]["action"].as_str().unwrap_or("");
         let action = if valid_id(&format!("a_{action}"), "a_") { action } else { "?" };
         return Err(format!("the courier tried another call ({action}), and the gate refused it"));
-    }
+    };
     let result = blocks("user")
         .find(|b| b["type"] == "tool_result" && b["tool_use_id"] == use_["id"])
         .ok_or("the courier's call has no result")?;
@@ -201,7 +202,7 @@ pub struct Pace {
     pub listed: Option<i64>,
     /// Since when something has been pending.
     pub pending: Option<i64>,
-    /// Rounds failed in a row.
+    /// Rounds in a row that could not list the routines.
     pub fails: u32,
 }
 

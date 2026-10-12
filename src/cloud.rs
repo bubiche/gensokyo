@@ -257,17 +257,22 @@ pub fn run_id(who: &str) -> Option<String> {
     valid_id(&id, "cse_").then_some(id)
 }
 
-/// A page of a `get_run_log` body, as a terminal may be shown it: its lines, with no control
-/// or hidden character left in them, then where the rest is when there is more.
+/// Text of many lines as a terminal may be shown it: no control or hidden character left in a
+/// line.
+fn lines(s: &str) -> Vec<String> {
+    let shown = |c: &char| !c.is_control() && !hidden(c);
+    s.trim_matches('\n')
+        .lines()
+        .map(|l| l.replace('\t', " ").chars().filter(shown).collect())
+        .collect()
+}
+
+/// A page of a `get_run_log` body, as a terminal may be shown it: its lines, then where the
+/// rest is when there is more.
 pub fn run_log(body: &str, id: &str) -> String {
     let (head, rest) = body.split_once('\n').unwrap_or((body, ""));
     let head: Value = serde_json::from_str(head).unwrap_or(Value::Null);
-    let shown = |c: &char| !c.is_control() && !hidden(c);
-    let mut out: Vec<String> = rest
-        .trim_matches('\n')
-        .lines()
-        .map(|l| l.replace('\t', " ").chars().filter(shown).collect())
-        .collect();
+    let mut out = lines(rest);
     if !head["next_cursor"].is_null() {
         let url = format!("{WEB}session_{}", id.trim_start_matches("cse_"));
         out.push(format!("(the log goes on past this page: {url})"));
@@ -280,19 +285,20 @@ pub fn run_log(body: &str, id: &str) -> String {
 pub fn routines(body: &str) -> Result<(Vec<Routine>, bool), String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("list: not JSON: {e}"))?;
     let data = v["data"].as_array().ok_or("list: no data")?;
-    let rs = data
-        .iter()
-        .filter(|r| r["id"].as_str().is_some_and(|id| valid_id(id, "trig_")))
-        .map(|r| Routine {
-            id: r["id"].as_str().unwrap_or_default().into(),
-            name: text(&r["name"], 80),
-            enabled: r["enabled"] == true,
-            cron: r["cron_expression"].as_str().filter(|c| !c.is_empty()).map(|c| plain(c, 80)),
-            next_run: epoch(&r["next_run_at"]),
-            last_fired: epoch(&r["last_fired_at"]),
-        })
-        .collect();
-    Ok((rs, v["has_more"] == true))
+    Ok((data.iter().filter_map(routine).collect(), v["has_more"] == true))
+}
+
+/// A routine from the API's own form of one, as `list` and every write's reply hold it.
+pub fn routine(r: &Value) -> Option<Routine> {
+    let id = r["id"].as_str().filter(|id| valid_id(id, "trig_"))?;
+    Some(Routine {
+        id: id.into(),
+        name: text(&r["name"], 80),
+        enabled: r["enabled"] == true,
+        cron: r["cron_expression"].as_str().filter(|c| !c.is_empty()).map(|c| plain(c, 80)),
+        next_run: epoch(&r["next_run_at"]),
+        last_fired: epoch(&r["last_fired_at"]),
+    })
 }
 
 /// The runs in a `list_runs` body, newest first as it gives them. One whose id or link is not
@@ -342,4 +348,244 @@ pub fn browse(url: &str) -> Result<(), String> {
 /// A routine's page.
 pub fn routine_link(id: &str) -> String {
     format!("{WEB}routines/{id}")
+}
+
+/// The model a routine runs on when none is named.
+pub const MODEL: &str = "claude-sonnet-5-5";
+
+/// The tools a routine's run is given. They do not hold back its connectors' tools: every one
+/// of those runs unasked, writes too.
+const TOOLS: [&str; 6] = ["Bash", "Read", "Write", "Edit", "Glob", "Grep"];
+
+/// The longest prompt a routine is made with: the courier's model copies the whole call out,
+/// and its gate allows that call only to the letter.
+pub const PROMPT_MOST: usize = 4000;
+
+/// A claude.ai connector a routine may be given, as the config names it:
+/// `CLOUD_CONNECTOR_<name>=<uuid> <url>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Connector {
+    pub name: String,
+    pub uuid: String,
+    pub url: String,
+}
+
+/// A connector from its config line, or why it is not one.
+pub fn connector(name: &str, value: &str) -> Result<Connector, String> {
+    let bad = |what: &str| {
+        format!("CLOUD_CONNECTOR_{name} in the config: {what} (it is `<uuid> <https url>`)")
+    };
+    let named = !name.is_empty()
+        && name.len() <= 64
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b));
+    if !named {
+        return Err(bad("a name is letters, digits, _ and - only"));
+    }
+    let mut parts = value.split_whitespace();
+    let (Some(uuid), Some(url), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(bad("not two words"));
+    };
+    let hex = uuid.len() == 36 && uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+    if !hex {
+        return Err(bad("not a uuid"));
+    }
+    if !url.starts_with("https://") || url.chars().any(|c| c.is_control() || hidden(&c)) {
+        return Err(bad("not an https url"));
+    }
+    Ok(Connector { name: name.into(), uuid: uuid.into(), url: url.into() })
+}
+
+/// A fresh v4 uuid, for the routine's first message.
+pub fn uuid4() -> std::io::Result<String> {
+    let mut b = [0u8; 16];
+    std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut b)?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Ok(format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]))
+}
+
+/// `org/repo`, from that or its GitHub link.
+fn repo(r: &str) -> Result<String, String> {
+    let r = r.trim().trim_end_matches('/').trim_end_matches(".git");
+    let r = r.strip_prefix("https://").unwrap_or(r);
+    let r = r.strip_prefix("github.com/").unwrap_or(r);
+    let ok = |p: &str| {
+        !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+    };
+    match r.split_once('/') {
+        Some((o, n)) if ok(o) && ok(n) => Ok(format!("{o}/{n}")),
+        _ => Err(format!("{r} is not a GitHub repository (org/repo)")),
+    }
+}
+
+/// The `create` call for a routine, paused: claude.ai makes it as gensokyo writes it here and
+/// nowhere else, with exactly the connectors named (none named would be every one).
+pub fn create(
+    a: &crate::proto::CloudAdd,
+    cron: &str,
+    env: &str,
+    conns: &[Connector],
+    uuid: &str,
+) -> Result<Value, String> {
+    let name = plain(&a.name, 200);
+    if name.is_empty() || name != a.name || name.chars().count() > 80 {
+        return Err("a routine's name is one line of at most 80 characters".into());
+    }
+    if a.prompt.trim().is_empty() || a.prompt.chars().count() > PROMPT_MOST {
+        return Err(format!("a routine's prompt is 1 to {PROMPT_MOST} characters"));
+    }
+    if !valid_id(env, "env_") {
+        return Err(format!("{env} is not an environment's id (env_…)"));
+    }
+    let model = a.model.as_deref().unwrap_or(MODEL);
+    if model.is_empty() || !model.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+    {
+        return Err(format!("{model} is not a model's id"));
+    }
+    let repos = a.repos.iter().map(|r| repo(r)).collect::<Result<Vec<_>, _>>()?;
+    let sources: Vec<Value> = repos
+        .iter()
+        .map(|r| json!({"git_repository": {"url": format!("https://github.com/{r}")}}))
+        .collect();
+    let conns: Vec<Value> = conns
+        .iter()
+        .map(|c| json!({"connector_uuid": c.uuid, "name": c.name, "url": c.url}))
+        .collect();
+    let first = json!({"uuid": uuid, "session_id": "", "type": "user", "parent_tool_use_id": null,
+        "message": {"content": a.prompt, "role": "user"}});
+    let body = json!({
+        "name": a.name,
+        "cron_expression": cron,
+        "enabled": false,
+        "mcp_connections": conns,
+        "job_config": {"ccr": {
+            "environment_id": env,
+            "session_context": {"model": model, "sources": sources, "allowed_tools": TOOLS},
+            "events": [{"data": first}],
+        }},
+    });
+    Ok(json!({"action": "create", "body": body}))
+}
+
+/// The routine in a write's or `get`'s reply: `{trigger: …}`, or the routine itself.
+pub fn trigger(body: &str) -> Result<Value, String> {
+    let v: Value = serde_json::from_str(body).map_err(|e| format!("not JSON: {e}"))?;
+    let t = if v["trigger"].is_object() { v["trigger"].clone() } else { v };
+    routine(&t).ok_or("no routine in the reply")?;
+    Ok(t)
+}
+
+/// The connectors a routine has, by uuid.
+pub fn connected(t: &Value) -> Vec<String> {
+    let all = t["mcp_connections"].as_array().into_iter().flatten();
+    let mut v: Vec<String> =
+        all.filter_map(|c| c["connector_uuid"].as_str()).map(|u| plain(u, 64)).collect();
+    v.sort();
+    v
+}
+
+/// What a routine is and does, as a terminal may be shown it: before the user runs or resumes
+/// one, and after one is made.
+pub fn about(t: &Value, tz: &jiff::tz::TimeZone) -> String {
+    let Some(r) = routine(t) else { return "no routine".into() };
+    let ctx = &t["job_config"]["ccr"]["session_context"];
+    let list = |v: &Value, f: &dyn Fn(&Value) -> &Value| {
+        let all = v.as_array().into_iter().flatten();
+        let names: Vec<String> = all.map(|x| text(f(x), 120)).filter(|s| !s.is_empty()).collect();
+        if names.is_empty() { "none".into() } else { names.join(", ") }
+    };
+    let repos = list(&ctx["sources"], &|s| &s["git_repository"]["url"]);
+    let conns = list(&t["mcp_connections"], &|c| &c["name"]);
+    let model = text(&ctx["model"], 80);
+    let schedule = match (&r.cron, r.next_run) {
+        (Some(c), Some(n)) => format!("{c} UTC, next {}", crate::ritual::when(n, tz)),
+        (Some(c), None) => format!("{c} UTC"),
+        (None, Some(n)) => format!("once, {}", crate::ritual::when(n, tz)),
+        (None, None) => "by hand".into(),
+    };
+    let mut out = vec![
+        format!("  routine     {}  ({})", r.name, if r.enabled { "on" } else { "paused" }),
+        format!("  schedule    {schedule}"),
+        format!("  model       {}", if model.is_empty() { "?".into() } else { model }),
+        format!("  repos       {repos}"),
+        format!("  connectors  {conns}"),
+        format!("  page        {}", routine_link(&r.id)),
+        "  prompt".into(),
+    ];
+    let prompt = t["derived_state"]["prompt"].as_str();
+    let first = &t["job_config"]["ccr"]["events"][0]["data"]["message"]["content"];
+    let prompt = prompt.or(first.as_str()).unwrap_or("");
+    out.extend(lines(prompt).into_iter().map(|l| format!("    {l}")));
+    if conns != "none" {
+        out.push(format!(
+            "  every tool of {conns} runs unasked, writes too: allowed tools do not hold them back"
+        ));
+    }
+    out.join("\n")
+}
+
+/// A cron in local time as claude.ai keeps routines: in UTC. Only when one UTC cron fires at
+/// exactly the same moments for a year from `now` (a zone that changes its clocks has none);
+/// and at most hourly, as claude.ai runs them.
+pub fn utc_cron(spec: &str, tz: &jiff::tz::TimeZone, now: i64) -> Result<String, String> {
+    use crate::cron::Schedule;
+    use jiff::tz::TimeZone;
+    use std::collections::BTreeSet;
+    let year = now + 366 * 86400;
+    let fires = Schedule::parse(spec)?.between(now, year, tz);
+    if fires.is_empty() {
+        return Err(format!("{spec} does not come round within a year"));
+    }
+    if fires.windows(2).any(|w| w[1] - w[0] < HOURLY) {
+        return Err(format!("{spec} comes round more often than claude.ai runs a routine: hourly"));
+    }
+    let at: Vec<jiff::Zoned> = fires
+        .iter()
+        .filter_map(|t| jiff::Timestamp::from_second(*t).ok())
+        .map(|t| t.to_zoned(TimeZone::UTC))
+        .collect();
+    let field = |f: &dyn Fn(&jiff::Zoned) -> i8, lo: i8, hi: i8| {
+        let set: BTreeSet<i8> = at.iter().map(f).collect();
+        if set.len() == (hi - lo + 1) as usize {
+            return "*".to_string();
+        }
+        // Runs of three or more as a range.
+        let mut out: Vec<String> = Vec::new();
+        let v: Vec<i8> = set.into_iter().collect();
+        let mut i = 0;
+        while i < v.len() {
+            let mut j = i;
+            while j + 1 < v.len() && v[j + 1] == v[j] + 1 {
+                j += 1;
+            }
+            match j - i {
+                0 => out.push(v[i].to_string()),
+                1 => out.extend([v[i].to_string(), v[j].to_string()]),
+                _ => out.push(format!("{}-{}", v[i], v[j])),
+            }
+            i = j + 1;
+        }
+        out.join(",")
+    };
+    let min = field(&|z| z.minute(), 0, 59);
+    let hour = field(&|z| z.hour(), 0, 23);
+    let day = field(&|z| z.day(), 1, 31);
+    let month = field(&|z| z.month(), 1, 12);
+    let week = field(&|z| z.weekday().to_sunday_zero_offset(), 0, 6);
+    let tries = [
+        format!("{min} {hour} * {month} *"),
+        format!("{min} {hour} * {month} {week}"),
+        format!("{min} {hour} {day} {month} *"),
+    ];
+    let same = |c: &String| {
+        Schedule::parse(c).is_ok_and(|s| s.between(now, year, &TimeZone::UTC) == fires)
+    };
+    tries.into_iter().find(same).ok_or_else(|| {
+        format!(
+            "{spec} has no UTC cron that keeps its local times all year, and claude.ai keeps a \
+             routine's schedule in UTC (a zone that changes its clocks has none; a day that \
+             crosses midnight in UTC needs a weekday, not a date)"
+        )
+    })
 }

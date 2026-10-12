@@ -14,6 +14,18 @@ Do not use the built-in `schedule` skill, `CronCreate`, or scheduled tasks for t
 somewhere else's clock; the user asked for something on **this** machine, and the residents,
 the notifications and the pausing all belong to gensokyo.
 
+**A ritual or a cloud routine.** A ritual runs here, so only while this machine is awake.
+- A job has to be a ritual when it needs any of these:
+  - this machine's files;
+  - a probe;
+  - a fire more often than hourly;
+  - a resident the user can watch and answer.
+- A job that must run while the Mac is off or asleep is a routine on claude.ai: the
+  `gensokyo-cloud` skill.
+- A job that needs only claude.ai connectors (Slack, Linear) and repositories on GitHub can be
+  either. Offer the user both, with the trade: a routine runs with the Mac shut, but nobody
+  answers it while it runs, and its connectors' tools run unasked, writes too.
+
 ## Confirm before you create anything
 
 A ritual runs unattended, so a wrong one is wrong every morning. Say back what you are about to
@@ -339,7 +351,7 @@ add` the same name, which shadows it and arrives paused.
   `gensokyo quit` or a sleeping laptop means no fire; the next start or wake runs the newest
   missed fire once, if it is under a week old (`--catch-up false` drops misses instead). Say so
   if the user is counting on something happening while the machine is off: that is a cloud
-  routine, not a ritual.
+  routine, which the `gensokyo-cloud` skill makes.
 - A ritual is one prompt on a schedule. Anything that needs to talk to another resident is the
   `gensokyo-peers` skill, and anything the user wants to fire off by hand at several residents
   at once is a spell card (`gensokyo broadcast`).

@@ -8,7 +8,7 @@ use super::shrine::{Shared, Shrine, touch};
 use super::store::write_atomic;
 use crate::cloud::{self, Pace, Routine, Run};
 use crate::paths;
-use crate::proto::{CloudWatch, RoutineInfo};
+use crate::proto::{CloudAct, CloudAdd, CloudWatch, RoutineInfo};
 use crate::ritual::{Dir, when};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,8 @@ pub(super) struct Watch {
     seen: Option<Seen>,
     /// Why the last round failed.
     failed: Option<String>,
+    /// A routine was changed from here: the next tick lists them again.
+    again: bool,
 }
 
 /// What has been seen of each routine and its runs.
@@ -97,10 +99,12 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
         }
         return;
     }
+    let catch = catch || sh.cloud.again;
     if sh.cloud.busy || !sh.cloud.pace.due(&sh.cloud.routines, now, catch) {
         return;
     }
     sh.cloud.busy = true;
+    sh.cloud.again = false;
     if sh.cloud.seen.is_none() {
         sh.cloud.seen = Some(load());
     }
@@ -299,6 +303,25 @@ pub(super) async fn run_log(shrine: &Shared, who: &str) -> Result<String, String
     }
 }
 
+/// A routine the watch has listed, by name or id.
+fn named<'a>(sh: &'a Shrine, who: &str) -> Result<&'a Routine, String> {
+    let r = sh.cloud.routines.iter().find(|r| r.id == who || r.name == who);
+    r.ok_or_else(|| format!("no routine {who} on claude.ai (gensokyo cloud lists them)"))
+}
+
+/// A routine's id: given, or by its name as the watch last listed it.
+fn routine_id(sh: &Shrine, who: &str) -> Result<String, String> {
+    if cloud::valid_id(who, "trig_") {
+        return Ok(who.into());
+    }
+    if !on() {
+        return Err("the cloud watch is off, so no routine is known by name: give its id \
+                    (trig_…, the end of its page's link), or turn it on (gensokyo cloud watch on)"
+            .into());
+    }
+    named(sh, who).map(|r| r.id.clone())
+}
+
 /// The newest run the watch has seen of a routine, by name or id.
 fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
     if !on() {
@@ -307,12 +330,132 @@ fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
              on (gensokyo cloud watch on)"
         ));
     }
-    let r = sh.cloud.routines.iter().find(|r| r.id == who || r.name == who);
-    let r =
-        r.ok_or_else(|| format!("no routine {who} on claude.ai (gensokyo cloud lists them)"))?;
+    let r = named(sh, who)?;
     let runs = sh.cloud.seen.as_ref().map(|s| &s.runs).into_iter().flatten();
     let mine = runs.filter(|(_, w)| w.routine == r.id).max_by_key(|(_, w)| w.created);
     mine.map(|(id, _)| id.clone()).ok_or_else(|| format!("{} has no run yet", r.name))
+}
+
+/// `cloud_add`: a routine made on claude.ai, paused, with the connectors named and no others.
+pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> {
+    let env = paths::config("CLOUD_ENV").ok_or(
+        "no cloud environment to run routines in: CLOUD_ENV=env_… in the config names it (Claude \
+         Code's /schedule lists them, outside gensokyo)",
+    )?;
+    let known = paths::configs("CLOUD_CONNECTOR_");
+    let mut conns = Vec::new();
+    for n in &a.connectors {
+        let v = known.get(n).ok_or_else(|| {
+            format!(
+                "no connector {n} in the config: CLOUD_CONNECTOR_{n}=<uuid> <url> names it \
+                 (Claude Code's /schedule lists them, outside gensokyo)"
+            )
+        })?;
+        if !conns.iter().any(|c: &cloud::Connector| c.name == *n) {
+            conns.push(cloud::connector(n, v)?);
+        }
+    }
+    let tz = TimeZone::system();
+    let cron = cloud::utc_cron(&a.schedule, &tz, super::rituals::now())?;
+    let uuid = cloud::uuid4().map_err(|e| format!("/dev/urandom: {e}"))?;
+    let call = cloud::create(&a, &cron, &env, &conns, &uuid)?;
+    let (code, body) = ask(shrine, call).await?;
+    let t = match code {
+        200 | 201 => cloud::trigger(&body)?,
+        403 if body.contains("repo_access_denied") => {
+            return Err(
+                "claude.ai cannot reach a repository it names: the Claude GitHub App goes \
+                        on each one (claude.ai/code shows how)"
+                    .into(),
+            );
+        }
+        _ => return Err(format!("create: HTTP {code}: {}", cloud::error_of(&body))),
+    };
+    let r = cloud::routine(&t).ok_or("no routine in the reply")?;
+    landed(shrine, &r);
+    let mut want: Vec<String> = conns.iter().map(|c| c.uuid.clone()).collect();
+    want.sort();
+    if r.enabled || cloud::connected(&t) != want {
+        return Err(format!(
+            "{} was made, but not as asked ({}): fix or delete it before it runs, at {}",
+            r.name,
+            if r.enabled { "it is on" } else { "it has other connectors" },
+            cloud::routine_link(&r.id)
+        ));
+    }
+    Ok(format!(
+        "made {name}, paused, from {} local: it runs once the user resumes it (gensokyo cloud \
+         resume {name})\n{}",
+        a.schedule,
+        cloud::about(&t, &tz),
+        name = r.name,
+    ))
+}
+
+/// `cloud_show`: a routine as claude.ai has it now.
+pub(super) async fn show(shrine: &Shared, who: &str) -> Result<String, String> {
+    let id = routine_id(&shrine.borrow(), who)?;
+    let (code, body) = ask(shrine, json!({"action": "get", "trigger_id": id})).await?;
+    match code {
+        200 => Ok(cloud::about(&cloud::trigger(&body)?, &TimeZone::system())),
+        404 => Err(format!("{who} is gone from claude.ai")),
+        _ => Err(format!("get: HTTP {code}: {}", cloud::error_of(&body))),
+    }
+}
+
+/// `cloud_act`: a routine paused, resumed, or run now.
+pub(super) async fn act(shrine: &Shared, who: &str, act: CloudAct) -> Result<String, String> {
+    let id = routine_id(&shrine.borrow(), who)?;
+    let call = match act {
+        CloudAct::Pause => {
+            json!({"action": "update", "trigger_id": id, "body": {"enabled": false}})
+        }
+        CloudAct::Resume => {
+            json!({"action": "update", "trigger_id": id, "body": {"enabled": true}})
+        }
+        CloudAct::Run => json!({"action": "run", "trigger_id": id}),
+    };
+    let verb = call["action"].as_str().unwrap_or_default().to_string();
+    let (code, body) = ask(shrine, call).await?;
+    match code {
+        200 => {}
+        404 => return Err(format!("{who} is gone from claude.ai")),
+        _ => return Err(format!("{verb}: HTTP {code}: {}", cloud::error_of(&body))),
+    }
+    let t = cloud::trigger(&body)?;
+    let r = cloud::routine(&t).ok_or("no routine in the reply")?;
+    landed(shrine, &r);
+    let tz = TimeZone::system();
+    Ok(match act {
+        CloudAct::Pause => format!("paused {}", r.name),
+        CloudAct::Resume => match r.next_run {
+            Some(t) => format!("resumed {}: next run {}", r.name, when(t, &tz)),
+            None => format!("resumed {}", r.name),
+        },
+        CloudAct::Run => {
+            let v: Value = serde_json::from_str(&body).unwrap_or_default();
+            let run = v["session_id"].as_str().and_then(cloud::run_id);
+            match run.as_deref().and_then(|id| id.strip_prefix("cse_")) {
+                Some(s) => format!("{} runs now: {}session_{s}", r.name, cloud::WEB),
+                None => format!("{} runs now: {}", r.name, cloud::routine_link(&r.id)),
+            }
+        }
+    })
+}
+
+/// A routine as a write left it, in the timetable at once; the watch lists them all again.
+fn landed(shrine: &Shared, r: &Routine) {
+    let mut sh = shrine.borrow_mut();
+    if !on() {
+        return;
+    }
+    match sh.cloud.routines.iter_mut().find(|x| x.id == r.id) {
+        Some(x) => *x = r.clone(),
+        None => sh.cloud.routines.push(r.clone()),
+    }
+    sh.cloud.again = true;
+    drop(sh);
+    super::rituals::repush(shrine);
 }
 
 /// One courier, for one call: the API's reply to it, or why there is none.

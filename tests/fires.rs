@@ -409,7 +409,7 @@ fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
     let args = std::fs::read_to_string(d.dir.join("stub/print.args")).unwrap();
     assert!(
         args.starts_with(
-            "-p --output-format json --disallowed-tools CronCreate CronList CronDelete"
+            "-p --output-format json --disallowed-tools CronCreate CronList CronDelete RemoteTrigger"
         ),
         "{args}"
     );

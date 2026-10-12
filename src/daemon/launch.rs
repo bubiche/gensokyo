@@ -6,8 +6,9 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Refused in every resident: CronCreate schedules into a store that dies with the session, and
-/// with it gone CronList and CronDelete can only ever answer "nothing scheduled".
-const DISALLOWED: [&str; 3] = ["CronCreate", "CronList", "CronDelete"];
+/// with it gone CronList and CronDelete can only ever answer "nothing scheduled". RemoteTrigger
+/// would make, run and resume routines on claude.ai with none of `gensokyo cloud`'s checks.
+pub const DISALLOWED: [&str; 4] = ["CronCreate", "CronList", "CronDelete", "RemoteTrigger"];
 
 pub struct Options<'a> {
     /// The resident's id, which its hooks and status line report under.
@@ -156,9 +157,10 @@ pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
          by name, but never compose the first message of an exchange you want an answer to \
          yourself: use the `gensokyo-peers` skill to write it. For any standing or repeating \
          schedule, and to answer any question about what is scheduled or to change one, use the \
-         `gensokyo-ritual` skill and never the built-in `schedule` skill, CronCreate or scheduled \
-         tasks; a schedule here is read on this machine's own clock, so never convert a time you \
-         are given to UTC. {role}"
+         `gensokyo-ritual` skill (or `gensokyo-cloud`, for a routine on claude.ai that runs while \
+         this machine is off) and never the built-in `schedule` skill, CronCreate, RemoteTrigger \
+         or scheduled tasks; both take times on this machine's own clock, so never convert a time \
+         you are given to UTC. {role}"
     )
 }
 

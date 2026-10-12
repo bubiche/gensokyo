@@ -44,6 +44,14 @@ pub fn config(key: &str) -> Option<String> {
     hits.next_back().map(|(_, v)| v.into())
 }
 
+/// Every `<prefix><name>=value` in the config file, by name, the last line for a name winning.
+pub fn configs(prefix: &str) -> std::collections::BTreeMap<String, String> {
+    let text = std::fs::read_to_string(config_dir().join("config")).unwrap_or_default();
+    let lines = text.lines().filter(|l| !l.starts_with('#'));
+    let pairs = lines.filter_map(|l| l.split_once('='));
+    pairs.filter_map(|(k, v)| Some((k.strip_prefix(prefix)?.to_string(), v.to_string()))).collect()
+}
+
 /// `KEY=value` in the config file: every line that sets `key` says `value` now, or a line for it
 /// goes at the end; the rest stays as it was, comments too. A config that is a link (into a
 /// dotfiles repo, say) is written where it points.

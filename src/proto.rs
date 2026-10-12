@@ -129,6 +129,20 @@ pub enum Request {
     CloudLog {
         who: String,
     },
+    /// A routine made on claude.ai, paused; answered with `done`. The daemon writes the
+    /// routine from these fields, and only these.
+    CloudAdd(CloudAdd),
+    /// A routine as claude.ai has it: its schedule, model, repos, connectors and prompt.
+    /// Answered with `done`.
+    CloudShow {
+        who: String,
+    },
+    /// A routine paused, resumed or run now; answered with `done`. Resume and run are the
+    /// user's alone.
+    CloudAct {
+        who: String,
+        act: CloudAct,
+    },
     /// A ritual fired now, paused, resumed or deleted; answered with `done`.
     Ritual {
         verb: RitualVerb,
@@ -414,6 +428,28 @@ pub struct Card {
     pub summary: String,
     /// `peer: required`: cast at one resident, with a peer.
     pub pair: bool,
+}
+
+/// A routine to make: `schedule` is cron in local time, which the daemon turns into
+/// claude.ai's UTC; `connectors` are names from the config's `CLOUD_CONNECTOR_<name>` lines.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudAdd {
+    pub name: String,
+    pub schedule: String,
+    pub prompt: String,
+    pub repos: Vec<String>,
+    pub connectors: Vec<String>,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudAct {
+    Pause,
+    Resume,
+    /// Fire it now, paused or not, as claude.ai does.
+    Run,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

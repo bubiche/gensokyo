@@ -421,7 +421,10 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             Request::Banish { .. }
             | Request::Close { .. }
             | Request::Cast(_)
-            | Request::CloudLog { .. } => {
+            | Request::CloudLog { .. }
+            | Request::CloudAdd(_)
+            | Request::CloudShow { .. }
+            | Request::CloudAct { .. } => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
@@ -429,6 +432,11 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                         Request::Close { who } => close(&shrine, &who).await,
                         Request::Cast(c) => cards::cast(&shrine, c, caller.as_deref()).await,
                         Request::CloudLog { who } => super::cloud::run_log(&shrine, &who).await,
+                        Request::CloudAdd(a) => super::cloud::add(&shrine, a).await,
+                        Request::CloudShow { who } => super::cloud::show(&shrine, &who).await,
+                        Request::CloudAct { who, act } => {
+                            super::cloud::act(&shrine, &who, act).await
+                        }
                         _ => unreachable!("matched above"),
                     };
                     send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
@@ -654,6 +662,12 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
             Some(format!(
                 "the user runs and resumes rituals, after reading what {name} may do; tell them \
                  it is ready"
+            ))
+        }
+        Request::CloudAct { act: proto::CloudAct::Run | proto::CloudAct::Resume, who } => {
+            Some(format!(
+                "the user runs and resumes routines, after reading what {who} does (gensokyo \
+                 cloud show); tell them it is ready"
             ))
         }
         Request::CloudLog { .. } => Some(

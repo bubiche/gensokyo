@@ -63,8 +63,15 @@ fn summon_launches_claude_with_our_argv_and_env() {
     let argv: Vec<&str> =
         rec["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
     assert_eq!(
-        argv[..5],
-        ["--disallowed-tools", "CronCreate", "CronList", "CronDelete", "--settings"]
+        argv[..6],
+        [
+            "--disallowed-tools",
+            "CronCreate",
+            "CronList",
+            "CronDelete",
+            "RemoteTrigger",
+            "--settings"
+        ]
     );
     assert_eq!(argv[argv.len() - 2..], ["--", "hello there"]);
     let at = |f: &str| argv[argv.iter().position(|a| *a == f).unwrap() + 1];

@@ -456,6 +456,43 @@ Rituals fire only while the daemon runs, and on a machine that is awake. A lapto
 shut through a fire makes it up at the next tick after it wakes. A run keeps the Mac awake while
 it goes (`Ctrl-] w`); a ritual waiting for its time does not.
 
+## Cloud routines
+
+A Claude Code **routine** is a prompt that claude.ai runs on its own schedule, in a cloud session,
+with the GitHub repositories and claude.ai connectors it is given. It runs while the Mac is off,
+but nothing on the Mac is within its reach. It reports through what it does: a Slack message, a
+PR comment. gensokyo makes routines, watches them and links you to their runs. It never
+carries what a run read.
+
+```sh
+gensokyo cloud watch on              # off until you say: each look is a short haiku `claude -p`
+gensokyo cloud                       # the routines, their next runs and newest run's link
+gensokyo cloud add digest --schedule "0 9 * * 1-5" --prompt-file p.md --connector Slack
+gensokyo cloud show digest           # its schedule, model, repos, connectors and prompt
+gensokyo cloud resume digest         # shows it, asks, then starts it; also pause, run
+gensokyo cloud open [digest]         # its newest run in the browser, to read or continue
+gensokyo cloud log digest            # a page of its newest run's log
+```
+
+- **The watch.** With it on, the daemon lists the routines hourly and after each one's time.
+  Their runs show in the timetable as `☁` rows, and a turn that ends rings with its link.
+- **Couriers.** Every call to claude.ai is a courier: a `claude -p` given only the
+  `RemoteTrigger` tool and a hook that allows that one call. The reply is read from the tool's
+  own result. gensokyo holds no token.
+- **What `add` makes.**
+  - The schedule is cron in local time. It is turned into the one UTC cron that keeps it all
+    year, or refused when there is none.
+  - The routine arrives **paused**, with exactly the connectors named.
+  - Every tool of each connector runs unasked, writes too.
+- **The config.** `add` needs `CLOUD_ENV=env_…`, the cloud environment, and a
+  `CLOUD_CONNECTOR_<name>=<uuid> <url>` line for each connector. Claude Code's `/schedule`,
+  outside gensokyo, lists both.
+- **Residents.**
+  - They make routines through the `gensokyo-cloud` skill, and may show and pause them.
+  - Resuming, running and reading a log are yours.
+  - `RemoteTrigger` is turned off for residents.
+- **Deleting** a routine, or editing one, is done on the web, at claude.ai/code/routines.
+
 ## Helpers
 
 Ask a resident to *"get a couple of helpers to …"* and its `gensokyo-lead` skill summons other
@@ -491,16 +528,17 @@ Almost nothing, on purpose: a resident's context window is your budget. Each is 
 without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
 `--append-system-prompt`: the name it lives under, that the first message of an exchange with
 another session is the `gensokyo-peers` skill's to write, that standing schedules are
-gensokyo's (Claude Code's own `CronCreate`, `CronList` and `CronDelete` are turned off for
-residents and headless runs), and that helpers are the `gensokyo-lead` skill's. A helper hears
+gensokyo's (Claude Code's own `CronCreate`, `CronList`, `CronDelete` and `RemoteTrigger` are
+turned off for residents and headless runs), and that helpers are the `gensokyo-lead` skill's. A helper hears
 instead who its lead is, and that its last message is its report. A [role](#roles) and words of
 your own come after that paragraph, only when you ask for them. A lead whose conversation a
 `/compact` or `/clear` has just taken is told its helpers again, in one line each: its name,
 whether it is working, resting, at a dialog or departed, where it works, and whether a turn it
-ended has not been read. That is all: nothing a helper wrote, and nothing for anyone else. The three skills carry what a
+ended has not been read. That is all: nothing a helper wrote, and nothing for anyone else. The four skills carry what a
 click cannot: `gensokyo-peers` writes an opening message that says who is asking, what is
 wanted, the round cap and the reply address; `gensokyo-ritual` turns "every weekday at 9:05"
-into a ritual file; `gensokyo-lead` briefs helpers, waits on them and reads their reports. Only
+into a ritual file; `gensokyo-cloud` makes a routine on claude.ai, paused; `gensokyo-lead`
+briefs helpers, waits on them and reads their reports. Only
 a skill's description sits in a resident's context; the rest is read when it is used.
 
 ## Scripting
@@ -522,6 +560,7 @@ gensokyo broadcast status-report all    # cast a spell card
 gensokyo wait Marisa Sanae --any        # until they have news: a turn ended, a dialog, gone
 gensokyo read Marisa [--screen]         # its last answer, kept after it leaves; or its screen
 gensokyo ritual …                       # the rituals (above)
+gensokyo cloud …                        # the routines on claude.ai (above)
 gensokyo quit                           # everyone /exit, then the daemon stops
 gensokyo restart                        # a new daemon, the same residents
 gensokyo awake [on|off]                 # keep the Mac awake while residents work; alone, whom for

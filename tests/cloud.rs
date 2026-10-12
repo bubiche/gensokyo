@@ -553,3 +553,263 @@ fn the_routines_are_listed_and_opened_from_what_the_watch_saw_and_a_log_is_the_u
     let by_link = common::out(&d.cli(&["cloud", "log", "https://claude.ai/code/session_A"]));
     assert_eq!(by_link, log);
 }
+
+#[test]
+fn a_local_schedule_becomes_the_one_utc_cron_that_keeps_it_all_year_or_none() {
+    let tz = |n: &str| jiff::tz::TimeZone::get(n).unwrap();
+    let utc = |spec: &str, zone: &str| cloud::utc_cron(spec, &tz(zone), T0);
+    let saigon = "Asia/Ho_Chi_Minh";
+    assert_eq!(utc("0 9 * * 1-5", saigon).unwrap(), "0 2 * * 1-5");
+    // Across midnight the weekdays move with it.
+    assert_eq!(utc("30 6 * * 1-5", saigon).unwrap(), "30 23 * * 0-4");
+    assert_eq!(utc("0 6 * * 1,3", saigon).unwrap(), "0 23 * * 0,2");
+    assert_eq!(utc("@daily", saigon).unwrap(), "0 17 * * *");
+    assert_eq!(utc("0 */6 * * *", saigon).unwrap(), "0 5,11,17,23 * * *");
+    assert_eq!(utc("0 9 * * *", "Asia/Kolkata").unwrap(), "30 3 * * *");
+    assert_eq!(utc("0 9 15 * *", saigon).unwrap(), "0 2 15 * *");
+    assert_eq!(utc("@hourly", "UTC").unwrap(), "0 * * * *");
+    // A date that crosses midnight has no cron; nor has a zone that changes its clocks.
+    assert!(utc("0 6 1 * *", saigon).unwrap_err().contains("no UTC cron"));
+    assert!(utc("0 9 * * *", "America/New_York").unwrap_err().contains("no UTC cron"));
+    assert!(utc("*/30 * * * *", saigon).unwrap_err().contains("hourly"));
+    assert!(utc("0 9 30 2 *", saigon).unwrap_err().contains("within a year"));
+    assert!(utc("nonsense", saigon).is_err());
+}
+
+fn add(name: &str, prompt: &str) -> gensokyo::proto::CloudAdd {
+    gensokyo::proto::CloudAdd {
+        name: name.into(),
+        schedule: "0 9 * * 1-5".into(),
+        prompt: prompt.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_routine_is_made_paused_with_the_connectors_named_and_no_others() {
+    let slack =
+        cloud::connector("Slack", "ff53db50-7833-41f6-b8bd-846f5123e9d3 https://mcp.slack.com/mcp");
+    let slack = slack.unwrap();
+    let mut a = add("digest", "Say \"hi\" in #me.\nThen stop.");
+    a.repos = vec!["https://github.com/org/app.git".into(), "org/lib".into()];
+    let call =
+        cloud::create(&a, "0 2 * * 1-5", "env_01X", std::slice::from_ref(&slack), "u-1").unwrap();
+    assert_eq!(call["action"], "create");
+    let b = &call["body"];
+    assert_eq!((b["name"].as_str(), b["enabled"].as_bool()), (Some("digest"), Some(false)));
+    assert_eq!(b["cron_expression"], "0 2 * * 1-5");
+    assert_eq!(
+        b["mcp_connections"],
+        json!([{"connector_uuid": slack.uuid, "name": "Slack", "url": "https://mcp.slack.com/mcp"}])
+    );
+    let ccr = &b["job_config"]["ccr"];
+    assert_eq!(ccr["environment_id"], "env_01X");
+    assert_eq!(ccr["session_context"]["model"], cloud::MODEL);
+    assert_eq!(
+        ccr["session_context"]["sources"],
+        json!([{"git_repository": {"url": "https://github.com/org/app"}},
+            {"git_repository": {"url": "https://github.com/org/lib"}}])
+    );
+    let first = &ccr["events"][0]["data"];
+    assert_eq!(first["message"], json!({"content": a.prompt, "role": "user"}));
+    assert_eq!((first["uuid"].as_str(), first["session_id"].as_str()), (Some("u-1"), Some("")));
+    // None named is none, said so: left out, claude.ai would give it every one.
+    let bare = cloud::create(&add("d", "p"), "0 2 * * *", "env_01X", &[], "u").unwrap();
+    assert_eq!(bare["body"]["mcp_connections"], json!([]));
+
+    let no = |a: &gensokyo::proto::CloudAdd, env: &str| {
+        cloud::create(a, "0 2 * * *", env, &[], "u").unwrap_err()
+    };
+    assert!(no(&add("", "p"), "env_1").contains("name"));
+    assert!(no(&add("a\nb", "p"), "env_1").contains("name"));
+    assert!(no(&add("a\u{202e}b", "p"), "env_1").contains("name"));
+    assert!(no(&add("d", " "), "env_1").contains("prompt"));
+    assert!(no(&add("d", &"x".repeat(cloud::PROMPT_MOST + 1)), "env_1").contains("prompt"));
+    assert!(no(&add("d", "p"), "env_\"x").contains("environment"));
+    let mut a = add("d", "p");
+    a.repos = vec!["org/app;rm".into()];
+    assert!(no(&a, "env_1").contains("not a GitHub repository"));
+    a.repos = vec![];
+    a.model = Some("x y".into());
+    assert!(no(&a, "env_1").contains("model"));
+
+    for bad in [
+        "uuid https://x",
+        "ff53db50-7833-41f6-b8bd-846f5123e9d3",
+        "ff53db50-7833-41f6-b8bd-846f5123e9d3 http://x",
+    ] {
+        assert!(cloud::connector("Slack", bad).is_err(), "{bad}");
+    }
+    assert!(cloud::connector("Sl ack", "ff53db50-7833-41f6-b8bd-846f5123e9d3 https://x").is_err());
+    let u = cloud::uuid4().unwrap();
+    assert!(u.len() == 36 && u.as_bytes()[14] == b'4' && u != cloud::uuid4().unwrap(), "{u}");
+}
+
+/// A routine as claude.ai gives one back: in a write's reply, or `get`'s.
+fn trigger(id: &str, name: &str, enabled: bool, conns: &[(&str, &str)]) -> Value {
+    let conns: Vec<Value> = conns
+        .iter()
+        .map(|(n, u)| json!({"connector_uuid": u, "name": n, "url": "https://x", "permitted_tools": []}))
+        .collect();
+    json!({"id": format!("trig_{id}"), "name": name, "enabled": enabled,
+        "cron_expression": "0 2 * * 1-5", "next_run_at": at(T0 + 7200),
+        "mcp_connections": conns,
+        "derived_state": {"prompt": "Read #me.\nPost a \u{1b}[31msummary\u{202e}."},
+        "job_config": {"ccr": {"session_context": {"model": "claude-sonnet-5-5",
+            "sources": [{"git_repository": {"url": "https://github.com/org/app"}}]}}}})
+}
+
+/// The last call a courier made but the watch's own.
+fn wrote(d: &common::Daemon) -> Value {
+    let all = std::fs::read_to_string(d.dir.join("stub/courier.json")).unwrap();
+    let mut calls = all.lines().map(|l| serde_json::from_str::<Value>(l).unwrap());
+    calls.rfind(|c| !c["action"].as_str().unwrap().starts_with("list")).unwrap()
+}
+
+const SLACK: &str = "ff53db50-7833-41f6-b8bd-846f5123e9d3";
+
+#[test]
+fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_it() {
+    let d = watching("make", true, &[("TZ", "Asia/Ho_Chi_Minh")]);
+    let conf = d.dir.join("conf/config");
+    let prompt = d.dir.join("prompt.md");
+    std::fs::write(&prompt, "Read \"#me\".\nPost what needs me.").unwrap();
+    let p = prompt.display().to_string();
+    let adding = |extra: &[&str]| {
+        let mut a =
+            vec!["cloud", "add", "digest", "--schedule", "0 9 * * 1-5", "--prompt-file", &p];
+        a.extend(extra);
+        d.command(&a).stdin(Stdio::null()).output().unwrap()
+    };
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 200, runs(&[]));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+
+    // What it needs is the user's to name, in the config; and nothing is spent without it.
+    let o = adding(&["--connector", "Slack"]);
+    assert!(common::err(&o).contains("CLOUD_ENV=env_"), "{}", common::err(&o));
+    std::fs::write(&conf, "CLOUD_WATCH=on\nCLOUD_ENV=env_01X\n").unwrap();
+    let o = adding(&["--connector", "Slack"]);
+    assert!(common::err(&o).contains("CLOUD_CONNECTOR_Slack=<uuid> <url>"), "{}", common::err(&o));
+    std::fs::write(
+        &conf,
+        format!("CLOUD_WATCH=on\nCLOUD_ENV=env_01X\nCLOUD_CONNECTOR_Slack={SLACK} https://mcp.slack.com/mcp\n"),
+    )
+    .unwrap();
+    assert_eq!(calls(&d).len(), 2);
+
+    // Made from a resident too, paused, at the UTC of the local time asked.
+    let made = json!({"outcome": "CREATE_TRIGGER_OUTCOME_CREATED",
+        "trigger": trigger("N", "digest", false, &[("Slack", SLACK)])});
+    answer(&d, "create", 200, made);
+    let o = d
+        .command(&[
+            "cloud",
+            "add",
+            "digest",
+            "--schedule",
+            "0 9 * * 1-5",
+            "--prompt-file",
+            &p,
+            "--connector",
+            "Slack",
+        ])
+        .env("GENSOKYO_RESIDENT", "x")
+        .output()
+        .unwrap();
+    let said = common::out(&o);
+    assert!(o.status.success(), "{}", common::err(&o));
+    assert!(said.starts_with("made digest, paused, from 0 9 * * 1-5 local"), "{said}");
+    assert!(said.contains("0 2 * * 1-5 UTC, next 2026-09-22 00:00"), "{said}");
+    assert!(
+        said.contains("connectors  Slack") && said.contains("every tool of Slack runs"),
+        "{said}"
+    );
+    // Nothing a terminal would act on, from what claude.ai keeps.
+    assert!(said.contains("    Post a [31msummary.") && !said.contains('\u{1b}'), "{said}");
+    let body = &wrote(&d)["body"];
+    assert_eq!(
+        (body["enabled"].as_bool(), body["cron_expression"].as_str()),
+        (Some(false), Some("0 2 * * 1-5"))
+    );
+    assert_eq!(body["mcp_connections"][0]["connector_uuid"], SLACK);
+    let content = &body["job_config"]["ccr"]["events"][0]["data"]["message"]["content"];
+    assert_eq!(content, "Read \"#me\".\nPost what needs me.");
+    // The watch lists them all again, now.
+    common::wait(|| calls(&d).iter().filter(|c| *c == "list").count() == 2, "a list after");
+
+    // Given more than it was asked for, it says so, with where to fix it.
+    let more =
+        json!({"trigger": trigger("N", "digest", false, &[("Slack", SLACK), ("Linear", "0000")])});
+    answer(&d, "create", 200, more);
+    let o = adding(&["--connector", "Slack"]);
+    assert!(
+        common::err(&o).contains("not as asked (it has other connectors)"),
+        "{}",
+        common::err(&o)
+    );
+    assert!(common::err(&o).contains("https://claude.ai/code/routines/trig_N"));
+    let denied = json!({"type": "error", "error": {"type": "permission_error",
+        "message": "You don't have access to a repository this routine uses.", "sub_reason": "repo_access_denied"}});
+    answer(&d, "create", 403, denied);
+    let o = adding(&["--repo", "org/app"]);
+    assert!(common::err(&o).contains("Claude GitHub App"), "{}", common::err(&o));
+
+    // Paused by anyone, by name.
+    answer(&d, "update-trig_R1", 200, json!({"trigger": trigger("R1", "morning", false, &[])}));
+    let o =
+        d.command(&["cloud", "pause", "morning"]).env("GENSOKYO_RESIDENT", "x").output().unwrap();
+    assert_eq!(common::out(&o), "paused morning\n", "{}", common::err(&o));
+    assert_eq!(
+        wrote(&d),
+        json!({"action": "update", "trigger_id": "trig_R1", "body": {"enabled": false}})
+    );
+
+    // Resumed and run only by the user, and only once they have read it. (The watch lists them
+    // again after each change, in between.)
+    let asked = |d: &common::Daemon| {
+        calls(d).into_iter().filter(|c| !c.starts_with("list")).collect::<Vec<_>>()
+    };
+    let n = asked(&d).len();
+    for verb in ["resume", "run"] {
+        let o =
+            d.command(&["cloud", verb, "morning", "--yes"]).env("GENSOKYO_RESIDENT", "x").output();
+        assert!(common::err(&o.unwrap()).contains("the user runs and resumes routines"));
+    }
+    // Nor by a resident's own request.
+    let s = std::os::unix::net::UnixStream::connect(d.socket()).unwrap();
+    let mut w2 = s.try_clone().unwrap();
+    let mut back = std::io::BufRead::lines(std::io::BufReader::new(s));
+    let hello =
+        json!({"t": "hello", "proto": gensokyo::proto::PROTO, "who": "cli", "resident": "x"});
+    writeln!(w2, "{hello}").unwrap();
+    common::next(&mut back);
+    writeln!(w2, "{}", json!({"t": "cloud_act", "id": 7, "who": "morning", "act": "run"})).unwrap();
+    let r = common::next(&mut back);
+    assert!(r["error"].as_str().unwrap().contains("the user runs and resumes routines"), "{r}");
+    assert_eq!(asked(&d).len(), n);
+
+    answer(&d, "get-trig_R1", 200, trigger("R1", "morning", false, &[]));
+    let o = d.command(&["cloud", "resume", "morning"]).stdin(Stdio::null()).output().unwrap();
+    assert!(common::out(&o).contains("routine     morning  (paused)"), "{}", common::out(&o));
+    assert!(common::err(&o).contains("no terminal to ask"), "{}", common::err(&o));
+    assert_eq!(asked(&d)[n..], ["get trig_R1"]);
+
+    answer(&d, "update-trig_R1", 200, json!({"trigger": trigger("R1", "morning", true, &[])}));
+    let o = common::out(&d.cli(&["cloud", "resume", "morning", "--yes"]));
+    assert!(o.contains("repos       https://github.com/org/app"), "{o}");
+    assert!(o.ends_with("resumed morning: next run 2026-09-22 00:00\n"), "{o}");
+    assert_eq!(wrote(&d)["body"], json!({"enabled": true}));
+    let fired = json!({"session_id": "cse_F1", "trigger": trigger("R1", "morning", true, &[])});
+    answer(&d, "run-trig_R1", 200, fired);
+    let o = common::out(&d.cli(&["cloud", "run", "trig_R1", "--yes"]));
+    assert!(o.ends_with("morning runs now: https://claude.ai/code/session_F1\n"), "{o}");
+    assert_eq!(wrote(&d), json!({"action": "run", "trigger_id": "trig_R1"}));
+
+    // With the watch off no name is known, and an id still does.
+    d.cli(&["cloud", "watch", "off"]);
+    let o = d.command(&["cloud", "pause", "morning"]).output().unwrap();
+    assert!(common::err(&o).contains("give its id (trig_"), "{}", common::err(&o));
+    assert_eq!(common::out(&d.cli(&["cloud", "pause", "trig_R1"])), "paused morning\n");
+}

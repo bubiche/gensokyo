@@ -78,7 +78,7 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
     );
     let mut cmd = tokio::process::Command::new(&claude);
     cmd.args(["-p", "--output-format", "json", "--disallowed-tools"])
-        .args(["CronCreate", "CronList", "CronDelete"])
+        .args(super::launch::DISALLOWED)
         .args(&args)
         .arg("--")
         .arg(&prompt)

@@ -3,8 +3,10 @@
 use super::{Error, request, say};
 use crate::cloud;
 use crate::paths;
-use crate::proto::{CloudWatch, Reply, Request, RoutineInfo};
+use crate::proto::{CloudAct, CloudAdd, CloudWatch, Reply, Request, RoutineInfo};
 use clap::Subcommand;
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum Cmd {
@@ -32,6 +34,47 @@ pub enum Cmd {
         /// A routine's name or id, for its newest run; or a run's id or link
         who: String,
     },
+    /// Make a routine on claude.ai, paused: it runs once the user resumes it
+    ///
+    /// The schedule is cron in this Mac's time, as a ritual's; claude.ai keeps it in UTC, and
+    /// runs a routine at most hourly. A connector is named as a `CLOUD_CONNECTOR_<name>=<uuid>
+    /// <url>` line in the config names it, and every tool of each runs unasked, writes too.
+    /// `CLOUD_ENV=env_…` in the config names the cloud environment runs start in.
+    Add {
+        name: String,
+        /// Five cron fields in local time, or @daily and the like
+        #[arg(long)]
+        schedule: String,
+        /// The routine's prompt: everything its run is told, so it says where to report
+        #[arg(long)]
+        prompt_file: PathBuf,
+        /// A GitHub repository its run checks out (org/repo); again for more
+        #[arg(long = "repo")]
+        repos: Vec<String>,
+        /// A connector it is given; again for more. None named, it gets none
+        #[arg(long = "connector")]
+        connectors: Vec<String>,
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// A routine as claude.ai has it: schedule, model, repos, connectors and prompt
+    Show { routine: String },
+    /// Pause a routine: it fires no more until resumed
+    Pause { routine: String },
+    /// Resume a routine, after showing what it does; the user's alone
+    Resume {
+        routine: String,
+        /// Without asking first
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run a routine now, paused or not, after showing what it does; the user's alone
+    Run {
+        routine: String,
+        /// Without asking first
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
@@ -40,12 +83,56 @@ pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
         Cmd::Watch { to } => watch(to.as_deref()),
         Cmd::Open { routine } => open(routine.as_deref()),
         Cmd::Log { who } => say(request(Request::CloudLog { who }, false)),
+        Cmd::Add { name, schedule, prompt_file, repos, connectors, model } => {
+            let prompt = std::fs::read_to_string(&prompt_file)
+                .map_err(|e| format!("{}: {e}", prompt_file.display()))?;
+            let a = CloudAdd { name, schedule, prompt, repos, connectors, model };
+            say(request(Request::CloudAdd(a), false))
+        }
+        Cmd::Show { routine } => say(request(Request::CloudShow { who: routine }, false)),
+        Cmd::Pause { routine } => act(routine, CloudAct::Pause, true),
+        Cmd::Resume { routine, yes } => act(routine, CloudAct::Resume, yes),
+        Cmd::Run { routine, yes } => act(routine, CloudAct::Run, yes),
     }
+}
+
+/// A routine paused, or, once the user has read what it does and said so, resumed or run.
+fn act(who: String, act: CloudAct, yes: bool) -> Result<(), String> {
+    let doing = || request(Request::CloudAct { who: who.clone(), act }, false);
+    if act == CloudAct::Pause {
+        return say(doing());
+    }
+    if resident() {
+        return Err(format!(
+            "the user runs and resumes routines, after reading what {who} does (gensokyo cloud \
+             show); tell them it is ready"
+        ));
+    }
+    say(request(Request::CloudShow { who: who.clone() }, false))?;
+    if !yes {
+        let q = if act == CloudAct::Run { "run it now" } else { "resume it" };
+        if !std::io::stdin().is_terminal() {
+            return Err(format!("no terminal to ask, so it is left as it was (--yes to {q})"));
+        }
+        print!("{q}? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut answer);
+        if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+            println!("left as it was");
+            return Ok(());
+        }
+    }
+    say(doing())
+}
+
+fn resident() -> bool {
+    std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|r| !r.is_empty())
 }
 
 fn watch(to: Option<&str>) -> Result<(), String> {
     if let Some(v) = to {
-        if std::env::var_os("GENSOKYO_RESIDENT").is_some_and(|r| !r.is_empty()) {
+        if resident() {
             return Err("the cloud watch spends the user's plan: theirs to turn on or off".into());
         }
         paths::set_config("CLOUD_WATCH", v).map_err(|e| format!("the config: {e}"))?;

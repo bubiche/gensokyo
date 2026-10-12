@@ -614,12 +614,16 @@ pub(super) fn come_back(
     // The session its hooks last named, which /clear moves on. One that never got a prompt has
     // nothing to resume: it starts afresh on that session, with the same name.
     let resume = launch::has_conversation(&rec.session);
+    // Taken over from a cloud run, while still on the session the run was copied into (one
+    // `/clear` started is gensokyo's from its first prompt): copied when there is nothing yet,
+    // and its prompt built afresh at every start.
+    let teleport = rec.teleport.as_deref().filter(|_| rec.session == rec.id);
     // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
     // it, so a role file gone since does not keep it away; a fresh start would go without, as
-    // would one taken over, whose prompt is built afresh at every start.
+    // would one taken over.
     let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())).transpose() {
         Ok(found) => found,
-        Err(e) if !resume || rec.teleport.is_some() => {
+        Err(e) if !resume || teleport.is_some() => {
             return Err(format!("{} cannot come back: {e}", rec.name));
         }
         Err(e) => {
@@ -640,7 +644,7 @@ pub(super) fn come_back(
         lead: lead.as_deref(),
         role: role.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
-        teleport: rec.teleport.as_deref(),
+        teleport,
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
     Ok((program, argv, handle, resume))

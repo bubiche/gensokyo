@@ -183,7 +183,8 @@ fn tell(sh: &mut Shrine, name: &str, text: &str) {
 /// The routines listed, then the runs of each that fired or has one going. What is seen is
 /// kept after each routine, so a round that fails part way tells nothing twice; and one
 /// routine's failure (a run's title can lead its courier astray), the first returned, holds up
-/// none of the others, nor the next look at them. Only a failure to list is backed off from.
+/// none of the others: it is looked at again as a run going would be. Only a failure to list
+/// is backed off from.
 async fn round(shrine: &Shared, now: i64) -> Result<Option<String>, String> {
     let (code, body) = ask(shrine, json!({"action": "list"})).await?;
     if code != 200 {
@@ -242,7 +243,8 @@ async fn round(shrine: &Shared, now: i64) -> Result<Option<String>, String> {
     let late = |r: &Routine| r.next_run.is_some_and(|t| t <= now && now - t < OVERDUE_MOST);
     let overdue = routines.iter().any(|r| r.enabled && late(r));
     let p = &mut shrine.borrow_mut().cloud.pace;
-    p.pending = (going || overdue || awaited).then(|| p.pending.unwrap_or(now));
+    let again = going || overdue || awaited || failed.is_some();
+    p.pending = again.then(|| p.pending.unwrap_or(now));
     Ok(failed)
 }
 

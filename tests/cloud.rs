@@ -457,6 +457,19 @@ fn a_courier_that_tries_another_call_is_stopped_by_its_gate() {
     assert_eq!(failed, "the courier tried another call (run), and the gate refused it");
 }
 
+/// A fired routine whose runs could not be read is looked at again a minute on, not at the hour.
+#[test]
+fn a_routine_whose_runs_could_not_be_read_is_looked_at_again_soon() {
+    let d = watching("again", true, &[]);
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 500, json!({"error": {"message": "overloaded"}}));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 - 90)]));
+    clock(&d, T0 + 180);
+    rounds(&d, 4);
+}
+
 #[test]
 fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_still_told() {
     let d = watching("apart", true, &[]);
@@ -469,7 +482,8 @@ fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_stil
     rounds(&d, 3);
     let failed = d.log().into_iter().filter(|e| e["routine"] == "trig_R1").count();
     assert_eq!(failed, 1);
-    // R2 fires, and its run is not listed yet; R1 still fails, and slows the look at R2 none.
+    // R2 fires, and its run is not listed yet.
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("X", "idle", T0 - 90)]));
     let mut fired = both(T0 + 3601);
     fired["data"][1]["next_run_at"] = json!(at(T0 + 7200));
     answer(&d, "list", 200, fired);
@@ -483,13 +497,12 @@ fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_stil
         200,
         runs(&[("B", "starting", T0 + 3650), ("A", "idle", T0 - 90)]),
     );
-    // A minute on, no gap in the ticking: the look at a run pending.
-    clock(&d, T0 + 3725);
-    rounds(&d, 9);
+    clock(&d, T0 + 3730);
+    rounds(&d, 8);
     assert_eq!(told(&d), Vec::<String>::new());
     answer(&d, "list_runs-trig_R2", 200, runs(&[("B", "idle", T0 + 3790), ("A", "idle", T0 - 90)]));
     clock(&d, T0 + 3800);
-    rounds(&d, 12);
+    rounds(&d, 10);
     assert_eq!(told(&d), ["nR2: finished https://claude.ai/code/session_B"]);
 }
 
@@ -911,7 +924,7 @@ fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends(
     // not lost to it.
     // It fired long ago, so its runs are read, and the words come while they are.
     answer(&d, "list", 200, routines(T0 + 7200, T0 + 100));
-    std::fs::write(d.dir.join("stub/courier.sleep"), "2").unwrap();
+    std::fs::write(d.dir.join("stub/courier.sleep"), "5").unwrap();
     clock(&d, T0 + 3720);
     common::wait(|| calls(&d).len() == 4, "a round reading the runs");
     let said = common::out(&d.cli(&["cloud", "say", "morning", "-v, and then stop"]));
@@ -1015,6 +1028,15 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
     assert_eq!(after(&a, "--teleport"), None);
     assert!(after(&a, "--resume").is_some(), "{a:?}");
     assert_eq!(fresh(&a), 1, "every launch, not only the first: {a:?}");
+    // A session `/clear` moved it on to is gensokyo's own: with nothing in it, it starts afresh.
+    let moved = "33333333-4444-4555-8666-777777777777";
+    let hook = json!({"t": "hook", "id": 0, "resident": r["resident"]["id"],
+                      "hook": {"event": "SessionStart", "session": moved, "at": i64::MAX / 2}});
+    let (mut w, mut lines) = d.connect();
+    writeln!(w, "{hook}\n{}", json!({"t": "list", "id": 2})).unwrap();
+    assert_eq!(common::next(&mut lines)["t"], "list");
+    let a = back("Taker", &r).unwrap();
+    assert_eq!((after(&a, "--teleport"), fresh(&a)), (None, 0), "{a:?}");
     // Its prompt is built afresh even then, so a role file gone since keeps it away.
     let role = d.dir.join("mine.md");
     std::fs::write(&role, "Only read.").unwrap();

@@ -156,6 +156,7 @@ fn summon(stage: Stage) -> Modal {
             .into(),
         role: 5,
         words: if stage == Stage::Role { "focus on the SQL layer".into() } else { String::new() },
+        run: String::new(),
         worktree: if stage == Stage::Worktree { "fix-login".into() } else { String::new() },
         error: (stage == Stage::Name).then(|| "Yuyu is already here".into()),
         waiting: false,

@@ -496,7 +496,8 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
     yours.
   - `RemoteTrigger` is turned off for residents, and for any `claude` a resident starts by
     name.
-- **Taking a run over.** `new --teleport` copies a run's conversation into a resident here,
+- **Taking a run over.** `new --teleport`, or in the summon dialog the role list's last
+  entry, "a cloud run, taken over", copies a run's conversation into a resident here,
   in the directory you summon it in (a checkout of the run's repository, for one that has
   one). The run goes on by itself on claude.ai. The resident has a resident's tools and hooks,
   but teleport leaves gensokyo's words out of its system prompt.

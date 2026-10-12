@@ -950,8 +950,8 @@ fn the_role_stage_sends_the_role_picked_and_the_words_typed() {
     let Some(Modal::Summon(s)) = &mut a.m.modal else { panic!("no summon modal") };
     assert_eq!((s.stage, s.role), (Stage::Role, 0), "none is picked first");
     s.roles = vec!["debugger".into(), "reviewer".into()];
-    // Down past the end stays on the last; Up comes back one.
-    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[A");
+    // Down past the end stays on the last, the cloud run; Up comes back one at a time.
+    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[A\x1b[A");
     host(&mut a, b"mind the SQL");
     host(&mut a, b"\x1b[200~ layer\nonly\n\x1b[201~");
     host(&mut a, b"\r");
@@ -959,6 +959,57 @@ fn the_role_stage_sends_the_role_picked_and_the_words_typed() {
     assert_eq!(kinds(&out), ["summon"]);
     assert_eq!(out[0]["role"], "debugger", "{}", out[0]);
     assert_eq!(out[0]["system_prompt"], "mind the SQL layer only", "{}", out[0]);
+}
+
+/// Last in the role list, a cloud run taken over: what is typed names the run, and it goes
+/// with no role and no words, which teleport would drop. The words typed for a role stay its.
+#[test]
+fn the_role_stage_takes_a_cloud_run_over_instead_of_a_role() {
+    let mut a = shrine();
+    let digest = RoutineInfo { name: "digest".into(), ..Default::default() };
+    let cloud = CloudWatch { listed: Some(1), failing: None, routines: vec![digest] };
+    a.m.cloud = Some(cloud);
+    host(&mut a, b"\x1dn");
+    sent(&mut a);
+    host(&mut a, b"/\r\r");
+    let Some(Modal::Summon(s)) = &mut a.m.modal else { panic!("no summon modal") };
+    s.roles = vec!["debugger".into()];
+    host(&mut a, b"\x1b[B");
+    host(&mut a, b"mind the SQL");
+    // Down past the end stays on the cloud run.
+    host(&mut a, b"\x1b[B\x1b[B");
+    let rows = screen(&mut a);
+    for want in ["› a cloud run, taken over", "run: ", "routines: digest"] {
+        assert!(rows.iter().any(|l| l.contains(want)), "{want}: {rows:#?}");
+    }
+    assert!(!rows.iter().any(|l| l.contains("your words")));
+    sent(&mut a);
+    host(&mut a, b"\r");
+    assert!(sent(&mut a).is_empty(), "no run named, nothing sent");
+    let error = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => s.error.clone(),
+        _ => None,
+    };
+    assert_eq!(error(&a).as_deref(), Some("name the run: its link or id, or a routine"));
+    host(&mut a, b"\x1b[200~digest\n\x1b[201~");
+    assert_eq!(error(&a), None);
+    host(&mut a, b"\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["summon"]);
+    assert_eq!(out[0]["teleport"], "digest", "{}", out[0]);
+    assert!(out[0].get("role").is_none() && out[0].get("system_prompt").is_none(), "{}", out[0]);
+    let id = out[0]["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Error { id, error: "no routine or run digest".into() });
+    assert_eq!(error(&a).as_deref(), Some("no routine or run digest"));
+
+    // Back on the role: its words are as typed, and no run goes with them.
+    host(&mut a, b"\x1b[A\r");
+    let out = sent(&mut a);
+    assert_eq!(
+        (&out[0]["role"], &out[0]["system_prompt"]),
+        (&json!("debugger"), &json!("mind the SQL"))
+    );
+    assert!(out[0].get("teleport").is_none(), "{}", out[0]);
 }
 
 #[test]

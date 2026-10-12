@@ -11,6 +11,7 @@ expression: modal_box(&m).backend()
 "│   implementer                                                    │"
 "│   researcher                                                     │"
 "│ › reviewer                                                       │"
+"│   a cloud run, taken over                                        │"
 "│ your words: focus on the SQL layer                               │"
 "│ ↑↓ a role, and what you type goes with it into its system prompt │"
 "│ [summon ⏎] [cancel esc]                                          │"

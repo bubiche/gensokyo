@@ -59,7 +59,9 @@ struct Seen {
 #[serde(default)]
 pub(super) struct Watched {
     pub(super) routine: String,
-    pub(super) worker: String,
+    /// Its turn has ended: the worker is `idle`, or the session no longer `active`. Anything
+    /// else (running, starting, a state not seen yet) is watched until it says so.
+    pub(super) ended: bool,
     pub(super) created: i64,
     /// The last event of the turn whose end was told, or was found ended at first sight.
     told: Option<i64>,
@@ -133,42 +135,73 @@ fn tell(sh: &mut Shrine, name: &str, text: &str) {
 }
 
 /// The routines listed, then the runs of each that fired or has one going. What is seen is
-/// kept after each routine, so a round that fails part way tells nothing twice.
+/// kept after each routine, so a round that fails part way tells nothing twice; and one
+/// routine's failure (a run's title can lead its courier astray) holds up none of the others.
 async fn round(shrine: &Shared, now: i64) -> Result<(), String> {
     let (code, body) = ask(shrine, json!({"action": "list"})).await?;
     if code != 200 {
         return Err(format!("list: HTTP {code}: {}", cloud::error_of(&body)));
     }
-    let routines = cloud::routines(&body)?;
+    let (routines, more) = cloud::routines(&body)?;
     let mut seen = shrine.borrow().cloud.seen.clone().unwrap_or_default();
-    seen.routines.retain(|id, _| routines.iter().any(|r| &r.id == id));
-    seen.runs.retain(|_, w| routines.iter().any(|r| r.id == w.routine));
+    // Only a whole list says what is gone: one on a later page would come back as new, and
+    // what had ended by then would never be told.
+    if more {
+        log(json!({"ev": "cloud", "more": "the list has more pages than its first"}));
+    } else {
+        seen.routines.retain(|id, _| routines.iter().any(|r| &r.id == id));
+        seen.runs.retain(|_, w| routines.iter().any(|r| r.id == w.routine));
+    }
     shrine.borrow_mut().cloud.routines = routines.clone();
+    let (mut failed, mut awaited) = (None, false);
     for r in &routines {
         let key = (r.last_fired, r.next_run);
         let first = !seen.routines.contains_key(&r.id);
         let fired = seen.routines.get(&r.id).is_some_and(|k| *k != key);
-        let going = seen.runs.values().any(|w| w.routine == r.id && w.worker == "running");
+        let going = seen.runs.values().any(|w| w.routine == r.id && !w.ended);
         if first || fired || going {
-            let call = json!({"action": "list_runs", "trigger_id": r.id});
-            let (code, body) = ask(shrine, call).await?;
-            match code {
-                200 => see(shrine, &mut seen, r, &cloud::runs(&body)?, first, now),
+            match runs_of(shrine, r).await {
+                Ok(Some(runs)) => {
+                    see(shrine, &mut seen, r, &runs, first, now);
+                    // A fire is listed a moment before its run: until that is seen, the fire
+                    // is looked for again, for as long as a late fire is.
+                    let since = r.last_fired.map(|t| t - cloud::MARGIN);
+                    let shown = runs.iter().any(|x| since.is_none_or(|t| x.created >= t));
+                    let old = r.last_fired.is_none_or(|t| now - t >= OVERDUE_MOST);
+                    if fired && !shown && !old {
+                        awaited = true;
+                        continue;
+                    }
+                }
                 // Deleted since the list: the next one leaves it out.
-                404 => continue,
-                _ => return Err(format!("list_runs: HTTP {code}: {}", cloud::error_of(&body))),
+                Ok(None) => {}
+                Err(e) => {
+                    log(json!({"ev": "cloud", "routine": r.id, "failed": e}));
+                    failed.get_or_insert(format!("{}: {e}", r.name));
+                    continue;
+                }
             }
         }
         seen.routines.insert(r.id.clone(), key);
         keep(shrine, &seen);
     }
     keep(shrine, &seen);
-    let going = seen.runs.values().any(|w| w.worker == "running");
+    let going = seen.runs.values().any(|w| !w.ended);
     let late = |r: &Routine| r.next_run.is_some_and(|t| t <= now && now - t < OVERDUE_MOST);
     let overdue = routines.iter().any(|r| r.enabled && late(r));
     let p = &mut shrine.borrow_mut().cloud.pace;
-    p.pending = (going || overdue).then(|| p.pending.unwrap_or(now));
-    Ok(())
+    p.pending = (going || overdue || awaited).then(|| p.pending.unwrap_or(now));
+    failed.map_or(Ok(()), Err)
+}
+
+/// A routine's newest runs; none when it has been deleted.
+async fn runs_of(shrine: &Shared, r: &Routine) -> Result<Option<Vec<Run>>, String> {
+    let (code, body) = ask(shrine, json!({"action": "list_runs", "trigger_id": r.id})).await?;
+    match code {
+        200 => cloud::runs(&body).map(Some),
+        404 => Ok(None),
+        _ => Err(format!("list_runs: HTTP {code}: {}", cloud::error_of(&body))),
+    }
 }
 
 fn keep(shrine: &Shared, seen: &Seen) {
@@ -193,10 +226,10 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
             }
             Watched { routine: r.id.clone(), created: run.created, ..Default::default() }
         });
-        (w.worker, w.url) = (run.worker.clone(), run.url.clone());
         // `idle` is all a turn's end has been seen to say; a session that is no longer
         // `active` has ended too, however.
         let ended = run.worker == "idle" || run.status != "active";
+        (w.ended, w.url) = (ended, run.url.clone());
         if !ended || w.told == Some(run.last_event) {
             continue;
         }
@@ -238,8 +271,10 @@ async fn ask(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
     let pid = child.id().map_or(0, |p| p as i32);
     let out = tokio::time::timeout(COURIER_LIMIT, child.wait_with_output()).await;
     // What it started and left behind goes with it, as a headless run's does.
-    // SAFETY: plain killpg on the courier's own group (`process_group(0)`).
-    unsafe { libc::killpg(pid, libc::SIGKILL) };
+    if pid > 0 {
+        // SAFETY: plain killpg on the courier's own group (`process_group(0)`).
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+    }
     let out = match out {
         Ok(o) => o.map_err(|e| format!("the courier: {e}"))?,
         Err(_) => return Err(format!("a courier took over {}s", COURIER_LIMIT.as_secs())),

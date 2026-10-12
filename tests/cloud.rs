@@ -33,7 +33,7 @@ fn the_reply_is_the_tools_own_result_for_the_call_asked() {
     let list = json!({"action": "list"});
     let (code, body) = cloud::reply(&fixture("cloud-stream-list.jsonl"), &list).unwrap();
     assert_eq!((code, body.as_str()), (200, r#"{"data":[],"has_more":false}"#));
-    assert_eq!(cloud::routines(&body).unwrap(), []);
+    assert_eq!(cloud::routines(&body).unwrap(), (vec![], false));
     // Content in blocks, as a tool result may also come.
     let blocks =
         json!([{"type": "text", "text": "HTTP 404\n{\"error\": {\"message\": \"gone\"}}"}]);
@@ -45,16 +45,20 @@ fn the_reply_is_the_tools_own_result_for_the_call_asked() {
 fn a_courier_that_strays_from_its_one_call_gets_no_reply() {
     let list = json!({"action": "list"});
     let deny = fixture("cloud-stream-deny.jsonl");
-    // It called create when sent for list: whatever came back is not list's.
+    // It called create when sent for list: whatever came back is not list's, and what it
+    // wrote is not repeated, only the action.
     let e = cloud::reply(&deny, &list).unwrap_err();
-    assert!(e.starts_with("the courier made another call: "), "{e}");
+    assert_eq!(e, "the courier tried another call (create), and the gate refused it");
     // Sent for that create, the gate's refusal is the result.
     let create = json!({"action": "create", "body": {}});
     let e = cloud::reply(&deny, &create).unwrap_err();
     assert!(e.contains("hook error: gate: create not allowed"), "{e}");
     let ok = json!("HTTP 200\n{}");
-    let twice = stream(&[(list.clone(), ok.clone()), (list.clone(), ok.clone())]);
-    assert_eq!(cloud::reply(&twice, &list).unwrap_err(), "the courier made 2 calls, not one");
+    // A second call met the gate; the first was the one asked for, and stands.
+    let then = stream(&[(list.clone(), ok.clone()), (json!({"action": "run"}), json!("denied"))]);
+    assert_eq!(cloud::reply(&then, &list).unwrap(), (200, "{}".into()));
+    let first = stream(&[(json!({"action": "run"}), json!("denied")), (list.clone(), ok.clone())]);
+    assert!(cloud::reply(&first, &list).is_err());
     let extra = json!({"action": "list", "trigger_id": "trig_x"});
     assert!(cloud::reply(&stream(&[(extra, ok)]), &list).is_err());
     let none = stream(&[]);
@@ -80,8 +84,9 @@ fn the_gate_allows_the_one_call_and_nothing_else() {
     assert!(cloud::gate(&p("Bash", call.clone()), &call).is_some());
 }
 
-/// The gate's command from a courier's `--settings`, run by a shell as Claude Code runs it.
-fn run_gate(args: &[String], payload: &Value) -> String {
+/// The gate's command from a courier's `--settings`, run by a shell as Claude Code runs it: its
+/// exit status and what it printed.
+fn gate_says(args: &[String], payload: &Value) -> (Option<i32>, String) {
     let at = args.iter().position(|a| a == "--settings").unwrap();
     let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
     let hook = &settings["hooks"]["PreToolUse"][0];
@@ -95,8 +100,13 @@ fn run_gate(args: &[String], payload: &Value) -> String {
         .unwrap();
     c.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
     let out = c.wait_with_output().unwrap();
-    assert!(out.status.success());
-    String::from_utf8(out.stdout).unwrap()
+    (out.status.code(), String::from_utf8(out.stdout).unwrap())
+}
+
+fn run_gate(args: &[String], payload: &Value) -> String {
+    let (code, out) = gate_says(args, payload);
+    assert_eq!(code, Some(0));
+    out
 }
 
 #[test]
@@ -128,6 +138,11 @@ fn the_courier_carries_its_gate_and_nothing_else() {
         (&out["hookEventName"], &out["permissionDecision"]),
         (&json!("PreToolUse"), &json!("deny"))
     );
+    // A gate that cannot run (gensokyo moved by an update) blocks: any status but 2 would let
+    // the call through.
+    let gone = cloud::args(&call, "/nonexistent/gensokyo");
+    assert_eq!(gate_says(&gone, &p(call.clone())).0, Some(2));
+    assert!(args.windows(2).any(|w| w[0] == "--max-turns"));
     // Nothing it can read, and no call to allow: refused either way.
     let bad = Command::new(common::BIN).arg("_gate").stdin(Stdio::null()).output().unwrap();
     assert!(String::from_utf8_lossy(&bad.stdout).contains("\"deny\""));
@@ -138,11 +153,12 @@ fn routines_and_runs_from_their_bodies_and_nothing_that_is_not_an_id_or_a_link()
     let list = json!({"data": [
         {"id": "trig_01KGA", "name": "morning slack", "enabled": true, "cron_expression": "0 2 * * 1-5",
          "next_run_at": "2026-10-13T02:00:41.373491206Z", "last_fired_at": "2026-10-12T02:00:39Z"},
-        {"id": "trig_01B", "name": "once", "enabled": false, "cron_expression": "",
+        {"id": "trig_01B", "name": "on\u{202e}ce\u{200b}", "enabled": false, "cron_expression": "",
          "next_run_at": null},
         {"id": "trig_$(rm)", "name": "bad", "enabled": true},
     ], "has_more": false});
-    let rs = cloud::routines(&list.to_string()).unwrap();
+    let (rs, more) = cloud::routines(&list.to_string()).unwrap();
+    assert!(!more);
     assert_eq!(
         rs,
         [
@@ -204,6 +220,9 @@ fn the_watch_looks_when_a_fire_comes_while_one_goes_and_hourly_else() {
     let failed = |fails| Pace { listed: Some(t), pending: None, fails };
     assert!(!failed(1).due(&[], t + 119, false) && failed(1).due(&[], t + 120, false));
     assert!(!failed(3).due(&[], t + 479, false) && failed(3).due(&[], t + 480, false));
+    // Failing, a run still going waits for the retry too.
+    let both = Pace { listed: Some(t), pending: Some(t - 1200), fails: 2 };
+    assert!(!both.due(&[], t + 239, false) && both.due(&[], t + 240, false));
 }
 
 /// On the hour, UTC.
@@ -265,9 +284,20 @@ fn at(t: i64) -> String {
 }
 
 fn routines(next: i64, fired: i64) -> Value {
-    json!({"data": [{"id": "trig_R1", "name": "morning", "enabled": true,
-        "cron_expression": "0 * * * *", "next_run_at": at(next), "last_fired_at": at(fired)}],
-        "has_more": false})
+    listing(&[("R1", next, fired)], false)
+}
+
+/// Routines by id (`trig_<id>`, named `n<id>`), each with its next run and its last fire.
+fn listing(rs: &[(&str, i64, i64)], more: bool) -> Value {
+    let data: Vec<Value> = rs
+        .iter()
+        .map(|(id, next, fired)| {
+            let name = if *id == "R1" { "morning".into() } else { format!("n{id}") };
+            json!({"id": format!("trig_{id}"), "name": name, "enabled": true,
+                "cron_expression": "0 * * * *", "next_run_at": at(*next), "last_fired_at": at(*fired)})
+        })
+        .collect();
+    json!({"data": data, "has_more": more})
 }
 
 /// A routine's newest runs: id, worker status, last event.
@@ -352,13 +382,19 @@ fn a_routine_or_a_run_deleted_on_the_web_is_dropped_quietly() {
     answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "running", T0 - 90)]));
     d.cli(&["list"]);
     rounds(&d, 2);
-    // The run went with the routine.
-    answer(&d, "list", 200, json!({"data": [], "has_more": false}));
+    // Missing from a first page that is not the whole list, it is kept.
+    let seen = || std::fs::read_to_string(d.dir.join("cloud/seen.json")).unwrap();
+    answer(&d, "list", 200, json!({"data": [], "has_more": true}));
     clock(&d, T0 + 3700);
     rounds(&d, 3);
+    assert!(seen().contains("cse_A") && seen().contains("trig_R1"), "{}", seen());
+    // The run went with the routine.
+    answer(&d, "list", 200, json!({"data": [], "has_more": false}));
     clock(&d, T0 + 7400);
     rounds(&d, 4);
-    assert_eq!(calls(&d)[2..], ["list", "list"]);
+    clock(&d, T0 + 11000);
+    rounds(&d, 5);
+    assert_eq!(calls(&d)[2..], ["list", "list", "list"]);
     assert_eq!(told(&d), Vec::<String>::new());
     let seen = std::fs::read_to_string(d.dir.join("cloud/seen.json")).unwrap();
     assert!(!seen.contains("cse_A") && !seen.contains("trig_R1"), "{seen}");
@@ -391,5 +427,41 @@ fn a_courier_that_tries_another_call_is_stopped_by_its_gate() {
     assert!(d.dir.join("stub/gate.denied").exists());
     let failed = d.log().into_iter().find(|e| e["ev"] == "cloud" && !e["failed"].is_null());
     let failed = failed.unwrap()["failed"].as_str().unwrap().to_string();
-    assert!(failed.starts_with("the courier made another call: "), "{failed}");
+    assert_eq!(failed, "the courier tried another call (run), and the gate refused it");
+}
+
+#[test]
+fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_still_told() {
+    let d = watching("apart", true, &[]);
+    let both =
+        |r2_fired| listing(&[("R1", T0 + 3600, T0 - 100), ("R2", T0 + 3600, r2_fired)], false);
+    answer(&d, "list", 200, both(T0 - 100));
+    answer(&d, "list_runs-trig_R1", 500, json!({"error": {"message": "overloaded"}}));
+    answer(&d, "list_runs-trig_R2", 200, runs(&[("A", "idle", T0 - 90)]));
+    d.cli(&["list"]);
+    rounds(&d, 3);
+    let failed = d.log().into_iter().filter(|e| e["routine"] == "trig_R1").count();
+    assert_eq!(failed, 1);
+    // R2 fires, and its run is not listed yet.
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("X", "idle", T0 - 90)]));
+    let mut fired = both(T0 + 3601);
+    fired["data"][1]["next_run_at"] = json!(at(T0 + 7200));
+    answer(&d, "list", 200, fired);
+    clock(&d, T0 + 3665);
+    rounds(&d, 6);
+    assert_eq!(calls(&d)[3..], ["list", "list_runs trig_R1", "list_runs trig_R2"]);
+    // It is looked for again; it comes in a state not seen before, and is watched.
+    answer(
+        &d,
+        "list_runs-trig_R2",
+        200,
+        runs(&[("B", "starting", T0 + 3650), ("A", "idle", T0 - 90)]),
+    );
+    clock(&d, T0 + 3730);
+    rounds(&d, 8);
+    assert_eq!(told(&d), Vec::<String>::new());
+    answer(&d, "list_runs-trig_R2", 200, runs(&[("B", "idle", T0 + 3790), ("A", "idle", T0 - 90)]));
+    clock(&d, T0 + 3800);
+    rounds(&d, 10);
+    assert_eq!(told(&d), ["nR2: finished https://claude.ai/code/session_B"]);
 }

@@ -30,9 +30,12 @@ pub fn prompt(call: &Value) -> String {
 }
 
 /// The courier's flags, after `claude`: one tool, no MCP servers, no skills, no transcript
-/// left behind, a budget, nobody to ask, and the gate. `exe` is gensokyo, which the gate runs.
+/// left behind, a budget, a few turns, nobody to ask, and the gate. `exe` is gensokyo, which
+/// the gate runs.
 pub fn args(call: &Value, exe: &str) -> Vec<String> {
-    let gate = format!("{} _gate {}", sh_quote(exe), sh_quote(&call.to_string()));
+    // Claude Code lets a call through when its hook fails any way but exit 2 (2.1.296: a gate
+    // that could not be found let `list` run), so a gate that cannot run refuses.
+    let gate = format!("{} _gate {} || exit 2", sh_quote(exe), sh_quote(&call.to_string()));
     let settings = json!({"hooks": {"PreToolUse": [
         {"matcher": "*", "hooks": [{"type": "command", "command": gate}]}
     ]}});
@@ -54,6 +57,8 @@ pub fn args(call: &Value, exe: &str) -> Vec<String> {
         "RemoteTrigger",
         "--permission-prompts",
         "none",
+        "--max-turns",
+        "3",
         "--max-budget-usd",
         BUDGET,
         "--settings",
@@ -96,8 +101,8 @@ pub fn gate_main(call: &str) {
 }
 
 /// From a courier's stream-json: the API's reply to `call`, its HTTP status and its body as the
-/// tool gave it. Only from a `tool_use` whose input is the call, and only when that is the one
-/// call made.
+/// tool gave it. Only from the first `tool_use`, and only when its input is the call: any call
+/// after it met the gate, which allows nothing else.
 pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     let lines: Vec<Value> = stream.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let blocks = |kind: &'static str| {
@@ -109,16 +114,15 @@ pub fn reply(stream: &str, call: &Value) -> Result<(u16, String), String> {
     let uses: Vec<&Value> = blocks("assistant").filter(|b| b["type"] == "tool_use").collect();
     let end = lines.iter().rev().find(|l| l["type"] == "result");
     let said = || end.and_then(|e| e["result"].as_str()).map(|s| crate::tele::clean(s, 200));
-    let use_ = match uses.as_slice() {
-        [] => {
-            let why = said().filter(|s| !s.is_empty()).unwrap_or("no reply at all".into());
-            return Err(format!("the courier made no call: {why}"));
-        }
-        [u] => *u,
-        _ => return Err(format!("the courier made {} calls, not one", uses.len())),
+    let Some(use_) = uses.first() else {
+        let why = said().filter(|s| !s.is_empty()).unwrap_or("no reply at all".into());
+        return Err(format!("the courier made no call: {why}"));
     };
     if use_["name"] != "RemoteTrigger" || use_["input"] != *call {
-        return Err(format!("the courier made another call: {}", use_["input"]));
+        // Its words are whatever it read: the action alone, as an id is.
+        let action = use_["input"]["action"].as_str().unwrap_or("");
+        let action = if valid_id(&format!("a_{action}"), "a_") { action } else { "?" };
+        return Err(format!("the courier tried another call ({action}), and the gate refused it"));
     }
     let result = blocks("user")
         .find(|b| b["type"] == "tool_result" && b["tool_use_id"] == use_["id"])
@@ -179,7 +183,9 @@ impl Pace {
     pub fn due(&self, routines: &[Routine], now: i64, catch: bool) -> bool {
         let Some(at) = self.listed else { return true };
         let since = now - at;
-        let poll = self.pending.map(|p| ((now - p) / 2).clamp(POLL_LEAST, POLL_MOST));
+        // Failing, the retry's own back-off says when.
+        let poll = self.pending.filter(|_| self.fails == 0);
+        let poll = poll.map(|p| ((now - p) / 2).clamp(POLL_LEAST, POLL_MOST));
         let retry = (self.fails > 0).then(|| (POLL_LEAST << self.fails.min(6)).min(HOURLY));
         let mut fires = routines.iter().filter(|r| r.enabled).filter_map(|r| r.next_run);
         catch
@@ -222,15 +228,21 @@ fn epoch(v: &Value) -> Option<i64> {
     v.as_str()?.parse::<jiff::Timestamp>().ok().map(|t| t.as_second())
 }
 
+/// A name or title, one line of it, with nothing that could reorder or hide what is shown next
+/// to it: bidi controls and zero-width marks go too.
 fn text(v: &Value, max: usize) -> String {
-    crate::tele::clean(v.as_str().unwrap_or(""), max)
+    let hidden =
+        |c: &char| matches!(*c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069);
+    let s: String = v.as_str().unwrap_or("").chars().filter(|c| !hidden(c)).collect();
+    crate::tele::clean(&s, max)
 }
 
-/// The routines in a `list` body. One whose id is not an id is left out.
-pub fn routines(body: &str) -> Result<Vec<Routine>, String> {
+/// The routines in a `list` body, and whether there are more than it holds. One whose id is not
+/// an id is left out.
+pub fn routines(body: &str) -> Result<(Vec<Routine>, bool), String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("list: not JSON: {e}"))?;
     let data = v["data"].as_array().ok_or("list: no data")?;
-    Ok(data
+    let rs = data
         .iter()
         .filter(|r| r["id"].as_str().is_some_and(|id| valid_id(id, "trig_")))
         .map(|r| Routine {
@@ -244,7 +256,8 @@ pub fn routines(body: &str) -> Result<Vec<Routine>, String> {
             next_run: epoch(&r["next_run_at"]),
             last_fired: epoch(&r["last_fired_at"]),
         })
-        .collect())
+        .collect();
+    Ok((rs, v["has_more"] == true))
 }
 
 /// The runs in a `list_runs` body, newest first as it gives them. One whose id or link is not

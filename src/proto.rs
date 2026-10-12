@@ -143,6 +143,12 @@ pub enum Request {
         who: String,
         act: CloudAct,
     },
+    /// The user's words, a new turn of a cloud run: `who` as for `cloud_log`. Answered with
+    /// `done`. The user's alone.
+    CloudSay {
+        who: String,
+        text: String,
+    },
     /// A ritual fired now, paused, resumed or deleted; answered with `done`.
     Ritual {
         verb: RitualVerb,

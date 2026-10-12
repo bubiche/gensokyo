@@ -922,3 +922,61 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let said = common::out(&d.cli(&late));
     assert!(said.contains("(gensokyo cloud resume trig_L)"), "{said}");
 }
+
+#[test]
+fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends() {
+    let d = watching("say", true, &[]);
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 - 90)]));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+    let args = || std::fs::read_to_string(d.dir.join("stub/cloud.args")).unwrap_or_default();
+
+    // The user's words, never a resident's: not from the CLI, nor by its own request.
+    let o = d.command(&["cloud", "say", "morning", "hi"]).env("GENSOKYO_RESIDENT", "x").output();
+    assert!(common::err(&o.unwrap()).contains("the user says what a cloud run is told next"));
+    let s = std::os::unix::net::UnixStream::connect(d.socket()).unwrap();
+    let mut w = s.try_clone().unwrap();
+    let mut back = std::io::BufRead::lines(std::io::BufReader::new(s));
+    let hello =
+        json!({"t": "hello", "proto": gensokyo::proto::PROTO, "who": "cli", "resident": "x"});
+    writeln!(w, "{hello}").unwrap();
+    common::next(&mut back);
+    writeln!(w, "{}", json!({"t": "cloud_say", "id": 7, "who": "cse_A", "text": "hi"})).unwrap();
+    let r = common::next(&mut back);
+    assert!(r["error"].as_str().unwrap().contains("the user says what"), "{r}");
+    assert_eq!(args(), "");
+
+    // Words that start with a dash are words.
+    let said = common::out(&d.cli(&["cloud", "say", "morning", "-v, and then stop"]));
+    assert_eq!(
+        said,
+        "said to https://claude.ai/code/session_A: gensokyo tells when it has answered\n"
+    );
+    let argv: Vec<&str> = args().leak().lines().collect();
+    assert_eq!(
+        argv,
+        ["-p", "--cloud", "cse_A", "--output-format", "json", "--", "-v, and then stop"]
+    );
+    // Looked at again at once: the words are queued and the worker still idle, so nothing yet.
+    rounds(&d, 4);
+    assert_eq!(told(&d), Vec::<String>::new());
+    // A short turn begins and ends between two looks: it is told all the same, once.
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 + 150)]));
+    clock(&d, T0 + 200);
+    rounds(&d, 6);
+    assert_eq!(told(&d), ["morning: finished https://claude.ai/code/session_A"]);
+    clock(&d, T0 + 900);
+    rounds(&d, 7);
+    assert_eq!(told(&d).len(), 1);
+
+    // A run by its link, which the watch need not know; and claude's word when it fails.
+    let o = common::out(&d.cli(&["cloud", "say", "https://claude.ai/code/session_Z", "hi"]));
+    assert_eq!(o, "said to https://claude.ai/code/session_Z: it answers there\n");
+    std::fs::write(d.dir.join("stub/cloud.say"), r#"{"ok": false, "error": "session ended"}"#)
+        .unwrap();
+    let o = d.command(&["cloud", "say", "cse_Z", "hi"]).output().unwrap();
+    assert!(common::err(&o).contains("claude said: session ended"), "{}", common::err(&o));
+    let o = d.command(&["cloud", "say", "nobody", "hi"]).output().unwrap();
+    assert!(common::err(&o).contains("no routine nobody"), "{}", common::err(&o));
+}

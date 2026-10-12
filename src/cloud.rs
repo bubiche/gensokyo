@@ -286,6 +286,31 @@ pub fn run_id(who: &str) -> Option<String> {
     valid_id(&id, "cse_").then_some(id)
 }
 
+/// A run's link from its id.
+pub fn run_link(id: &str) -> String {
+    format!("{WEB}session_{}", id.strip_prefix("cse_").unwrap_or(id))
+}
+
+/// `claude -p --cloud`, which queues the user's words as the run's next turn and returns at once
+/// with `{ok, session_id, url}`.
+pub fn say_args(id: &str, text: &str) -> Vec<String> {
+    let a = ["-p", "--cloud", id, "--output-format", "json", "--", text];
+    a.map(String::from).to_vec()
+}
+
+/// Whether claude queued them for that run.
+pub fn said(stdout: &str, id: &str) -> Result<(), String> {
+    let v = json(stdout).map_err(|_| "claude did not say whether the run got it".to_string())?;
+    match (&v["ok"], v["session_id"].as_str()) {
+        (Value::Bool(true), Some(s)) if s == id => Ok(()),
+        (Value::Bool(true), _) => Err(format!("claude sent it to another session than {id}")),
+        _ => {
+            let why = v["error"].as_str().map_or_else(|| v.to_string(), String::from);
+            Err(format!("claude said: {}", plain(&why, 200)))
+        }
+    }
+}
+
 /// Text of many lines as a terminal may be shown it: no control or hidden character left in a
 /// line.
 fn lines(s: &str) -> Vec<String> {

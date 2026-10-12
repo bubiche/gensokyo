@@ -143,6 +143,21 @@ if [ -n "$printing" ] && [ -n "$courier" ]; then
   exit 0
 fi
 
+# A follow-up to a cloud run (`-p --cloud <id>`): queued, as claude says it was, unless
+# cloud.say holds what it says instead. Its argv, an arg a line, is cloud.args.
+cloud=''
+prev=''
+for a in "$@"; do
+  case $prev in --) break ;; --cloud) cloud=$a ;; esac
+  prev=$a
+done
+if [ -n "$printing" ] && [ -n "$cloud" ]; then
+  printf '%s\n' "$@" > "$STUB_STATE/cloud.args"
+  ok="{\"ok\": true, \"session_id\": \"$cloud\", \"url\": \"https://claude.ai/code/session_${cloud#cse_}?from=cli&m=0\"}"
+  cat "$STUB_STATE/cloud.say" 2>/dev/null || printf '%s\n' "$ok"
+  exit 0
+fi
+
 if [ -n "$printing" ]; then
   fmt=text prompt=''
   printf '%s\n' "$*" > "$STUB_STATE/print.args"

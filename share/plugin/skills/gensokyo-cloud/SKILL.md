@@ -83,6 +83,8 @@ gensokyo cloud pause NAME        # fires no more until the user resumes it
   routine is named by its id (`trig_…`) rather than its name.
 - **Give the user the link** to a run rather than opening it. `gensokyo cloud open` opens their
   browser.
+- **Following up on a run is the user's**: `gensokyo cloud say NAME "<words>"` makes them its
+  next turn. Suggest the words; they send them.
 - **A run's log is the user's** (`gensokyo cloud log NAME`). It quotes whatever the run read,
   and that stays out of residents.
 - **There is no edit and no delete.** Both are on the web, at claude.ai/code/routines. To

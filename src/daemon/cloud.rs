@@ -72,7 +72,14 @@ pub(super) struct Watched {
     /// The last event of the turn whose end was told, or was found ended at first sight.
     told: Option<i64>,
     pub(super) url: String,
+    /// When the user last said something to it, until its turn is seen to begin: the words are
+    /// queued while the worker is still idle.
+    asked: Option<i64>,
 }
+
+/// A turn the user asked for has ended once the run's last event is this long past their words,
+/// even if it was never seen going: a short one can begin and end between two looks.
+const SAID_GAP: i64 = 5;
 
 fn dir() -> PathBuf {
     paths::state_dir().join("cloud")
@@ -270,7 +277,13 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
         });
         // `idle` is all a turn's end has been seen to say; a session that is no longer
         // `active` has ended too, however.
-        let ended = run.worker == "idle" || run.status != "active";
+        let idle = run.worker == "idle" || run.status != "active";
+        // The turn asked for has begun, or has ended, or is waited for no longer.
+        let done = |t: i64| run.last_event >= t + SAID_GAP || now - t >= OVERDUE_MOST;
+        if !idle || w.asked.is_some_and(done) {
+            w.asked = None;
+        }
+        let ended = idle && w.asked.is_none();
         (w.ended, w.url) = (ended, run.url.clone());
         if !ended || w.told == Some(run.last_event) {
             continue;
@@ -478,12 +491,58 @@ pub(super) async fn act(shrine: &Shared, who: &str, act: CloudAct) -> Result<Str
         CloudAct::Run => {
             let v = cloud::json(&body).unwrap_or_default();
             let run = v["session_id"].as_str().and_then(cloud::run_id);
-            match run.as_deref().and_then(|id| id.strip_prefix("cse_")) {
-                Some(s) => format!("{} runs now: {}session_{s}", r.name, cloud::WEB),
-                None => format!("{} runs now: {}", r.name, cloud::routine_link(&r.id)),
-            }
+            let link = run.map_or_else(|| cloud::routine_link(&r.id), |id| cloud::run_link(&id));
+            format!("{} runs now: {link}", r.name)
         }
     })
+}
+
+/// `cloud_say`: the user's words, the next turn of a run. The watch looks at that run again at
+/// once, and tells when the turn ends.
+pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String, String> {
+    if text.trim().is_empty() {
+        return Err("nothing to say".into());
+    }
+    let id = match cloud::run_id(who) {
+        Some(id) => id,
+        None => newest(&shrine.borrow(), who)?,
+    };
+    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
+    let cwd = dir().join("courier");
+    std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    let mut cmd = tokio::process::Command::new(claude);
+    cmd.args(cloud::say_args(&id, text))
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .current_dir(&cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let child =
+        super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
+    let out = match tokio::time::timeout(COURIER_LIMIT, child.wait_with_output()).await {
+        Ok(o) => o.map_err(|e| format!("claude: {e}"))?,
+        Err(_) => return Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let r = cloud::said(&stdout, &id);
+    log(json!({"ev": "cloud", "said": id, "exit": out.status.code(), "ok": r.is_ok()}));
+    r.map_err(|e| match stdout.trim().is_empty() {
+        true => format!(
+            "claude said: {}",
+            crate::tele::clean(&String::from_utf8_lossy(&out.stderr), 200)
+        ),
+        false => e,
+    })?;
+    let mut sh = shrine.borrow_mut();
+    let w = sh.cloud.seen.as_mut().and_then(|s| s.runs.get_mut(&id));
+    let watched = w.map(|w| (w.ended, w.asked) = (false, Some(super::rituals::now()))).is_some();
+    sh.cloud.again |= watched;
+    drop(sh);
+    super::rituals::repush(shrine);
+    let then = if watched { "gensokyo tells when it has answered" } else { "it answers there" };
+    Ok(format!("said to {}: {then}", cloud::run_link(&id)))
 }
 
 /// A routine as a write left it, in the timetable at once; the watch lists them all again.

@@ -424,7 +424,8 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             | Request::CloudLog { .. }
             | Request::CloudAdd(_)
             | Request::CloudShow { .. }
-            | Request::CloudAct { .. } => {
+            | Request::CloudAct { .. }
+            | Request::CloudSay { .. } => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
@@ -436,6 +437,9 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                         Request::CloudShow { who } => super::cloud::show(&shrine, &who).await,
                         Request::CloudAct { who, act } => {
                             super::cloud::act(&shrine, &who, act).await
+                        }
+                        Request::CloudSay { who, text } => {
+                            super::cloud::say(&shrine, &who, &text).await
                         }
                         _ => unreachable!("matched above"),
                     };
@@ -670,6 +674,10 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
                  cloud show); tell them it is ready"
             ))
         }
+        Request::CloudSay { who, .. } => Some(format!(
+            "the user says what a cloud run is told next (gensokyo cloud say); tell them what you \
+             would say to {who}"
+        )),
         Request::CloudLog { .. } => Some(
             "a cloud run's log quotes whatever the run read, and that stays out of residents; \
              the user reads it (gensokyo cloud log)"

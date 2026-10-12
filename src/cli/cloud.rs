@@ -34,6 +34,14 @@ pub enum Cmd {
         /// A routine's name or id, for its newest run; or a run's id or link
         who: String,
     },
+    /// Say something to a run, as its next turn: it answers on claude.ai, where the link goes;
+    /// the user's alone
+    Say {
+        /// A routine's name or id, for its newest run; or a run's id or link
+        who: String,
+        #[arg(allow_hyphen_values = true)]
+        text: String,
+    },
     /// Make a routine on claude.ai, paused: it runs once the user resumes it
     ///
     /// The schedule is cron in this Mac's time, as a ritual's; claude.ai keeps it in UTC, and
@@ -88,6 +96,15 @@ pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
                 .map_err(|e| format!("{}: {e}", prompt_file.display()))?;
             let a = CloudAdd { name, schedule, prompt, repos, connectors, model };
             say(request(Request::CloudAdd(a), false))
+        }
+        Cmd::Say { who, text } => {
+            if resident() {
+                return Err(format!(
+                    "the user says what a cloud run is told next; tell them what you would say \
+                     to {who}"
+                ));
+            }
+            say(request(Request::CloudSay { who, text }, false))
         }
         Cmd::Show { routine } => say(request(Request::CloudShow { who: routine }, false)),
         Cmd::Pause { routine } => act(routine, CloudAct::Pause, true),

@@ -471,6 +471,7 @@ gensokyo cloud add digest --schedule "0 9 * * 1-5" --prompt-file p.md --connecto
 gensokyo cloud show digest           # its schedule, model, repos, connectors and prompt
 gensokyo cloud resume digest         # shows it, asks, then starts it; also pause, run
 gensokyo cloud open [digest]         # its newest run in the browser, to read or continue
+gensokyo cloud say digest "and the PRs?"  # its newest run's next turn; told when it ends
 gensokyo cloud log digest            # a page of its newest run's log
 ```
 
@@ -489,7 +490,7 @@ gensokyo cloud log digest            # a page of its newest run's log
   outside gensokyo, lists both.
 - **Residents.**
   - They make routines through the `gensokyo-cloud` skill, and may show and pause them.
-  - Resuming, running and reading a log are yours.
+  - Resuming, running, saying something to a run and reading its log are yours.
   - `RemoteTrigger` is turned off for residents.
 - **Deleting** a routine, or editing one, is done on the web, at claude.ai/code/routines.
 

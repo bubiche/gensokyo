@@ -418,13 +418,17 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 rituals::verb(&shrine, verb, &name)
                     .map_or_else(fail, |message| Reply::Done { id, message }),
             ),
-            Request::Banish { .. } | Request::Close { .. } | Request::Cast(_) => {
+            Request::Banish { .. }
+            | Request::Close { .. }
+            | Request::Cast(_)
+            | Request::CloudLog { .. } => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
                         Request::Banish { who } => banish(&shrine, &who).await,
                         Request::Close { who } => close(&shrine, &who).await,
                         Request::Cast(c) => cards::cast(&shrine, c, caller.as_deref()).await,
+                        Request::CloudLog { who } => super::cloud::run_log(&shrine, &who).await,
                         _ => unreachable!("matched above"),
                     };
                     send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
@@ -652,6 +656,11 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
                  it is ready"
             ))
         }
+        Request::CloudLog { .. } => Some(
+            "a cloud run's log quotes whatever the run read, and that stays out of residents; \
+             the user reads it (gensokyo cloud log)"
+                .into(),
+        ),
         Request::Close { who }
         | Request::Banish { who }
         | Request::Recall { who }

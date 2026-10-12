@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 15;
+pub const PROTO: u32 = 16;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -120,8 +120,15 @@ pub enum Request {
     /// A card typed into each target as a prompt; answered with `done` saying who got it and
     /// who was left out, or an error when nobody did.
     Cast(Cast),
-    /// Every ritual with its next fire, and the ritual files whose names are not usable.
+    /// Every ritual with its next fire, and the ritual files whose names are not usable; and
+    /// the routines on claude.ai while the cloud watch is on.
     Rituals,
+    /// A cloud run's log, a page of it: `who` is a run's id or link, or a routine, by name or
+    /// id, for its newest run. Answered with `done`. The user's alone: a run's log quotes what it
+    /// read, and nothing a run read goes into a resident.
+    CloudLog {
+        who: String,
+    },
     /// A ritual fired now, paused, resumed or deleted; answered with `done`.
     Ritual {
         verb: RitualVerb,
@@ -499,6 +506,9 @@ pub enum Reply {
         rituals: Vec<RitualInfo>,
         /// Paths of ritual files left out for their names.
         unusable: Vec<String>,
+        /// The cloud watch, while it is on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cloud: Option<CloudWatch>,
     },
     Error {
         id: u64,
@@ -561,6 +571,37 @@ pub enum Reply {
         on: bool,
         held: bool,
     },
+}
+
+/// What the cloud watch has seen.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CloudWatch {
+    /// When it last listed the routines, epoch seconds; none before its first round ends.
+    pub listed: Option<i64>,
+    /// Why its last round failed, when it did.
+    pub failing: Option<String>,
+    pub routines: Vec<RoutineInfo>,
+}
+
+/// A routine on claude.ai, as the cloud watch last listed it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RoutineInfo {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Five cron fields, in UTC.
+    pub cron: Option<String>,
+    /// `YYYY-MM-DD HH:MM`, local.
+    pub next_run_local: Option<String>,
+    pub next_run: Option<i64>,
+    /// Its newest run's link, else its own page.
+    pub url: String,
+    /// When its newest run began, epoch seconds.
+    #[serde(default)]
+    pub ran: Option<i64>,
+    /// Its newest run's turn has not ended.
+    #[serde(default)]
+    pub going: bool,
 }
 
 /// A notice as the daemon keeps it.

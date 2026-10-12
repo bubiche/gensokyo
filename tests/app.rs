@@ -5,7 +5,9 @@ use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::client::render::grid_rect;
-use gensokyo::proto::{Card, NAME_RULE, Notice, Reply, Resident, RitualInfo, State};
+use gensokyo::proto::{
+    Card, CloudWatch, NAME_RULE, Notice, Reply, Resident, RitualInfo, RoutineInfo, State,
+};
 use gensokyo::vt::{Frame, Modes, Run, Style, Vt};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
@@ -136,7 +138,12 @@ fn esc_in_the_timetable_goes_back_one_stage_at_a_time() {
     let ritual = |name: &str| RitualInfo { name: name.into(), enabled: true, ..Default::default() };
     daemon(
         &mut a,
-        Reply::Rituals { id: 1, rituals: vec![ritual("alpha"), ritual("beta")], unusable: vec![] },
+        Reply::Rituals {
+            id: 1,
+            rituals: vec![ritual("alpha"), ritual("beta")],
+            unusable: vec![],
+            cloud: None,
+        },
     );
     let tt = |a: &App| match &a.m.modal {
         Some(Modal::Timetable(tt)) => Some((tt.open.clone(), tt.confirm)),
@@ -259,7 +266,7 @@ fn the_timetable_picks_runs_pauses_and_removes_with_a_yes() {
     };
     let slack = RitualInfo { shipped: true, enabled: false, ..ritual("slack-morning", None) };
     let list = vec![ritual("alpha", Some(50)), ritual("beta", Some(100)), slack.clone()];
-    daemon(&mut a, Reply::Rituals { id: 1, rituals: list, unusable: vec![] });
+    daemon(&mut a, Reply::Rituals { id: 1, rituals: list, unusable: vec![], cloud: None });
     let tt = |a: &App| match &a.m.modal {
         Some(Modal::Timetable(tt)) => (tt.selected, tt.open.clone(), tt.confirm),
         _ => panic!("the timetable closed"),
@@ -298,7 +305,7 @@ fn the_timetable_picks_runs_pauses_and_removes_with_a_yes() {
     assert_eq!(verb(&mut a), ("disable".into(), "alpha".to_string()));
     let paused = RitualInfo { enabled: false, ..ritual("alpha", None) };
     let list = vec![paused, ritual("beta", Some(100)), slack.clone()];
-    daemon(&mut a, Reply::Rituals { id: 0, rituals: list, unusable: vec![] });
+    daemon(&mut a, Reply::Rituals { id: 0, rituals: list, unusable: vec![], cloud: None });
     assert!(screen(&mut a).iter().any(|l| l.contains("[resume p]")));
     host(&mut a, b"p");
     assert_eq!(verb(&mut a), ("enable".into(), "alpha".to_string()));
@@ -332,6 +339,56 @@ fn the_timetable_picks_runs_pauses_and_removes_with_a_yes() {
     assert_eq!(verb(&mut a), ("remove".into(), "beta".to_string()));
     assert_eq!(tt(&a), (0, None, false));
     assert_eq!(said(&a), Some("removing beta…"));
+}
+
+#[test]
+fn the_routines_on_claude_ai_are_listed_below_the_rituals_and_only_opened() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dt");
+    let routine = |name: &str, url: &str, going| RoutineInfo {
+        name: name.into(),
+        enabled: true,
+        url: url.into(),
+        ran: Some(0),
+        going,
+        ..Default::default()
+    };
+    // Routines alone are something scheduled.
+    let cloud = CloudWatch {
+        listed: Some(0),
+        failing: None,
+        routines: vec![routine("pr-sweep", "https://claude.ai/code/session_A", true)],
+    };
+    daemon(&mut a, Reply::Rituals { id: 1, rituals: vec![], unusable: vec![], cloud: Some(cloud) });
+    let rows = screen(&mut a);
+    assert!(rows.iter().any(|l| l.contains("pr-sweep") && l.contains("☁ a run is going")));
+    assert!(!rows.iter().any(|l| l.contains("nothing is scheduled")));
+
+    // Below the rituals, and reached by the keys; Enter opens it in the browser (here a link
+    // the browser is never given), never as a ritual.
+    let alpha = RitualInfo { name: "alpha".into(), enabled: true, ..Default::default() };
+    let cloud = CloudWatch {
+        listed: Some(0),
+        failing: None,
+        routines: vec![routine("pr-sweep", "https://example.com/x", false)],
+    };
+    daemon(
+        &mut a,
+        Reply::Rituals { id: 0, rituals: vec![alpha], unusable: vec![], cloud: Some(cloud) },
+    );
+    let rows = screen(&mut a);
+    let at = |s: &str| rows.iter().position(|l| l.contains(s)).unwrap();
+    assert!(at("alpha") < at("pr-sweep"));
+    for k in [b"j", b"j", b"\r"] {
+        host(&mut a, k);
+    }
+    assert_eq!(said(&a), Some("not a claude.ai link"));
+    match &a.m.modal {
+        Some(Modal::Timetable(tt)) => assert_eq!((tt.selected, tt.open.as_deref()), (1, None)),
+        m => panic!("the timetable closed: {m:?}"),
+    }
+    host(&mut a, b"r");
+    assert!(sent(&mut a).iter().all(|r| r["t"] != "ritual"));
 }
 
 #[test]

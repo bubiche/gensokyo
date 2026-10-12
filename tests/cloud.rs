@@ -465,3 +465,91 @@ fn one_routine_failing_holds_up_none_of_the_others_and_a_run_listed_late_is_stil
     rounds(&d, 10);
     assert_eq!(told(&d), ["nR2: finished https://claude.ai/code/session_B"]);
 }
+
+#[test]
+fn a_runs_log_is_shown_as_lines_with_nothing_a_terminal_would_act_on() {
+    assert_eq!(cloud::run_id("cse_01AB").as_deref(), Some("cse_01AB"));
+    assert_eq!(cloud::run_id("https://claude.ai/code/session_01AB").as_deref(), Some("cse_01AB"));
+    for no in ["morning", "https://claude.ai/code/routines/trig_1", "https://x.ai/code/session_1"] {
+        assert_eq!(cloud::run_id(no), None, "{no}");
+    }
+    let body = "{\"session_id\":\"cse_A\",\"next_cursor\":null}\n\n[t] user: hi\x1b]52;c;eA==\x07\n\
+                [t] result: \u{202E}ok\tdone\r\n";
+    assert_eq!(cloud::run_log(body, "cse_A"), "[t] user: hi]52;c;eA==\n[t] result: ok done");
+    let more = "{\"next_cursor\":\"c2\"}\n[t] user: hi";
+    assert_eq!(
+        cloud::run_log(more, "cse_A"),
+        "[t] user: hi\n(the log goes on past this page: https://claude.ai/code/session_A)"
+    );
+}
+
+#[test]
+fn the_routines_are_listed_and_opened_from_what_the_watch_saw_and_a_log_is_the_users_alone() {
+    let dir = common::fresh("cl-open-browser");
+    let browser = dir.join("browser");
+    std::fs::write(&browser, format!("#!/bin/sh\necho \"$1\" >> {}/opened\n", dir.display()))
+        .unwrap();
+    std::fs::set_permissions(&browser, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .unwrap();
+    let d = watching("open", true, &[("GENSOKYO_OPEN", &browser.display().to_string())]);
+    let both = listing(&[("R1", T0 + 3600, T0 - 100), ("R2", T0 + 7200, T0 - 100)], false);
+    answer(&d, "list", 200, both);
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "running", T0 - 90)]));
+    answer(&d, "list_runs-trig_R2", 200, json!({"data": [], "next_cursor": null}));
+    d.cli(&["list"]);
+    // A client watching is sent them as the round ends, below the rituals.
+    let (mut w, mut lines) = d.connect();
+    writeln!(w, "{}", json!({"t": "watch"})).unwrap();
+    let mut timetable = move |has: &dyn Fn(&Value) -> bool| loop {
+        let v = common::next(&mut lines);
+        if v["t"] == "rituals" && has(&v) {
+            return v;
+        }
+    };
+    let seen = timetable(&|v| v["cloud"]["routines"][0]["going"] == true);
+    assert_eq!(seen["cloud"]["routines"][1]["name"], "nR2");
+    rounds(&d, 3);
+
+    // Listed and opened from what the watch saw: no courier for either.
+    let said = common::out(&d.cli(&["cloud"]));
+    // (Ago and in are by the wall clock, which the test's is not.)
+    assert!(said.starts_with("listed ") && !said.contains("failed"), "{said}");
+    let row = said.lines().find(|l| l.contains("morning")).unwrap();
+    assert!(row.contains("0 * * * * UTC") && row.contains("2026-09-21 16:00"), "{row}");
+    assert!(row.ends_with("https://claude.ai/code/session_A (going)"), "{row}");
+    let row = said.lines().find(|l| l.contains("nR2")).unwrap();
+    assert!(row.ends_with("https://claude.ai/code/routines/trig_R2"), "{row}");
+    d.cli(&["cloud", "open"]);
+    d.cli(&["cloud", "open", "nR2"]);
+    let opened = std::fs::read_to_string(dir.join("opened")).unwrap();
+    assert_eq!(
+        opened,
+        "https://claude.ai/code/session_A\nhttps://claude.ai/code/routines/trig_R2\n"
+    );
+    let nope = d.command(&["cloud", "open", "nope"]).output().unwrap();
+    assert!(common::err(&nope).contains("no routine nope on claude.ai"), "{}", common::err(&nope));
+    assert_eq!(calls(&d).len(), 3);
+
+    // A routine's newest run's log, for the user.
+    let page = "{\"session_id\":\"cse_A\",\"next_cursor\":null}\n[t] result: success — posted";
+    std::fs::write(d.dir.join("stub/cloud/get_run_log-cse_A.txt"), format!("HTTP 200\n{page}"))
+        .unwrap();
+    let log = common::out(&d.cli(&["cloud", "log", "morning"]));
+    assert_eq!(log, "[t] result: success — posted\n");
+    assert_eq!(calls(&d)[3], "get_run_log cse_A");
+    // Never into a resident: what a run read is no resident's to read.
+    let inside = d.command(&["cloud", "log", "morning"]).env("GENSOKYO_RESIDENT", "x").output();
+    let inside = inside.unwrap();
+    assert!(common::err(&inside).contains("stays out of residents"), "{}", common::err(&inside));
+    assert_eq!(calls(&d).len(), 4);
+    // A run gone from claude.ai; and with the watch off, a run's link still does.
+    let gone = d.command(&["cloud", "log", "https://claude.ai/code/session_Z"]).output().unwrap();
+    assert!(common::err(&gone).contains("cse_Z is gone from claude.ai"), "{}", common::err(&gone));
+    d.cli(&["cloud", "watch", "off"]);
+    timetable(&|v| v["cloud"].is_null());
+    let off = d.command(&["cloud", "log", "morning"]).output().unwrap();
+    assert!(common::err(&off).contains("the cloud watch is off"), "{}", common::err(&off));
+    assert!(common::out(&d.cli(&["cloud"])).starts_with("the cloud watch is off"));
+    let by_link = common::out(&d.cli(&["cloud", "log", "https://claude.ai/code/session_A"]));
+    assert_eq!(by_link, log);
+}

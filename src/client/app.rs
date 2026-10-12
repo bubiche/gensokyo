@@ -620,7 +620,10 @@ impl App {
         };
         match r {
             Reply::Welcome { .. } | Reply::Waited { .. } => {}
-            Reply::Rituals { rituals, .. } => self.rituals(rituals),
+            Reply::Rituals { rituals, cloud, .. } => {
+                self.m.cloud = cloud;
+                self.rituals(rituals)
+            }
             Reply::Notice { text } => {
                 let text = tele::clean(&text, proto::NOTICE_MOST);
                 if self.desktop {

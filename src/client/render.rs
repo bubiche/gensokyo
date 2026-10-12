@@ -4,7 +4,7 @@
 
 use super::modal::{Modal, when_short};
 use crate::paths::tilde;
-use crate::proto::{Resident, RitualInfo, State};
+use crate::proto::{CloudWatch, Resident, RitualInfo, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -74,6 +74,8 @@ pub struct Model {
     pub today: String,
     /// The timetable, once the daemon has sent it.
     pub rituals: Option<Vec<RitualInfo>>,
+    /// The routines on claude.ai, below the rituals, while the cloud watch is on.
+    pub cloud: Option<CloudWatch>,
     /// Keeping the Mac awake, once the daemon has said.
     pub awake: Option<Awake>,
 }

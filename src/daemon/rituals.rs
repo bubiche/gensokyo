@@ -9,7 +9,7 @@ use super::registry;
 use super::shrine::{Shared, Shrine, Start, recall, start, taken};
 use crate::cron::{self, Schedule, Why};
 use crate::hooks;
-use crate::proto::{self, Reply, RitualInfo, RitualVerb, valid_name};
+use crate::proto::{self, CloudWatch, Reply, RitualInfo, RitualVerb, valid_name};
 use crate::ritual::{self, Dir, Ritual, Target, Trust, when};
 use crate::tele;
 use jiff::tz::TimeZone;
@@ -77,7 +77,7 @@ pub(super) struct Rites {
     /// What a branch ritual's probe printed that was left out, said once per daemon.
     warned: HashSet<(String, String)>,
     /// The listing last sent to watchers.
-    listing: Vec<RitualInfo>,
+    listing: (Vec<RitualInfo>, Option<CloudWatch>),
     /// When the clock last ticked. Here rather than in the clock: one started again after a
     /// panic carries on from it, instead of taking its first tick for a start and making up a
     /// fire.
@@ -845,16 +845,18 @@ fn names(bad: &[PathBuf]) -> Vec<String> {
 /// The timetable, for `rituals` (id 0: for `watch`).
 pub(super) fn listing(shrine: &Shared, id: u64) -> Reply {
     let (rs, bad) = load(&shrine.borrow());
-    Reply::Rituals { id, rituals: infos(shrine, &rs), unusable: names(&bad) }
+    let cloud = super::cloud::info(&shrine.borrow());
+    Reply::Rituals { id, rituals: infos(shrine, &rs), unusable: names(&bad), cloud }
 }
 
 /// The timetable to every watcher, when it has changed since they were last sent it.
 fn push(shrine: &Shared, rs: &[Ritual], bad: &[PathBuf]) {
-    let list = infos(shrine, rs);
+    let list = (infos(shrine, rs), super::cloud::info(&shrine.borrow()));
     let mut sh = shrine.borrow_mut();
     if list != sh.rites.listing {
         sh.rites.listing = list.clone();
-        let _ = sh.notices.send(Reply::Rituals { id: 0, rituals: list, unusable: names(bad) });
+        let (rituals, cloud) = list;
+        let _ = sh.notices.send(Reply::Rituals { id: 0, rituals, unusable: names(bad), cloud });
     }
 }
 

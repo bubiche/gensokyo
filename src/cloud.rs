@@ -228,13 +228,43 @@ fn epoch(v: &Value) -> Option<i64> {
     v.as_str()?.parse::<jiff::Timestamp>().ok().map(|t| t.as_second())
 }
 
+/// Bidi controls and zero-width marks: they could reorder or hide what is shown next to them.
+fn hidden(c: &char) -> bool {
+    matches!(*c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069)
+}
+
 /// A name or title, one line of it, with nothing that could reorder or hide what is shown next
-/// to it: bidi controls and zero-width marks go too.
+/// to it.
 fn text(v: &Value, max: usize) -> String {
-    let hidden =
-        |c: &char| matches!(*c as u32, 0x200B..=0x200F | 0x202A..=0x202E | 0x2066..=0x2069);
     let s: String = v.as_str().unwrap_or("").chars().filter(|c| !hidden(c)).collect();
     crate::tele::clean(&s, max)
+}
+
+/// A run's id from its link, as the API pairs them: `…/code/session_X` is `cse_X`.
+pub fn run_id(who: &str) -> Option<String> {
+    if valid_id(who, "cse_") {
+        return Some(who.into());
+    }
+    let id = format!("cse_{}", link(who)?.strip_prefix(WEB)?.strip_prefix("session_")?);
+    valid_id(&id, "cse_").then_some(id)
+}
+
+/// A page of a `get_run_log` body, as a terminal may be shown it: its lines, with no control
+/// or hidden character left in them, then where the rest is when there is more.
+pub fn run_log(body: &str, id: &str) -> String {
+    let (head, rest) = body.split_once('\n').unwrap_or((body, ""));
+    let head: Value = serde_json::from_str(head).unwrap_or(Value::Null);
+    let shown = |c: &char| !c.is_control() && !hidden(c);
+    let mut out: Vec<String> = rest
+        .trim_matches('\n')
+        .lines()
+        .map(|l| l.replace('\t', " ").chars().filter(shown).collect())
+        .collect();
+    if !head["next_cursor"].is_null() {
+        let url = format!("{WEB}session_{}", id.trim_start_matches("cse_"));
+        out.push(format!("(the log goes on past this page: {url})"));
+    }
+    out.join("\n")
 }
 
 /// The routines in a `list` body, and whether there are more than it holds. One whose id is not
@@ -286,6 +316,22 @@ pub fn runs(body: &str) -> Result<Vec<Run>, String> {
 pub fn link(url: &str) -> Option<&str> {
     let rest = url.strip_prefix(WEB)?;
     rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-/".contains(&b)).then_some(url)
+}
+
+/// A claude.ai link opened in the browser, by `open` with no shell between
+/// (`GENSOKYO_OPEN` names another opener). It says nothing: the client's screen is the
+/// terminal's.
+pub fn browse(url: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let url = link(url).ok_or("not a claude.ai link")?;
+    let opener = std::env::var_os("GENSOKYO_OPEN").unwrap_or("open".into());
+    let mut cmd = Command::new(opener);
+    cmd.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    match cmd.status() {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("open {url}: {s}")),
+        Err(e) => Err(format!("open {url}: {e}")),
+    }
 }
 
 /// A routine's page.

@@ -8,7 +8,9 @@ use super::shrine::{Shared, Shrine, touch};
 use super::store::write_atomic;
 use crate::cloud::{self, Pace, Routine, Run};
 use crate::paths;
-use crate::ritual::Dir;
+use crate::proto::{CloudWatch, RoutineInfo};
+use crate::ritual::{Dir, when};
+use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -42,6 +44,8 @@ pub(super) struct Watch {
     /// The routines as last listed.
     pub(super) routines: Vec<Routine>,
     seen: Option<Seen>,
+    /// Why the last round failed.
+    failed: Option<String>,
 }
 
 /// What has been seen of each routine and its runs.
@@ -88,6 +92,8 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
     if !on() {
         if !sh.cloud.busy && sh.cloud.pace.listed.is_some() {
             sh.cloud = Watch::default();
+            drop(sh);
+            super::rituals::repush(shrine);
         }
         return;
     }
@@ -104,8 +110,9 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
         let r = round(&shrine, now).await;
         let mut sh = shrine.borrow_mut();
         sh.cloud.busy = false;
+        sh.cloud.pace.listed = Some(now);
+        sh.cloud.failed = r.as_ref().err().cloned();
         let p = &mut sh.cloud.pace;
-        p.listed = Some(now);
         match r {
             Ok(()) => {
                 if p.fails >= FAILS_TOLD {
@@ -126,7 +133,38 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
             }
         }
         touch(&sh);
+        drop(sh);
+        super::rituals::repush(&shrine);
     });
+}
+
+/// The watch, for the timetable: none while it is off.
+pub(super) fn info(sh: &Shrine) -> Option<CloudWatch> {
+    if !on() {
+        return None;
+    }
+    let (tz, w) = (TimeZone::system(), &sh.cloud);
+    let runs = w.seen.as_ref().map(|s| &s.runs);
+    let newest = |id: &str| {
+        let mine = runs.into_iter().flatten().filter(|(_, r)| r.routine == id);
+        mine.max_by_key(|(_, r)| r.created).map(|(_, r)| r)
+    };
+    let routines = w
+        .routines
+        .iter()
+        .map(|r| RoutineInfo {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            enabled: r.enabled,
+            cron: r.cron.clone(),
+            next_run_local: r.next_run.map(|t| when(t, &tz)),
+            next_run: r.next_run,
+            url: newest(&r.id).map_or_else(|| cloud::routine_link(&r.id), |n| n.url.clone()),
+            ran: newest(&r.id).map(|n| n.created),
+            going: newest(&r.id).is_some_and(|n| !n.ended),
+        })
+        .collect();
+    Some(CloudWatch { listed: w.pace.listed, failing: w.failed.clone(), routines })
 }
 
 fn tell(sh: &mut Shrine, name: &str, text: &str) {
@@ -244,6 +282,37 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
         d.note(now, "finished", &format!("finished{how}: {}", run.url));
         tell(&mut shrine.borrow_mut(), &r.name, &format!("finished{how} {}", run.url));
     }
+}
+
+/// `cloud_log`: a page of a run's log. A routine's newest run is the one the watch last saw:
+/// nothing is listed to find it, so with the watch off, only a run's id or link will do.
+pub(super) async fn run_log(shrine: &Shared, who: &str) -> Result<String, String> {
+    let id = match cloud::run_id(who) {
+        Some(id) => id,
+        None => newest(&shrine.borrow(), who)?,
+    };
+    let (code, body) = ask(shrine, json!({"action": "get_run_log", "session_id": id})).await?;
+    match code {
+        200 => Ok(cloud::run_log(&body, &id)),
+        404 => Err(format!("{id} is gone from claude.ai")),
+        _ => Err(format!("get_run_log: HTTP {code}: {}", cloud::error_of(&body))),
+    }
+}
+
+/// The newest run the watch has seen of a routine, by name or id.
+fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
+    if !on() {
+        return Err(format!(
+            "the cloud watch is off, so no run of {who} is known: give a run's link, or turn it \
+             on (gensokyo cloud watch on)"
+        ));
+    }
+    let r = sh.cloud.routines.iter().find(|r| r.id == who || r.name == who);
+    let r =
+        r.ok_or_else(|| format!("no routine {who} on claude.ai (gensokyo cloud lists them)"))?;
+    let runs = sh.cloud.seen.as_ref().map(|s| &s.runs).into_iter().flatten();
+    let mine = runs.filter(|(_, w)| w.routine == r.id).max_by_key(|(_, w)| w.created);
+    mine.map(|(id, _)| id.clone()).ok_or_else(|| format!("{} has no run yet", r.name))
 }
 
 /// One courier, for one call: the API's reply to it, or why there is none.

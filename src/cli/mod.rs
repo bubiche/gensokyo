@@ -110,7 +110,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<rituals::Cmd>,
     },
-    /// Routines on claude.ai: whether the daemon watches them
+    /// Routines on claude.ai: list them, watch them, open a run, read its log
     Cloud {
         #[command(subcommand)]
         cmd: Option<cloud::Cmd>,

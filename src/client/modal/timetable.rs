@@ -1,11 +1,12 @@
 //! The timetable: every ritual, soonest fire first; one opened shows its detail and runs,
-//! pauses, resumes or removes it.
+//! pauses, resumes or removes it. Below them, the routines on claude.ai while the cloud watch
+//! is on: Enter opens one's newest run in the browser.
 
 use super::{Key, Modal};
 use crate::client::app::App;
 use crate::client::render::{DIM, ERROR, Model, Row, Say, ago, mark, width, window, wrap};
 use crate::paths::tilde;
-use crate::proto::{Request, RitualInfo, RitualVerb};
+use crate::proto::{Request, RitualInfo, RitualVerb, RoutineInfo};
 use ratatui::style::{Color, Style};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -44,6 +45,11 @@ pub fn when_short(local: &str, today: &str) -> String {
     }
 }
 
+/// The routines listed below the rituals.
+pub fn routines(m: &Model) -> &[RoutineInfo] {
+    m.cloud.as_ref().map_or(&[], |c| &c.routines)
+}
+
 /// The ritual the timetable has open, if it is still there.
 pub fn opened<'a>(m: &'a Model, tt: &Timetable) -> Option<&'a RitualInfo> {
     let name = tt.open.as_ref()?;
@@ -67,31 +73,47 @@ impl Timetable {
             });
             return (format!(" {} ", r.name), rows);
         }
-        if rituals.is_empty() {
+        let cloud = routines(m);
+        if rituals.is_empty() && cloud.is_empty() {
             let dir = tilde(&crate::paths::config_dir().to_string_lossy(), &m.home);
             let empty = Row::dim(&format!("nothing is scheduled: {dir}/rituals"));
             return (" timetable ".into(), vec![empty, Row::close()]);
         }
         let order = timetable_order(rituals);
-        let sel = self.selected.min(order.len() - 1);
-        let nw = rituals.iter().map(|r| width(&r.name)).max().unwrap_or(0).min(20) as usize;
-        let mut rows: Vec<Row> = window(order.len(), sel, 12)
-            .map(|i| {
-                let r = &rituals[order[i]];
-                let next = match (&r.next_fire_local, r.enabled) {
-                    (_, false) => "paused".to_string(),
-                    (Some(l), true) => when_short(l, &m.today),
-                    (None, true) => "—".into(),
-                };
-                let on = if r.enabled { "on " } else { "off" };
-                let flag = if r.problem.is_some() { "!" } else { " " };
-                let desc = r.description.as_deref().unwrap_or("");
-                let name: String = match r.name.chars().count() > nw {
-                    true => r.name.chars().take(nw - 1).chain(['…']).collect(),
-                    false => r.name.clone(),
-                };
-                let line = format!("{}{name:<nw$} {on} {next:<11}{flag} {desc}", mark(i == sel));
-                Row::Item(i, line, i == sel)
+        let sel = self.selected.min(order.len() + cloud.len() - 1);
+        let names = rituals.iter().map(|r| &r.name).chain(cloud.iter().map(|r| &r.name));
+        let nw = names.map(|n| width(n)).max().unwrap_or(0).min(20) as usize;
+        let next = |l: &Option<String>, on: bool| match (l, on) {
+            (_, false) => "paused".to_string(),
+            (Some(l), true) => when_short(l, &m.today),
+            (None, true) => "—".into(),
+        };
+        let line = |i: usize, name: &str, on: bool, next: String, flag: &str, desc: &str| {
+            let name: String = match name.chars().count() > nw {
+                true => name.chars().take(nw - 1).chain(['…']).collect(),
+                false => name.into(),
+            };
+            let on = if on { "on " } else { "off" };
+            let line = format!("{}{name:<nw$} {on} {next:<11}{flag} {desc}", mark(i == sel));
+            Row::Item(i, line, i == sel)
+        };
+        let mut rows: Vec<Row> = window(order.len() + cloud.len(), sel, 12)
+            .map(|i| match order.get(i) {
+                Some(&o) => {
+                    let r = &rituals[o];
+                    let flag = if r.problem.is_some() { "!" } else { " " };
+                    let desc = r.description.as_deref().unwrap_or("");
+                    line(i, &r.name, r.enabled, next(&r.next_fire_local, r.enabled), flag, desc)
+                }
+                None => {
+                    let r = &cloud[i - order.len()];
+                    let desc = match r.ran {
+                        Some(_) if r.going => "a run is going".into(),
+                        Some(t) => format!("ran {} ago", ago(m.now - t)),
+                        None => "on claude.ai".into(),
+                    };
+                    line(i, &r.name, r.enabled, next(&r.next_run_local, r.enabled), "☁", &desc)
+                }
             })
             .collect();
         rows.push(Row::close());
@@ -169,7 +191,8 @@ pub(in crate::client) enum Act {
 
 impl App {
     pub(super) fn timetable_key(&mut self, k: Key) {
-        let last = self.m.rituals.as_ref().map_or(0, Vec::len).saturating_sub(1);
+        let n = self.m.rituals.as_ref().map_or(0, Vec::len) + routines(&self.m).len();
+        let last = n.saturating_sub(1);
         let Some(Modal::Timetable(tt)) = &mut self.m.modal else { return };
         match k {
             Key::Enter | Key::Text('y') if tt.confirm => {
@@ -202,12 +225,26 @@ impl App {
             (None, _) => {
                 let list = self.m.rituals.as_deref().unwrap_or_default();
                 let order = timetable_order(list);
-                let i = order.get(tt.selected.min(order.len().saturating_sub(1)));
-                tt.open = i.map(|&i| list[i].name.clone());
+                let last = (order.len() + routines(&self.m).len()).saturating_sub(1);
+                let at = tt.selected.min(last);
+                match order.get(at) {
+                    Some(&i) => tt.open = Some(list[i].name.clone()),
+                    None => self.browse(at - order.len()),
+                }
             }
             _ => {}
         }
         self.m.modal = Some(Modal::Timetable(tt));
+    }
+
+    /// The newest run of the `i`th routine, or its page, in the browser.
+    fn browse(&mut self, i: usize) {
+        let Some(r) = routines(&self.m).get(i) else { return };
+        let (name, url) = (r.name.clone(), r.url.clone());
+        match crate::cloud::browse(&url) {
+            Ok(()) => self.say(Say::Info, format!("opened {name} in the browser")),
+            Err(e) => self.say(Say::Error, e),
+        }
     }
 
     /// Run, pause or resume, or ask to remove, the ritual the timetable has open.

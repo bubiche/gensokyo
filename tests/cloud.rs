@@ -967,8 +967,8 @@ fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends(
     rounds(&d, 6);
     assert_eq!(calls(&d)[4..], ["list", "list_runs trig_R1"]);
     assert_eq!(told(&d), Vec::<String>::new());
-    // A short turn begins and ends between two looks: it is told all the same, once.
-    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 + 3750)]));
+    // A turn of a second begins and ends between two looks: it is told all the same, once.
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 + 3721)]));
     clock(&d, T0 + 3800);
     rounds(&d, 8);
     assert_eq!(told(&d), ["morning: finished https://claude.ai/code/session_A"]);

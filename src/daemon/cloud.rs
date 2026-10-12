@@ -80,10 +80,6 @@ pub(super) struct Watched {
     asked: Option<i64>,
 }
 
-/// A turn the user asked for has ended once the run's last event is this long past their words,
-/// even if it was never seen going: a short one can begin and end between two looks.
-const SAID_GAP: i64 = 5;
-
 fn dir() -> PathBuf {
     paths::state_dir().join("cloud")
 }
@@ -286,8 +282,10 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
         // `idle` is all a turn's end has been seen to say; a session that is no longer
         // `active` has ended too, however.
         let idle = run.worker == "idle" || run.status != "active";
-        // The turn asked for has begun, or has ended, or is waited for no longer.
-        let done = |t: i64| run.last_event >= t + SAID_GAP || now - t >= OVERDUE_MOST;
+        // The turn asked for has begun, or has ended (an event after the last turn told: one of
+        // a second begins and ends between two looks), or is waited for no longer.
+        let after = w.told.is_none_or(|t| run.last_event > t);
+        let done = |t: i64| after || now - t >= OVERDUE_MOST;
         if !idle || w.asked.is_some_and(done) {
             w.asked = None;
         }

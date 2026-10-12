@@ -1018,6 +1018,8 @@ fn a_cloud_run_is_taken_over_by_the_user_alone_and_copied_once() {
     assert_eq!(after(&a, "--disallowed-tools").as_deref(), Some("CronCreate"));
     let r2 = summon(json!({"name": "Second", "teleport": "morning"}));
     assert_eq!(after(&argv(&r2), "--teleport").as_deref(), Some("cse_B"));
+    let r4 = summon(json!({"name": "Fourth", "teleport": "cse_Z", "role": "reviewer"}));
+    assert!(r4["error"].as_str().unwrap().contains("teleport leaves out a role"), "{r4}");
     let r3 = summon(json!({"name": "Third", "teleport": "nobody"}));
     assert!(r3["error"].as_str().unwrap().contains("no routine nobody"), "{r3}");
 

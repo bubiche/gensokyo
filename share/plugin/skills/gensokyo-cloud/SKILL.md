@@ -87,6 +87,6 @@ gensokyo cloud pause NAME        # fires no more until the user resumes it
   next turn. Suggest the words; they send them. So is taking one over here as a resident
   (`gensokyo new --teleport NAME`).
 - **A run's log is the user's** (`gensokyo cloud log NAME`). It quotes whatever the run read,
-  and that stays out of residents.
+  and that stays out of residents unless the user takes the run over.
 - **There is no edit and no delete.** Both are on the web, at claude.ai/code/routines. To
   change a prompt, make a new routine and have the user delete the old one there.

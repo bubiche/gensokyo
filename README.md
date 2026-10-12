@@ -461,8 +461,9 @@ it goes (`Ctrl-] w`); a ritual waiting for its time does not.
 A Claude Code **routine** is a prompt that claude.ai runs on its own schedule, in a cloud session,
 with the GitHub repositories and claude.ai connectors it is given. It runs while the Mac is off,
 but nothing on the Mac is within its reach. It reports through what it does: a Slack message, a
-PR comment. gensokyo makes routines, watches them and links you to their runs. It never
-carries what a run read.
+PR comment. gensokyo makes routines, watches them and links you to their runs. What a run read
+reaches a resident only when you take the run over (`new --teleport`): then its whole
+conversation is the resident's, to act on.
 
 ```sh
 gensokyo cloud watch on              # off until you say: each look is a short haiku `claude -p`

@@ -1,7 +1,8 @@
 //! The cloud watch: the user's routines on claude.ai and their runs, read by couriers
 //! (`crate::cloud`) on the ritual clock while `CLOUD_WATCH=on`. It reads status only: a run
 //! reports through its own Slack posts and PR comments, and gensokyo says when a turn of it ends,
-//! with its link. Nothing a run wrote is shown or typed anywhere.
+//! with its link. Nothing a run wrote is shown or typed anywhere; only the user, taking a run
+//! over (`new --teleport`), brings its conversation here.
 
 use super::log::log;
 use super::shrine::{Shared, Shrine, touch};

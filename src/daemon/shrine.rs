@@ -391,6 +391,11 @@ pub(super) fn may_summon(
             _ => {}
         }
     }
+    if s.teleport.is_some() && (s.role.is_some() || s.system_prompt.is_some()) {
+        return Err("a run taken over keeps the system prompt it had: teleport leaves out a \
+                    role and words of your own"
+            .into());
+    }
     if caller.is_some() && s.teleport.is_some() {
         return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
                     of residents' reach: the user takes a run over (gensokyo new --teleport)"

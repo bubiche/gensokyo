@@ -12,5 +12,6 @@ pub mod paths;
 pub mod proto;
 pub mod ritual;
 pub mod role;
+pub mod shim;
 pub mod tele;
 pub mod vt;

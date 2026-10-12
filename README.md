@@ -494,7 +494,8 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
   - They make routines through the `gensokyo-cloud` skill, and may show and pause them.
   - Resuming, running, saying something to a run, reading its log and taking it over are
     yours.
-  - `RemoteTrigger` is turned off for residents.
+  - `RemoteTrigger` is turned off for residents, and for any `claude` a resident starts by
+    name.
 - **Taking a run over.** `new --teleport` copies a run's conversation into a resident here,
   in the directory you summon it in (a checkout of the run's repository, for one that has
   one). The run goes on by itself on claude.ai. The resident has a resident's tools and hooks,
@@ -548,6 +549,10 @@ wanted, the round cap and the reply address; `gensokyo-ritual` turns "every week
 into a ritual file; `gensokyo-cloud` makes a routine on claude.ai, paused; `gensokyo-lead`
 briefs helpers, waits on them and reads their reports. Only
 a skill's description sits in a resident's context; the rest is read when it is used.
+
+A `claude` a resident or headless run starts by name is gensokyo's (first on its PATH): it runs
+the next `claude` on PATH with those four tools denied in the `--settings` it was given, so a
+resident cannot get them back that way. A path straight to the real one gets past it.
 
 ## Scripting
 

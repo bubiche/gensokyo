@@ -125,11 +125,14 @@ impl Shrine {
         let _ = self.notices.send(Reply::Notice { text });
     }
 
-    /// `claude` on PATH, and the environment it runs in for resident `id` (none: the registry).
+    /// `claude` on PATH, and the environment it runs in for resident `id` (none: the registry,
+    /// a courier, a card). Only a resident or headless run gets gensokyo's `claude` on its PATH:
+    /// a courier started through a wrapper that runs `claude` by name needs RemoteTrigger.
     pub(super) fn claude(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
         let program = launch::claude(std::env::var_os("PATH").as_deref())?;
         let bin = self.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
-        Some((program, launch::env(std::env::vars_os(), id, &bin, &self.socket)))
+        let shim = (!id.is_empty()).then(crate::shim::dir);
+        Some((program, launch::env(std::env::vars_os(), id, &bin, shim.as_deref(), &self.socket)))
     }
 }
 

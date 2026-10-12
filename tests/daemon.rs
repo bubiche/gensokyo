@@ -108,7 +108,11 @@ fn summon_launches_claude_with_our_argv_and_env() {
     assert_eq!(var("GENSOKYO_RESIDENT"), id.as_str());
     assert_eq!(var("GENSOKYO_SOCKET").map(PathBuf::from), Some(real));
     let bin = Path::new(BIN).parent().unwrap().to_str().unwrap();
-    assert!(var("PATH").unwrap().starts_with(&format!("{bin}:")));
+    let shim = d.dir.join("shim");
+    assert!(var("PATH").unwrap().starts_with(&format!("{}:{bin}:", shim.display())));
+    assert!(
+        std::fs::read_to_string(shim.join("claude")).unwrap().contains(&format!("'{BIN}' _claude"))
+    );
     assert_eq!((var("LC_ALL"), var("LANG")), (None, Some("en_US.UTF-8")));
     assert_eq!(
         var("PWD").map(|p| std::fs::canonicalize(p).unwrap()),
@@ -215,7 +219,7 @@ fn a_resident_marks_links_unless_the_user_said_otherwise() {
     let (bin, sock) = (Path::new("/bin"), Path::new("/s"));
     let forced = |base: Vec<(&str, &str)>| -> Vec<String> {
         let base = base.into_iter().map(|(k, v)| (k.into(), v.into()));
-        let env = launch::env(base, "id", bin, sock);
+        let env = launch::env(base, "id", bin, None, sock);
         let f = env.iter().filter(|(k, _)| k == "FORCE_HYPERLINK");
         f.map(|(_, v)| v.to_string_lossy().into_owned()).collect()
     };
@@ -1500,4 +1504,108 @@ fn a_long_login_log_is_emptied_as_the_daemon_starts_and_a_short_one_kept() {
     d.cli(&["quit"]);
     d.cli(&["list"]);
     assert_eq!(std::fs::read_to_string(&log).unwrap(), "launchd caught this\n");
+}
+
+/// The JSON of the `--settings` that `args` (the stub's `$*`) starts with.
+fn first_settings(args: &str) -> Value {
+    let rest = args.strip_prefix("--settings ").unwrap_or_else(|| panic!("{args}"));
+    serde_json::Deserializer::from_str(rest).into_iter::<Value>().next().unwrap().unwrap()
+}
+
+/// A claude a resident starts by name is gensokyo's, which runs the next one on PATH refused what
+/// residents are, in the settings it was given. A resident launched through a wrapper that runs
+/// `claude` by name goes through it too and keeps its hooks.
+#[test]
+fn a_claude_a_resident_starts_is_refused_the_tools_residents_are() {
+    let bin = fresh("shim-path");
+    let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-claude");
+    std::os::unix::fs::symlink(stub, bin.join("claude")).unwrap();
+    let wrap = bin.join("wrap");
+    std::fs::write(&wrap, "#!/bin/sh\nexec claude \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrap, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let d = Daemon::start("shim", &[("GENSOKYO_CLAUDE", wrap.to_str().unwrap()), ("PATH", &path)]);
+    let shim = d.dir.join("shim");
+    let refused = ["CronCreate", "CronList", "CronDelete", "RemoteTrigger"].map(|t| json!(t));
+
+    let r = d.summon(json!({"name": "Reimu"}));
+    let args = d.stub(&r["id"], "args");
+    assert_eq!(args.matches("--settings").count(), 1, "{args}");
+    let s = first_settings(&args);
+    let stop = s["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+    assert_eq!(stop, format!("'{BIN}' _hook"));
+    let deny = s["permissions"]["deny"].as_array().unwrap();
+    let conf = json!(format!("Edit(/{}/**)", d.dir.join("conf").display()));
+    assert!(deny.contains(&conf) && refused.iter().all(|t| deny.contains(t)), "{s}");
+    assert!(args.contains(" --disallowed-tools CronCreate CronList CronDelete RemoteTrigger "));
+    let env = d.stub(&r["id"], "env");
+    let resident_path = env.lines().find_map(|l| l.strip_prefix("PATH=")).unwrap().to_string();
+    let gensokyo = Path::new(BIN).parent().unwrap();
+    assert!(resident_path.starts_with(&format!("{}:{}:", shim.display(), gensokyo.display())));
+
+    // What the resident's own `claude -p` gets.
+    let nested = |args: &[&str]| -> Output {
+        std::process::Command::new(shim.join("claude"))
+            .args(args)
+            .env_clear()
+            .env("PATH", &resident_path)
+            .env("STUB_STATE", d.dir.join("stub"))
+            .current_dir(&d.dir)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let printed = || std::fs::read_to_string(d.dir.join("stub/print.args")).unwrap();
+    let theirs = r#"{"hooks":{"Stop":[]},"permissions":{"deny":["Read","RemoteTrigger"]}}"#;
+    let o = nested(&["-p", "--settings", theirs, "--tools", "Bash", "--", "--settings x"]);
+    assert!(o.status.success(), "{}", common::err(&o));
+    let p = printed();
+    let s = first_settings(&p);
+    assert_eq!(s["hooks"], json!({"Stop": []}));
+    let deny = ["Read", "RemoteTrigger", "CronCreate", "CronList", "CronDelete"];
+    assert_eq!(s["permissions"]["deny"], json!(deny));
+    assert!(p.trim_end().ends_with(" -p --tools Bash -- --settings x"), "{p}");
+    assert_eq!(p.matches("--settings").count(), 2, "{p}");
+
+    // None given, and one in a file.
+    nested(&["-p", "hi"]);
+    assert_eq!(first_settings(&printed())["permissions"]["deny"], json!(refused));
+    std::fs::write(d.dir.join("mine.json"), r#"{"model": "haiku"}"#).unwrap();
+    nested(&["-p", "--settings=mine.json", "hi"]);
+    let s = first_settings(&printed());
+    assert_eq!((&s["model"], &s["permissions"]["deny"]), (&json!("haiku"), &json!(refused)));
+
+    // What cannot be read stops it, rather than running claude unguarded or not as asked.
+    for (bad, why) in [
+        (vec!["-p", "--settings", "/no/such.json"], "--settings /no/such.json"),
+        (vec!["-p", "--settings", r#"{"permissions":{"deny":"x"}}"#], "not a list"),
+        (vec!["-p", "--settings"], "needs a value"),
+    ] {
+        let o = nested(&bad);
+        assert!(!o.status.success() && common::err(&o).contains(why), "{}", common::err(&o));
+    }
+}
+
+/// gensokyo's own `claude` is never the one it runs, even on its PATH, as a daemon started from
+/// a resident's shell has it.
+#[test]
+fn the_claude_on_path_skips_gensokyos_own() {
+    use gensokyo::daemon::launch::on_path;
+    let dir = fresh("on-path");
+    for d in ["own", "real"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+        let c = dir.join(d).join("claude");
+        std::fs::write(&c, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&c, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    }
+    std::os::unix::fs::symlink(dir.join("own"), dir.join("alias")).unwrap();
+    let path = |ds: &[&str]| std::env::join_paths(ds.iter().map(|d| dir.join(d))).unwrap();
+    let own = dir.join("own");
+    assert_eq!(on_path(Some(&path(&["own", "real"])), &own), Some(dir.join("real/claude")));
+    assert_eq!(on_path(Some(&path(&["alias", "real"])), &own), Some(dir.join("real/claude")));
+    assert_eq!(on_path(Some(&path(&["own"])), &own), None);
+    assert_eq!(
+        on_path(Some(&path(&["real", "own"])), &dir.join("x")),
+        Some(dir.join("real/claude"))
+    );
 }

@@ -102,6 +102,9 @@ async fn serve(store: Store) -> std::process::ExitCode {
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     let ino = std::fs::metadata(&path).map(|m| m.ino()).unwrap_or(0);
     let exe = std::env::current_exe().unwrap_or_else(|_| "gensokyo".into());
+    if let Err(e) = crate::shim::write(&exe) {
+        log(json!({"ev": "shim", "error": e.to_string()}));
+    }
     // Nobody from before this start is still running once this is done.
     let left = super::crash::leftovers(&store).await;
     store.sweep();

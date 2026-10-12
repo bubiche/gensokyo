@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 /// Refused in every resident: CronCreate schedules into a store that dies with the session, and
 /// with it gone CronList and CronDelete can only ever answer "nothing scheduled". RemoteTrigger
-/// would make, run and resume routines on claude.ai with none of `gensokyo cloud`'s checks.
+/// would make, run and resume routines on claude.ai with none of `gensokyo cloud`'s checks. A
+/// claude a resident starts by name is refused them too (`crate::shim`).
 pub const DISALLOWED: [&str; 4] = ["CronCreate", "CronList", "CronDelete", "RemoteTrigger"];
 
 pub struct Options<'a> {
@@ -42,15 +43,25 @@ pub struct Paths<'a> {
     pub socket: &'a Path,
 }
 
-/// The `claude` to run: `$GENSOKYO_CLAUDE`, else the first on PATH.
+/// The `claude` to run: `$GENSOKYO_CLAUDE`, else the first on PATH that is not gensokyo's own,
+/// which a daemon started from a resident's shell has on its PATH.
 pub fn claude(path: Option<&OsStr>) -> Option<PathBuf> {
     if let Some(c) = std::env::var_os("GENSOKYO_CLAUDE") {
         return Some(c.into());
     }
-    std::env::split_paths(path?).map(|d| d.join("claude")).find(|p| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    })
+    on_path(path, &crate::shim::dir())
+}
+
+/// The first `claude` on `path` outside the directory `skip`.
+pub fn on_path(path: Option<&OsStr>, skip: &Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(skip).ok();
+    std::env::split_paths(path?)
+        .filter(|d| d != skip && (real.is_none() || std::fs::canonicalize(d).ok() != real))
+        .map(|d| d.join("claude"))
+        .find(|p| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
 }
 
 /// Whether Claude Code kept a conversation for `session`, which it writes only once a prompt is
@@ -171,11 +182,12 @@ pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
 
 /// The daemon's environment minus what belongs to the terminal or session it was started from,
 /// plus what a resident needs. `bin` goes first on PATH so the skills' `gensokyo` resolves to
-/// this copy.
+/// this copy; `shim`, a resident's or headless run's, before it, so its `claude` is gensokyo's.
 pub fn env(
     base: impl IntoIterator<Item = (OsString, OsString)>,
     id: &str,
     bin: &Path,
+    shim: Option<&Path>,
     socket: &Path,
 ) -> Vec<(OsString, OsString)> {
     // Whatever names or describes the host terminal: the resident's terminal is ours.
@@ -222,10 +234,15 @@ pub fn env(
         .find_map(|k| get(&env, k).filter(|v| !v.is_empty()))
         .is_some_and(|v| v.to_ascii_lowercase().replace('-', "").contains("utf8"));
     // Joined by hand: `join_paths` refuses the whole list over one entry holding a `:`.
-    let mut path = bin.as_os_str().to_owned();
+    let mut path = OsString::new();
+    if let Some(d) = shim {
+        path.push(d);
+        path.push(":");
+    }
+    path.push(bin);
     let old = env.iter().position(|(k, _)| k == "PATH").map(|i| env.remove(i).1);
     for d in old.iter().flat_map(std::env::split_paths) {
-        if !d.as_os_str().is_empty() && d != bin {
+        if !d.as_os_str().is_empty() && d != bin && Some(d.as_path()) != shim {
             path.push(":");
             path.push(d);
         }

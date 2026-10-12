@@ -1,6 +1,12 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // A resident's `claude`, whose arguments are anyone's: before `args()`, which would panic on
+    // one that is not UTF-8.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw.first().is_some_and(|a| a == "_claude") {
+        return gensokyo::shim::main(&raw[1..]);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version" | "-V") => {

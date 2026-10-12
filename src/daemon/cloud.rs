@@ -48,6 +48,9 @@ pub(super) struct Watch {
     failed: Option<String>,
     /// A routine was changed from here: the next tick lists them again.
     again: bool,
+    /// Runs the user has said something to since a round last began, and when: a round works
+    /// on its own copy of `seen`, and would write over a mark made in it meanwhile.
+    said: HashMap<String, i64>,
 }
 
 /// What has been seen of each routine and its runs.
@@ -193,6 +196,11 @@ async fn round(shrine: &Shared, now: i64) -> Result<(), String> {
     }
     let (routines, more) = cloud::routines(&body)?;
     let mut seen = shrine.borrow().cloud.seen.clone().unwrap_or_default();
+    for (id, t) in std::mem::take(&mut shrine.borrow_mut().cloud.said) {
+        if let Some(w) = seen.runs.get_mut(&id) {
+            (w.ended, w.asked) = (false, Some(t));
+        }
+    }
     // Only a whole list says what is gone: one on a later page would come back as new, and
     // what had ended by then would never be told.
     if more {
@@ -510,6 +518,8 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
     let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
     let cwd = dir().join("courier");
     std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    // Before the words are queued: the run's events come after this.
+    let at = super::rituals::now();
     let mut cmd = tokio::process::Command::new(claude);
     cmd.args(cloud::say_args(&id, text))
         .env_clear()
@@ -536,11 +546,12 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
         false => e,
     })?;
     let mut sh = shrine.borrow_mut();
-    let w = sh.cloud.seen.as_mut().and_then(|s| s.runs.get_mut(&id));
-    let watched = w.map(|w| (w.ended, w.asked) = (false, Some(super::rituals::now()))).is_some();
-    sh.cloud.again |= watched;
+    let watched = on() && sh.cloud.seen.as_ref().is_some_and(|s| s.runs.contains_key(&id));
+    if watched {
+        sh.cloud.said.insert(id.clone(), at);
+        sh.cloud.again = true;
+    }
     drop(sh);
-    super::rituals::repush(shrine);
     let then = if watched { "gensokyo tells when it has answered" } else { "it answers there" };
     Ok(format!("said to {}: {then}", cloud::run_link(&id)))
 }

@@ -126,6 +126,8 @@ if [ -n "$printing" ] && [ -n "$courier" ]; then
   trig=$(printf '%s' "$call" | sed -nE 's/.*"(trigger_id|session_id)":"([A-Za-z0-9_]*)".*/\2/p')
   echo "$action${trig:+ $trig}" >> "$STUB_STATE/courier.calls"
   printf '%s\n' "$call" >> "$STUB_STATE/courier.json"
+  # A courier that takes this long, for what happens meanwhile.
+  [ -f "$STUB_STATE/courier.sleep" ] && sleep "$(cat "$STUB_STATE/courier.sleep")"
   said=$(printf '{"hook_event_name": "PreToolUse", "tool_name": "RemoteTrigger", "tool_input": %s}' "$call" |
     sh -c "$gate")
   case $said in

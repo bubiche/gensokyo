@@ -947,27 +947,33 @@ fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends(
     assert!(r["error"].as_str().unwrap().contains("the user says what"), "{r}");
     assert_eq!(args(), "");
 
-    // Words that start with a dash are words.
+    // Words that start with a dash are words; and said while a round is under way, they are
+    // not lost to it.
+    // It fired long ago, so its runs are read, and the words come while they are.
+    answer(&d, "list", 200, routines(T0 + 7200, T0 + 100));
+    std::fs::write(d.dir.join("stub/courier.sleep"), "2").unwrap();
+    clock(&d, T0 + 3720);
+    common::wait(|| calls(&d).len() == 4, "a round reading the runs");
     let said = common::out(&d.cli(&["cloud", "say", "morning", "-v, and then stop"]));
     assert_eq!(
         said,
         "said to https://claude.ai/code/session_A: gensokyo tells when it has answered\n"
     );
+    std::fs::remove_file(d.dir.join("stub/courier.sleep")).unwrap();
     let argv: Vec<&str> = args().leak().lines().collect();
-    assert_eq!(
-        argv,
-        ["-p", "--cloud", "cse_A", "--output-format", "json", "--", "-v, and then stop"]
-    );
+    let want = ["-p", "--cloud", "cse_A", "--output-format", "json", "--", "-v, and then stop"];
+    assert_eq!(argv, want);
     // Looked at again at once: the words are queued and the worker still idle, so nothing yet.
-    rounds(&d, 4);
+    rounds(&d, 6);
+    assert_eq!(calls(&d)[4..], ["list", "list_runs trig_R1"]);
     assert_eq!(told(&d), Vec::<String>::new());
     // A short turn begins and ends between two looks: it is told all the same, once.
-    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 + 150)]));
-    clock(&d, T0 + 200);
-    rounds(&d, 6);
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", T0 + 3750)]));
+    clock(&d, T0 + 3800);
+    rounds(&d, 8);
     assert_eq!(told(&d), ["morning: finished https://claude.ai/code/session_A"]);
-    clock(&d, T0 + 900);
-    rounds(&d, 7);
+    clock(&d, T0 + 4500);
+    rounds(&d, 9);
     assert_eq!(told(&d).len(), 1);
 
     // A run by its link, which the watch need not know; and claude's word when it fails.

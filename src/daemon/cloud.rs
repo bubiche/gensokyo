@@ -7,7 +7,7 @@
 use super::log::log;
 use super::shrine::{Shared, Shrine, touch};
 use super::store::write_atomic;
-use crate::cloud::{self, Pace, Routine, Run};
+use crate::cloud::{self, Pace, Routine, Run, on};
 use crate::paths;
 use crate::proto::{CloudAct, CloudAdd, CloudWatch, RoutineInfo};
 use crate::ritual::{Dir, when};
@@ -28,12 +28,6 @@ const FAILS_TOLD: u32 = 3;
 
 /// A courier still going after this is stopped. One call takes a few seconds.
 const COURIER_LIMIT: Duration = Duration::from_secs(120);
-
-/// Whether the user has the watch on: it spends their plan's usage, on an API Claude Code does
-/// not document, so it is off until they say.
-pub(super) fn on() -> bool {
-    paths::config("CLOUD_WATCH").as_deref() == Some("on")
-}
 
 /// What the daemon keeps about the watch. `seen` is on disk too: a daemon started again tells
 /// nothing twice.
@@ -163,16 +157,19 @@ pub(super) fn info(sh: &Shrine) -> Option<CloudWatch> {
     let routines = w
         .routines
         .iter()
-        .map(|r| RoutineInfo {
-            id: r.id.clone(),
-            name: r.name.clone(),
-            enabled: r.enabled,
-            cron: r.cron.clone(),
-            next_run_local: r.next_run.map(|t| when(t, &tz)),
-            next_run: r.next_run,
-            url: newest(&r.id).map_or_else(|| cloud::routine_link(&r.id), |n| n.url.clone()),
-            ran: newest(&r.id).map(|n| n.created),
-            going: newest(&r.id).is_some_and(|n| !n.ended),
+        .map(|r| {
+            let n = newest(&r.id);
+            RoutineInfo {
+                id: r.id.clone(),
+                name: r.name.clone(),
+                enabled: r.enabled,
+                cron: r.cron.clone(),
+                next_run_local: r.next_run.map(|t| when(t, &tz)),
+                next_run: r.next_run,
+                url: n.map_or_else(|| cloud::routine_link(&r.id), |n| n.url.clone()),
+                ran: n.map(|n| n.created),
+                going: n.is_some_and(|n| !n.ended),
+            }
         })
         .collect();
     Some(CloudWatch { listed: w.pace.listed, failing: w.failed.clone(), routines })
@@ -321,7 +318,6 @@ pub(super) async fn run_log(shrine: &Shared, who: &str) -> Result<String, String
     }
 }
 
-/// A routine the watch has listed, by name or id.
 /// A routine the watch has listed, by id, or by a name only one has: what the user reads and
 /// what they resume must be the same routine.
 fn named<'a>(sh: &'a Shrine, who: &str) -> Result<&'a Routine, String> {
@@ -514,36 +510,12 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
         return Err("nothing to say".into());
     }
     let id = run_of(&shrine.borrow(), who)?;
-    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
-    let cwd = dir().join("courier");
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
     // Before the words are queued: the run's events come after this.
     let at = super::rituals::now();
-    let mut cmd = tokio::process::Command::new(claude);
-    cmd.args(cloud::say_args(&id, text))
-        .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .current_dir(&cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let child =
-        super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
-    let out = match tokio::time::timeout(COURIER_LIMIT, child.wait_with_output()).await {
-        Ok(o) => o.map_err(|e| format!("claude: {e}"))?,
-        Err(_) => return Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
-    };
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let (stdout, code, stderr) = claude_p(shrine, cloud::say_args(&id, text)).await?;
     let r = cloud::said(&stdout, &id);
-    log(json!({"ev": "cloud", "said": id, "exit": out.status.code(), "ok": r.is_ok()}));
-    r.map_err(|e| match stdout.trim().is_empty() {
-        true => format!(
-            "claude said: {}",
-            crate::tele::clean(&String::from_utf8_lossy(&out.stderr), 200)
-        ),
-        false => e,
-    })?;
+    log(json!({"ev": "cloud", "said": id, "exit": code, "ok": r.is_ok()}));
+    r.map_err(|e| unheard(&stdout, &stderr, e))?;
     let mut sh = shrine.borrow_mut();
     let watched = on() && sh.cloud.seen.as_ref().is_some_and(|s| s.runs.contains_key(&id));
     if watched {
@@ -572,35 +544,33 @@ fn landed(shrine: &Shared, r: &Routine) {
 
 /// One courier, for one call: the API's reply to it, or why there is none.
 async fn ask(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
-    let (claude, env, exe) = {
-        let sh = shrine.borrow();
-        let (claude, env) = sh.claude("").ok_or("claude not found on PATH")?;
-        (claude, env, sh.exe.to_string_lossy().into_owned())
-    };
-    // Empty, and outside any repository: nothing there for Claude Code to load.
-    let cwd = dir().join("courier");
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    let exe = shrine.borrow().exe.to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir()).map_err(|e| format!("{}: {e}", dir().display()))?;
     let ticket = dir().join(format!("ticket-{}", cloud::uuid4().map_err(|e| e.to_string())?));
     std::fs::write(&ticket, "").map_err(|e| format!("{}: {e}", ticket.display()))?;
-    let r = courier(&claude, &env, &exe, &cwd, &ticket, &call).await;
+    let out = claude_p(shrine, cloud::args(&call, &exe, &ticket)).await;
     let _ = std::fs::remove_file(&ticket);
-    r
+    let (stream, code, stderr) = out?;
+    let r = cloud::reply(&stream, &call);
+    log(json!({"ev": "cloud", "call": call, "exit": code, "ok": r.is_ok()}));
+    r.map_err(|e| unheard(&stream, &stderr, e))
 }
 
-/// The courier itself, given its ticket.
-async fn courier(
-    claude: &std::path::Path,
-    env: &[(std::ffi::OsString, std::ffi::OsString)],
-    exe: &str,
-    cwd: &std::path::Path,
-    ticket: &std::path::Path,
-    call: &Value,
-) -> Result<(u16, String), String> {
+/// A `claude -p` of the watch's: in an empty directory outside any repository, where there is
+/// nothing for Claude Code to load, and gone with whatever it started. What it printed, its
+/// exit and its stderr.
+async fn claude_p(
+    shrine: &Shared,
+    args: Vec<String>,
+) -> Result<(String, Option<i32>, String), String> {
+    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
+    let cwd = dir().join("courier");
+    std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
     let mut cmd = tokio::process::Command::new(claude);
-    cmd.args(cloud::args(call, exe, ticket))
+    cmd.args(args)
         .env_clear()
-        .envs(env.iter().map(|(k, v)| (k, v)))
-        .current_dir(cwd)
+        .envs(env)
+        .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -612,21 +582,21 @@ async fn courier(
     let out = tokio::time::timeout(COURIER_LIMIT, child.wait_with_output()).await;
     // What it started and left behind goes with it, as a headless run's does.
     if pid > 0 {
-        // SAFETY: plain killpg on the courier's own group (`process_group(0)`).
+        // SAFETY: plain killpg on its own group (`process_group(0)`).
         unsafe { libc::killpg(pid, libc::SIGKILL) };
     }
     let out = match out {
-        Ok(o) => o.map_err(|e| format!("the courier: {e}"))?,
-        Err(_) => return Err(format!("a courier took over {}s", COURIER_LIMIT.as_secs())),
+        Ok(o) => o.map_err(|e| format!("claude: {e}"))?,
+        Err(_) => return Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
     };
-    let stream = String::from_utf8_lossy(&out.stdout);
-    let r = cloud::reply(&stream, call);
-    log(json!({"ev": "cloud", "call": call, "exit": out.status.code(), "ok": r.is_ok()}));
-    r.map_err(|e| match stream.trim().is_empty() {
-        true => format!(
-            "claude said: {}",
-            crate::tele::clean(&String::from_utf8_lossy(&out.stderr), 200)
-        ),
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    Ok((text(&out.stdout), out.status.code(), text(&out.stderr)))
+}
+
+/// Why a `claude -p` that printed nothing gave no answer: its own words.
+fn unheard(stdout: &str, stderr: &str, e: String) -> String {
+    match stdout.trim().is_empty() {
+        true => format!("claude said: {}", crate::tele::clean(stderr, 200)),
         false => e,
-    })
+    }
 }

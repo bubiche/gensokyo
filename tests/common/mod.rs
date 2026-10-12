@@ -50,10 +50,14 @@ pub fn hello(who: &str) -> Value {
 
 /// Connected and welcomed: the writer, and the lines that come back.
 pub fn connect(sock: &Path) -> (UnixStream, Lines) {
+    connect_saying(sock, hello("test"))
+}
+
+fn connect_saying(sock: &Path, hello: Value) -> (UnixStream, Lines) {
     let s = UnixStream::connect(sock).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     let mut w = s.try_clone().unwrap();
-    writeln!(w, "{}", hello("test")).unwrap();
+    writeln!(w, "{hello}").unwrap();
     let mut lines = BufReader::new(s).lines();
     let welcome = next(&mut lines);
     assert_eq!(welcome["t"], "welcome", "{welcome}");
@@ -143,6 +147,15 @@ impl Daemon {
     /// hello, one request, its reply.
     pub fn req(&self, req: Value) -> Value {
         let (mut w, mut lines) = self.connect();
+        writeln!(w, "{req}").unwrap();
+        next(&mut lines)
+    }
+
+    /// One request as resident `id` would make it, its reply.
+    pub fn req_as(&self, id: &str, req: Value) -> Value {
+        let mut hello = hello("test");
+        hello["resident"] = json!(id);
+        let (mut w, mut lines) = connect_saying(&self.socket(), hello);
         writeln!(w, "{req}").unwrap();
         next(&mut lines)
     }

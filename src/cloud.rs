@@ -6,6 +6,12 @@
 
 use serde_json::{Value, json};
 
+/// Whether the user has the watch on: it spends their plan's usage, on an API Claude Code does
+/// not document, so it is off until they say.
+pub fn on() -> bool {
+    crate::paths::config("CLOUD_WATCH").as_deref() == Some("on")
+}
+
 /// Where a run is opened, and the only links gensokyo passes on.
 pub const WEB: &str = "https://claude.ai/code/";
 
@@ -329,8 +335,7 @@ pub fn run_log(body: &str, id: &str) -> String {
     let head: Value = serde_json::from_str(head).unwrap_or(Value::Null);
     let mut out = lines(rest);
     if !head["next_cursor"].is_null() {
-        let url = format!("{WEB}session_{}", id.trim_start_matches("cse_"));
-        out.push(format!("(the log goes on past this page: {url})"));
+        out.push(format!("(the log goes on past this page: {})", run_link(id)));
     }
     out.join("\n")
 }

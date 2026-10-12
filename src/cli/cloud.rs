@@ -1,7 +1,7 @@
 //! `gensokyo cloud …`: the user's routines on claude.ai, as the daemon watches them.
 
 use super::{Error, request, say};
-use crate::cloud;
+use crate::cloud::{self, on};
 use crate::paths;
 use crate::proto::{CloudAct, CloudAdd, CloudWatch, Reply, Request, RoutineInfo};
 use clap::Subcommand;
@@ -97,15 +97,7 @@ pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
             let a = CloudAdd { name, schedule, prompt, repos, connectors, model };
             say(request(Request::CloudAdd(a), false))
         }
-        Cmd::Say { who, text } => {
-            if resident() {
-                return Err(format!(
-                    "the user says what a cloud run is told next; tell them what you would say \
-                     to {who}"
-                ));
-            }
-            say(request(Request::CloudSay { who, text }, false))
-        }
+        Cmd::Say { who, text } => say(request(Request::CloudSay { who, text }, false)),
         Cmd::Show { routine } => say(request(Request::CloudShow { who: routine }, false)),
         Cmd::Pause { routine } => act(routine, CloudAct::Pause, true),
         Cmd::Resume { routine, yes } => act(routine, CloudAct::Resume, yes),
@@ -176,10 +168,6 @@ pub(super) fn status() -> String {
     }
 }
 
-fn on() -> bool {
-    paths::config("CLOUD_WATCH").as_deref() == Some("on")
-}
-
 /// What the running daemon's watch has seen; none while it is off. Nothing here asks claude.ai:
 /// only the watch spends the plan.
 fn seen() -> Result<Option<CloudWatch>, String> {
@@ -247,10 +235,11 @@ fn open(routine: Option<&str>) -> Result<(), String> {
 /// The routine named, or with none, the one whose newest run is newest.
 fn pick<'a>(rs: &'a [RoutineInfo], name: Option<&str>) -> Result<&'a RoutineInfo, String> {
     match name {
-        Some(n) => rs
-            .iter()
-            .find(|r| r.name == n || r.id == n)
-            .ok_or_else(|| format!("no routine {n} on claude.ai (gensokyo cloud lists them)")),
+        Some(n) => match rs.iter().filter(|r| r.name == n || r.id == n).collect::<Vec<_>>()[..] {
+            [r] => Ok(r),
+            [] => Err(format!("no routine {n} on claude.ai (gensokyo cloud lists them)")),
+            _ => Err(format!("more than one routine is named {n}: give its id (trig_…)")),
+        },
         None => rs
             .iter()
             .filter(|r| r.ran.is_some())

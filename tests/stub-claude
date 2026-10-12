@@ -109,11 +109,11 @@ for a in "$@"; do
   prev=$a
 done
 if [ -n "$printing" ] && [ -n "$courier" ]; then
-  settings='' prompt=''
+  settings=''
   while [ $# -gt 0 ]; do
     case $1 in
       --settings) settings=$2; shift ;;
-      --) shift; prompt=$*; break ;;
+      --) break ;;
     esac
     shift
   done

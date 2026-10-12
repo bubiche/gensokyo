@@ -81,6 +81,7 @@ fn summon_launches_claude_with_our_argv_and_env() {
     );
     assert!(at("--plugin-dir").ends_with("/share/plugin"));
     assert!(at("--append-system-prompt").contains("your resident name is Reimu."));
+    assert!(!argv.contains(&"--system-prompt-snapshot"), "only for a run taken over");
     assert_eq!(d.stub(&id, "args").trim_end(), argv.join(" "));
 
     let settings: Value = serde_json::from_str(at("--settings")).unwrap();

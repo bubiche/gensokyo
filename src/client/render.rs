@@ -530,13 +530,13 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     // More than fit: as many as do around the one on screen, and a line for those above and
     // one for those below.
     let (mut above, mut below) = (Vec::new(), Vec::new());
-    if order.len() > room {
+    if n > room {
         let f = order.iter().position(on).unwrap_or(0);
-        let mut n = room.saturating_sub(1).max(1);
-        if window(order.len(), f, n).start > 0 && window(order.len(), f, n).end < order.len() {
-            n = room.saturating_sub(2).max(1);
+        let mut fit = room.saturating_sub(1).max(1);
+        if window(n, f, fit).start > 0 && window(n, f, fit).end < n {
+            fit = room.saturating_sub(2).max(1);
         }
-        let shown = window(order.len(), f, n);
+        let shown = window(n, f, fit);
         below = order.split_off(shown.end);
         above = order.drain(..shown.start).collect();
     }
@@ -628,9 +628,24 @@ fn tags(t: &[(String, String)]) -> String {
 /// `s` in `most` columns, its end cut to `…` when it is wider.
 fn cut(s: &str, most: usize) -> String {
     match width(s) as usize > most {
-        true => s.chars().take(most.saturating_sub(1)).chain(['…']).collect(),
+        true => take(s.chars(), most.saturating_sub(1)).into_iter().chain(['…']).collect(),
         false => s.into(),
     }
+}
+
+/// The first of `cs` in `room` columns, taken by width, so a wide letter is never counted as one
+/// column.
+fn take(cs: impl Iterator<Item = char>, mut room: usize) -> Vec<char> {
+    let mut v = Vec::new();
+    for c in cs {
+        let cw = width(c.encode_utf8(&mut [0; 4])) as usize;
+        if cw > room {
+            break;
+        }
+        room -= cw;
+        v.push(c);
+    }
+    v
 }
 
 /// `s` in `most` columns, its middle cut to `…` when it is wider: a branch's end is what tells
@@ -639,26 +654,13 @@ fn cut_mid(s: &str, most: usize) -> String {
     if width(s) as usize <= most {
         return s.into();
     }
-    // Taken by width, so a wide letter is never counted as one column.
-    let take = |cs: &mut dyn Iterator<Item = char>, mut room: usize| {
-        let mut v = Vec::new();
-        for c in cs {
-            let cw = width(c.encode_utf8(&mut [0; 4])) as usize;
-            if cw > room {
-                break;
-            }
-            room -= cw;
-            v.push(c);
-        }
-        v
-    };
-    let head = take(&mut s.chars(), most.saturating_sub(1) / 2);
-    let tail = take(&mut s.chars().rev(), most.saturating_sub(1) - most.saturating_sub(1) / 2);
+    let head = take(s.chars(), most.saturating_sub(1) / 2);
+    let tail = take(s.chars().rev(), most.saturating_sub(1) - most.saturating_sub(1) / 2);
     head.into_iter().chain(['…']).chain(tail.into_iter().rev()).collect()
 }
 
 /// The branch on a resident's dim row, `BRANCH_PREFIX` left off: none when its last part only
-/// says the name again, `_` and `-` alike.
+/// says the name again, `_`, `-` and a space alike.
 fn shown_branch<'a>(r: &'a Resident, prefix: &str) -> Option<&'a str> {
     let b = r.branch.as_deref()?;
     let b = b.strip_prefix(prefix).filter(|b| !b.is_empty()).unwrap_or(b);
@@ -671,26 +673,53 @@ fn shown_branch<'a>(r: &'a Resident, prefix: &str) -> Option<&'a str> {
 fn branch_row(r: &Resident, prefix: &str, room: usize) -> String {
     let t = tags(&r.tags);
     let Some(b) = shown_branch(r, prefix) else { return cut(&t, room) };
-    let after = if t.is_empty() { 0 } else { t.len() + 1 };
+    let after = if t.is_empty() { 0 } else { width(&t) as usize + 1 };
     let most = room.saturating_sub(2 + after).max(room.saturating_sub(2) / 2).max(2);
     let b = format!("⎇ {}", cut_mid(b, most));
     cut(&if t.is_empty() { b } else { format!("{b} {t}") }, room)
 }
 
-/// The dim row uncut, over as many rows of `room` as it takes, at most three.
+/// The dim row uncut, over as many rows of `room` as it takes, at most three: a branch that
+/// would leave no room on them for its first tag leaves the last row to its tags.
 fn whole_row(r: &Resident, prefix: &str, room: usize) -> Vec<String> {
     let t = tags(&r.tags);
-    let s = match shown_branch(r, prefix) {
-        Some(b) if t.is_empty() => format!("⎇ {b}"),
-        Some(b) => format!("⎇ {b} {t}"),
-        None => t,
-    };
-    if width(&s) as usize <= room {
-        return vec![s];
-    }
     // Held to its branch by a no-break space, so `⎇` is not left on a row of its own.
-    let mut v = wrap(&s.replacen("⎇ ", "⎇\u{a0}", 1), room, 3);
+    let b = shown_branch(r, prefix).map(|b| format!("⎇\u{a0}{b}"));
+    let crowds = |b: &str| {
+        let rows = wrap(b, room, usize::MAX);
+        let first = width(&tags(&r.tags[..1])) as usize;
+        rows.len() > 3 || rows.len() == 3 && width(&rows[2]) as usize + 1 + first > room
+    };
+    let mut v = match b {
+        Some(b) if t.is_empty() => wrap(&b, room, 3),
+        Some(b) if crowds(&b) => {
+            let mut v = wrap(&b, room, 2);
+            v.push(cut(&t, room));
+            v
+        }
+        Some(b) => wrap(&format!("{b} {t}"), room, 3),
+        None => wrap(&t, room, 3),
+    };
     v[0] = v[0].replacen('\u{a0}', " ", 1);
+    v
+}
+
+/// A word in pieces, each ending in a `-` or a `/` but the last; a run of them stays with the
+/// letters after it, so `--with` is one.
+fn pieces(word: &str) -> Vec<&str> {
+    let mut v = Vec::new();
+    let (mut start, mut letters) = (0, false);
+    let mut cs = word.char_indices().peekable();
+    while let Some((at, c)) = cs.next() {
+        let sep = matches!(c, '-' | '/');
+        letters |= !sep;
+        let next_sep = cs.peek().map(|&(_, c)| matches!(c, '-' | '/'));
+        if sep && letters && next_sep == Some(false) {
+            v.push(&word[start..at + 1]);
+            (start, letters) = (at + 1, false);
+        }
+    }
+    v.push(&word[start..]);
     v
 }
 
@@ -866,14 +895,15 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     }
 }
 
-/// `s` in lines of at most `w` columns, broken at spaces where it can be, else after a `-` or a
-/// `/` as in a branch or a path, at most `n` of them; the last ends in `…` when some was left over.
+/// `s` in lines of at most `w` columns, broken at spaces where it can be, else a word too wide
+/// for a row after a `-` or a `/` as in a branch or a path, at most `n` of them; the last ends in
+/// `…` when some was left over.
 pub(super) fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
     let mut lines: Vec<String> = vec![String::new()];
     for word in s.split(' ') {
-        let pieces: Vec<&str> = match word.is_empty() {
-            true => vec![""],
-            false => word.split_inclusive(['-', '/']).collect(),
+        let pieces = match width(word) as usize > w {
+            true => pieces(word),
+            false => vec![word],
         };
         for (i, piece) in pieces.into_iter().enumerate() {
             let cur = lines.last_mut().expect("never empty");

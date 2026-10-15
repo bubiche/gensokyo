@@ -987,3 +987,34 @@ fn the_focused_resident_is_drawn_whole_only_while_it_fits() {
     let rows = at(12);
     assert!(!has(&rows, "⎇") && has(&rows, "1 ○ Reimu") && has(&rows, "more"), "{rows:#?}");
 }
+
+#[test]
+fn a_message_breaks_at_spaces_and_keeps_a_word_that_fits_whole() {
+    let mut m = shrine();
+    m.message = Some(Message::new(Say::Error, "Duel needs a peer: --with <name>"));
+    let (rows, _) = side(&m, AREA);
+    assert!(rows.iter().any(|r| r.trim() == "--with <name>"), "{rows:#?}");
+    assert!(!rows.iter().any(|r| r.trim_end().ends_with("--")), "{rows:#?}");
+}
+
+#[test]
+fn a_focused_branch_too_long_for_its_rows_leaves_the_last_to_its_tags() {
+    let mut m = long();
+    m.residents[0].branch = Some(format!("nebel95/{}", "summary-for-every-board-".repeat(4)));
+    m.residents[0].tags = vec![("pr".into(), "#12".into())];
+    let (rows, _) = side(&m, AREA);
+    let youmu = rows.iter().position(|r| r.starts_with("4 ├")).unwrap();
+    assert_eq!(rows[youmu - 1].trim_end(), "  │ pr=#12", "{rows:#?}");
+    assert!(rows[youmu - 2].trim_end().ends_with('…'), "{rows:#?}");
+}
+
+#[test]
+fn a_dim_row_of_wide_letters_is_cut_by_columns() {
+    let mut m = branches();
+    m.residents[1].branch = Some("機能追加の仕事をする".into());
+    m.residents[1].tags = vec![("pr".into(), "#12".into()), ("ci".into(), "green".into())];
+    let (rows, _) = side(&m, Rect::new(0, 0, 120, 30));
+    let marisa = rows.iter().position(|r| r.starts_with("2 ○ Marisa")).unwrap();
+    let dim = rows[marisa + 1].trim_end();
+    assert!(dim.contains("pr=#12") && dim.ends_with('…'), "{rows:#?}");
+}

@@ -201,15 +201,18 @@ screen in a focused terminal, the shrine rings the bell and posts an iTerm2 noti
 Here Marisa, on screen, waits on a permission prompt, Sakuya has asked a question, and Youmu has
 finished a turn nobody has read; Reimu is resting and Cirno has departed.
 
-The status line reports feed the rest: each sidebar line shows the model and context used, the
-title over the screen has the directory, branch, model, effort, permission mode, cache hit rate
-(`cold` once the cache has expired, so the next message writes it all again) and cost, and the
-sidebar's foot has the account's 5-hour and weekly usage, the freshest any resident has heard (a
-window past its reset is left off until one hears again). The context turns yellow from 70% and
-red from 90%; a usage bar does too, and turns yellow from half used if it is ahead of the clock,
-on course to run out before it resets. The directory is where Claude works now, which follows
-it into a worktree or a subdirectory, and its branch is on a dim line under each resident in the
-sidebar while they all fit. `BRANCH_PREFIX=you/` in the config leaves that prefix off there.
+The status line reports feed the rest: each sidebar line shows the context used, and the model
+while not every resident is on the same one, the title over the screen has the directory,
+branch, model, effort, permission mode, cache hit rate (`cold` once the cache has expired, so
+the next message writes it all again) and cost, and the sidebar's foot has the account's 5-hour
+and weekly usage, the freshest any resident has heard (a window past its reset is left off until
+one hears again). The context turns yellow from 70% and red from 90%; a usage bar does too, and
+turns yellow from half used if it is ahead of the clock, on course to run out before it resets.
+The directory is where Claude works now, which follows it into a worktree or a subdirectory, and
+its branch is on a dim line under each resident in the sidebar while they all fit, cut in its
+middle when long, and left off when it only repeats the name. `BRANCH_PREFIX=you/` in the config
+leaves that prefix off there. The one on screen is drawn whole while there is room: its name and
+its dim line wrap instead of being cut.
 Its tags follow the branch on that line, and in full in the title: `gensokyo tag Reimu pr=#123
 ci=green` sets them, `ci=` removes one and `--clear` all, and `gensokyo tag Reimu` lists them.
 A resident has at most 4, kept through a resume or a restart; a key is up to 12 of `a-z`, `0-9`,

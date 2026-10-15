@@ -140,6 +140,20 @@ fn tagged() -> Model {
     m
 }
 
+/// Reimu on screen with a name and a branch too long for the sidebar, leading two helpers.
+fn long() -> Model {
+    let mut m = branches();
+    m.residents[0].name = "Reimu Hakurei of the Hakurei Shrine".into();
+    m
+}
+
+/// Everyone who reports a model on the same one.
+fn uniform() -> Model {
+    let mut m = aware();
+    m.residents[1].telemetry.as_mut().unwrap().model = Some("Haiku 4.5".into());
+    m
+}
+
 fn summon(stage: Stage) -> Modal {
     Modal::Summon(Summon {
         stage,
@@ -432,6 +446,20 @@ fn hits(m: &Model, area: Rect) -> HitMap {
     render::render(m, area, &mut Buffer::empty(area))
 }
 
+/// The sidebar's inside, row by row as drawn in `area` (row 0 is its top edge), and the buffer.
+fn side(m: &Model, area: Rect) -> (Vec<String>, Buffer) {
+    let mut buf = Buffer::empty(area);
+    render::render(m, area, &mut buf);
+    let row = |y| (1..render::SIDEBAR_W - 1).map(|x| buf[(x, y)].symbol()).collect();
+    ((0..area.height).map(row).collect(), buf)
+}
+
+/// What a resident's dim rows say, their `  │ ` lead and every space left out: a lead's
+/// helper's rows have one column more.
+fn joined(rows: &[String]) -> String {
+    rows.iter().flat_map(|r| r.chars().skip(4)).filter(|c| !c.is_whitespace()).collect()
+}
+
 const AREA: Rect = Rect { x: 0, y: 0, width: 120, height: 40 };
 
 /// Drawn whole at both sizes: the screens themselves, and two modals for where a modal sits.
@@ -507,37 +535,33 @@ fn a_helper_line_resolves_to_the_helper_beneath_its_lead() {
 
 #[test]
 fn a_branch_row_is_its_residents_and_goes_when_the_sidebar_is_short() {
-    let map = hits(&branches(), AREA);
+    // Chen on screen: nobody here is drawn in full.
+    let m = Model { focused: Some("id-Chen".into()), ..branches() };
+    let map = hits(&m, AREA);
     // Reimu and its branch, Youmu and its, Hieda with none, Marisa and its, Cirno, Chen.
     for (row, i) in [0, 0, 3, 3, 4, 4, 1, 1, 2, 5].into_iter().enumerate() {
         assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
     }
     // Ten rows of residents with their branches, six without: at 16 rows high only the six fit.
-    let area = Rect::new(0, 0, 120, 16);
-    let mut buf = Buffer::empty(area);
-    render::render(&branches(), area, &mut buf);
-    let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    assert!((0..16).all(|y| !side(y).contains('⎇')), "{:?}", (0..16).map(side).collect::<Vec<_>>());
-    assert!(side(6).contains("Chen"));
+    let (rows, _) = side(&m, Rect::new(0, 0, 120, 16));
+    assert!(!rows.iter().any(|r| r.contains('⎇')), "{rows:#?}");
+    assert!(rows[6].contains("Chen"));
 }
 
 #[test]
 fn a_tag_row_is_its_residents_with_or_without_a_branch() {
-    let map = hits(&tagged(), AREA);
+    let m = Model { focused: Some("id-Chen".into()), ..tagged() };
+    let map = hits(&m, AREA);
     // As with branches, and Cirno's tags under it.
     for (row, i) in [0, 0, 3, 3, 4, 4, 1, 1, 2, 2, 5].into_iter().enumerate() {
         assert_eq!(map.at(5, 1 + row as u16).map(|(_, h)| h), Some(Hit::Resident(i)), "row {row}");
     }
-    let area = Rect::new(0, 0, 120, 16);
-    let mut buf = Buffer::empty(area);
-    render::render(&tagged(), area, &mut buf);
-    let side = |y: u16| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    assert!((0..16).all(|y| !side(y).contains("=")), "{:?}", (0..16).map(side).collect::<Vec<_>>());
-    // Tags never squeeze a branch below half the row: they are cut instead.
-    let mut buf = Buffer::empty(AREA);
-    render::render(&tagged(), AREA, &mut buf);
-    let row: String = (0..render::SIDEBAR_W).map(|x| buf[(x, 2)].symbol()).collect();
-    assert!(row.contains("⎇ padlet-…") && row.contains("pr=#"), "{row:?}");
+    let (rows, _) = side(&m, Rect::new(0, 0, 120, 16));
+    assert!(!rows.iter().any(|r| r.contains('=')), "{rows:#?}");
+    // Tags never squeeze a branch below half the row: they are cut instead, the branch at its
+    // middle.
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[2].contains("⎇ pad…oard pr=#123…"), "{rows:#?}");
 }
 
 #[test]
@@ -747,7 +771,9 @@ fn a_path_longer_than_its_field_shows_its_end_and_the_cursor_after_it() {
 #[test]
 fn tiny_screens_do_not_panic() {
     for (_, m) in screens() {
-        for (w, h) in [(40, 10), (26, 3), (25, 5), (10, 3), (1, 1), (0, 0), (200, 2), (80, 1)] {
+        for (w, h) in
+            [(40, 10), (26, 3), (25, 5), (10, 3), (6, 40), (1, 1), (0, 0), (200, 2), (80, 1)]
+        {
             let area = Rect::new(0, 0, w, h);
             render::render(&m, area, &mut Buffer::empty(area));
             render::cursor(&m, area);
@@ -840,4 +866,124 @@ fn a_long_ritual_name_is_cut_with_an_ellipsis_in_the_timetable() {
     let t = modal_box(&m);
     let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
     assert!(text.contains("a-ritual-name-past-…"), "{text}");
+}
+
+#[test]
+fn the_model_column_shows_only_while_models_differ() {
+    // Haiku beside Opus: each row says which.
+    let (rows, _) = side(&aware(), AREA);
+    assert!(rows[1].ends_with("Hai  12%") && rows[3].ends_with("Opu   8%"), "{rows:#?}");
+    // One model among the living, Cirno's from before it left not counted: the name has its
+    // columns.
+    let mut m = uniform();
+    m.residents[1].name = "Marisa-Kirisame-of-the-Forest".into();
+    let t = Telemetry { model: Some("Sonnet 5".into()), at: NOW, ..Telemetry::default() };
+    m.residents[2].telemetry = Some(t);
+    let (rows, _) = side(&m, AREA);
+    let models = ["Hai", "Opu", "Son"];
+    assert!(!rows[1..].iter().any(|r| models.iter().any(|s| r.contains(s))), "{rows:#?}");
+    assert!(rows[1].starts_with("1 ● Reimu") && rows[1].ends_with(" 12%"), "{rows:#?}");
+    assert_eq!(rows[3], "2 ✦ Marisa-Kirisam   8%");
+}
+
+#[test]
+fn a_branch_that_repeats_the_name_is_left_off() {
+    let mut m = shrine();
+    m.residents[0].branch = Some("main".into());
+    (m.residents[1].name, m.residents[1].branch) =
+        ("openai_eu_cos".into(), Some("nebel95/openai-eu-cos".into()));
+    m.residents[2].branch = Some("x".into());
+    let (rows, _) = side(&m, AREA);
+    // Reimu and its branch, openai_eu_cos with no row below it, Cirno and its branch.
+    assert!(rows[2].contains("⎇ main") && rows[3].starts_with("2 ○ openai_eu_cos"), "{rows:#?}");
+    assert!(rows[4].starts_with("3 · Cirno") && rows[5].contains("⎇ x"), "{rows:#?}");
+    assert!(!rows.iter().any(|r| r.contains("openai-eu")), "{rows:#?}");
+    // It no longer needs a row: five rows are enough for every branch row.
+    let (rows, _) = side(&m, Rect::new(0, 0, 120, 13));
+    assert!(rows[2].contains("⎇ main") && rows[5].contains("⎇ x"), "{rows:#?}");
+    // On screen too, and its tags still shown, alone.
+    m.focused = Some("id-Marisa".into());
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[4].starts_with("3 · Cirno"), "{rows:#?}");
+    m.residents[1].tags = vec![("pr".into(), "#9".into())];
+    let (rows, _) = side(&m, AREA);
+    assert_eq!(rows[4].trim(), "pr=#9", "{rows:#?}");
+    // Read without case, after the last `/`.
+    m.residents[0].branch = Some("someone/REIMU".into());
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[2].starts_with("2 ○ openai_eu_cos"), "{rows:#?}");
+}
+
+#[test]
+fn the_focused_name_wraps_over_rows_that_are_all_its() {
+    let mut m = shrine();
+    m.residents[0].name = "Reimu Hakurei of the Hakurei Shrine".into();
+    let t =
+        Telemetry { model: Some("Opus 5.5".into()), ctx: Some(12), at: NOW, ..Default::default() };
+    m.residents[0].telemetry = Some(t);
+    let (rows, buf) = side(&m, AREA);
+    // One model, so the name has 14 columns beside the context, which stays on its first row.
+    let top: Vec<&str> = rows[1..4].iter().map(|r| r.trim_end()).collect();
+    assert_eq!(top, ["1 ○ Reimu Hakurei   12%", "    of the Hakurei", "    Shrine"], "{rows:#?}");
+    assert!(rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
+    let map = hits(&m, AREA);
+    for y in 1..4 {
+        assert_eq!(map.at(5, y).map(|(_, h)| h), Some(Hit::Resident(0)), "row {y}");
+        let lit = (1..render::SIDEBAR_W - 1)
+            .all(|x| buf[(x, y)].bg == ratatui::style::Color::Indexed(237));
+        assert!(lit, "row {y}");
+    }
+    assert_eq!(map.at(5, 4).map(|(_, h)| h), Some(Hit::Resident(1)));
+    // Behind the installed claude: its mark keeps its place beside the first row.
+    m.residents[0].outdated = Some("2.1.0".into());
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[1].starts_with("1 ○ Reimu ⇡"), "{rows:#?}");
+    // Past three rows, the third ends in `…`.
+    m.residents[0].name = "x".repeat(50);
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[3].trim_end().ends_with('…') && rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
+}
+
+#[test]
+fn the_focused_branch_shows_whole_and_a_leads_bar_runs_down_its_rows() {
+    let m = long();
+    let (rows, _) = side(&m, AREA);
+    // Reimu's name over two rows, then its branch over as many as it takes, down to Youmu.
+    assert!(rows[1].starts_with("1 ○ Reimu Hakurei of"), "{rows:#?}");
+    assert_eq!(rows[2].trim_end(), "  │ the Hakurei Shrine");
+    let youmu = rows.iter().position(|r| r.starts_with("4 ├")).unwrap();
+    assert!((5..=6).contains(&youmu), "{rows:#?}");
+    let whole = joined(&rows[3..youmu]);
+    assert!(whole.contains("⎇padlet-ai-summary-for-every-board"), "{rows:#?}");
+    assert!(!whole.contains('…') && !whole.contains("nebel95"), "{rows:#?}");
+    let map = hits(&m, AREA);
+    for y in 1..youmu {
+        assert_eq!(map.at(5, y as u16).map(|(_, h)| h), Some(Hit::Resident(0)), "row {y}");
+        if y > 1 {
+            assert_eq!(rows[y].chars().nth(2), Some('│'), "{rows:#?}");
+        }
+    }
+}
+
+#[test]
+fn the_focused_resident_is_drawn_whole_only_while_it_fits() {
+    let at = |h| side(&branches(), Rect::new(0, 0, 120, h)).0;
+    let has = |rows: &[String], s: &str| rows.iter().any(|r| r.contains(s));
+    // Every branch row fits but not Reimu's whole: as before, its branch cut in the middle.
+    let rows = at(18);
+    assert!(has(&rows, "⎇ padlet-a…ry-board") && has(&rows, "⎇ main"), "{rows:#?}");
+    // Not every branch row: one row each, Reimu's whole below it.
+    let rows = at(17);
+    assert!(
+        !has(&rows, "⎇ fix-ci") && !has(&rows, "⎇ main") && has(&rows, "6 ○ Chen"),
+        "{rows:#?}"
+    );
+    let youmu = rows.iter().position(|r| r.starts_with("4 ├")).unwrap();
+    assert!(joined(&rows[2..youmu]).contains("⎇padlet-ai-summary-for-every-board"), "{rows:#?}");
+    // Not that either: one row each, as before.
+    let rows = at(15);
+    assert!(!has(&rows, "⎇") && has(&rows, "6 ○ Chen"), "{rows:#?}");
+    // Not even one row each: Reimu on one row among those that fit.
+    let rows = at(12);
+    assert!(!has(&rows, "⎇") && has(&rows, "1 ○ Reimu") && has(&rows, "more"), "{rows:#?}");
 }

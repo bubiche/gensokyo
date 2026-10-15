@@ -453,16 +453,84 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let mut order = drawn(&m.residents);
     // Those with a helper below them: a lead with helpers, and each helper but the last.
     let held: Vec<usize> = order.windows(2).filter(|p| p[1].1).map(|p| p[0].0).collect();
+    // Each one's model at its right only while they are not all on the same one: the one on
+    // screen has its own on the box.
+    let mut models = m
+        .residents
+        .iter()
+        .filter(|r| r.state != State::Departed)
+        .filter_map(|r| r.telemetry.as_ref()?.model.as_deref())
+        .map(tele::model_short);
+    let first = models.next();
+    let model_col = models.any(|s| Some(&s) != first.as_ref());
+    // Model and context at the right, while it runs and has reported.
+    let right = |r: &Resident| {
+        let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
+        t.map_or(String::new(), |t| {
+            let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
+            match (model_col, ctx.is_empty()) {
+                (true, _) => {
+                    let model = t.model.as_deref().map(tele::model_short).unwrap_or_default();
+                    format!(" {model:<3} {ctx:>4}")
+                }
+                (false, true) => String::new(),
+                (false, false) => format!(" {ctx:>4}"),
+            }
+        })
+    };
+    let lead = |i: usize, helper: bool| {
+        let r = &m.residents[i];
+        let slot = r.slot.map_or(" ".into(), |s| s.to_string());
+        let tee = match (helper, held.contains(&i)) {
+            (false, _) => "",
+            (true, true) => "├",
+            (true, false) => "└",
+        };
+        format!("{slot} {tee}{} ", r.state.glyph())
+    };
+    // Behind the claude installed now, or on its way to it.
+    let renew = |r: &Resident| match (r.renewing, r.outdated.is_some()) {
+        (true, _) => Some(" ↻"),
+        (false, true) => Some(" ⇡"),
+        _ => None,
+    };
     // Each one's branch and tags on a dim row below it, while every row fits.
-    let has_row = |r: &Resident| r.branch.is_some() || !r.tags.is_empty();
+    let has_row = |r: &Resident| shown_branch(r, &m.prefix).is_some() || !r.tags.is_empty();
+    let on = |(i, _): &(usize, bool)| Some(&m.residents[*i].id) == m.focused.as_ref();
+    // The one on screen whole, while there is room: its name over as many rows as it takes,
+    // and its dim row uncut.
+    let whole = order.iter().find(|p| on(p)).map(|&(i, helper)| {
+        let r = &m.residents[i];
+        let pad = width(&lead(i, helper)) as usize;
+        let mark = renew(r).map_or(0, |_| 2);
+        let most = w.saturating_sub(pad + width(&right(r)) as usize + mark).max(1);
+        let name = match width(&r.name) as usize > most {
+            true => wrap(&r.name, most, 3),
+            false => vec![r.name.clone()],
+        };
+        let dim = match has_row(r) {
+            true => whole_row(r, &m.prefix, w.saturating_sub(pad).max(1)),
+            false => Vec::new(),
+        };
+        (i, name, dim)
+    });
     let branches = order.iter().filter(|(i, _)| has_row(&m.residents[*i])).count();
     let room = bottom.saturating_sub(inner.y + 1) as usize;
-    let two = order.len() + branches <= room;
+    let (names, dims) = whole.as_ref().map_or((0, 0), |(_, n, d)| (n.len() - 1, d.len()));
+    // Best first: every dim row and the one on screen whole, every dim row, a row each but the
+    // one on screen whole, a row each.
+    let n = order.len();
+    let (two, grow) = if n + branches + names + dims.saturating_sub(1) <= room {
+        (true, true)
+    } else if n + branches <= room {
+        (true, false)
+    } else {
+        (false, n + names + dims <= room)
+    };
     // More than fit: as many as do around the one on screen, and a line for those above and
     // one for those below.
     let (mut above, mut below) = (Vec::new(), Vec::new());
     if order.len() > room {
-        let on = |(i, _): &(usize, bool)| Some(&m.residents[*i].id) == m.focused.as_ref();
         let f = order.iter().position(on).unwrap_or(0);
         let mut n = room.saturating_sub(1).max(1);
         if window(order.len(), f, n).start > 0 && window(order.len(), f, n).end < order.len() {
@@ -482,13 +550,13 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         if y + 1 >= bottom {
             break;
         }
-        let slot = r.slot.map_or(" ".into(), |s| s.to_string());
         let mut style = match r.state {
             State::Departed => DIM,
             s if s.needs_you() => GOLD,
             _ => Style::new(),
         };
-        if Some(&r.id) == m.focused.as_ref() {
+        let focused = Some(&r.id) == m.focused.as_ref();
+        if focused {
             if !r.state.needs_you() {
                 style = style.bg(Color::Indexed(237));
             }
@@ -496,31 +564,21 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         let line = Rect { y, height: 1, ..inner };
         buf.set_style(line, style);
-        // Model and context at the right, while it runs and has reported.
+        let lead = lead(i, helper);
+        let pad = width(&lead) as usize;
+        let (name, dim) = match whole.as_ref().filter(|wh| grow && wh.0 == i) {
+            Some((_, n, d)) => (n.clone(), d.clone()),
+            None if two && has_row(r) => {
+                (vec![r.name.clone()], vec![branch_row(r, &m.prefix, w.saturating_sub(pad))])
+            }
+            None => (vec![r.name.clone()], Vec::new()),
+        };
         let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
-        let right = t.map_or(String::new(), |t| {
-            let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
-            format!(
-                " {:<3} {ctx:>4}",
-                t.model.as_deref().map(tele::model_short).unwrap_or_default()
-            )
-        });
-        let tee = match (helper, held.contains(&i)) {
-            (false, _) => "",
-            (true, true) => "├",
-            (true, false) => "└",
-        };
-        let lead = format!("{slot} {tee}{} ", r.state.glyph());
+        let right = right(r);
         let rw = (width(&right) as usize).min(w);
-        let (x, _) = buf.set_stringn(inner.x, y, format!("{lead}{}", r.name), w - rw, style);
-        // Behind the claude installed now, or on its way to it.
+        let (x, _) = buf.set_stringn(inner.x, y, format!("{lead}{}", name[0]), w - rw, style);
         let end = inner.x + (w - rw) as u16;
-        let glyph = match (r.renewing, r.outdated.is_some()) {
-            (true, _) => Some(" ↻"),
-            (false, true) => Some(" ⇡"),
-            _ => None,
-        };
-        if let Some(g) = glyph.filter(|_| x + 2 <= end) {
+        if let Some(g) = renew(r).filter(|_| x + 2 <= end) {
             let mark = if r.state.needs_you() { style } else { style.fg(Color::Yellow) };
             buf.set_stringn(x, y, g, 2, mark);
         }
@@ -535,23 +593,27 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         hits.push(line, Hit::Resident(i));
         y += 1;
-        if !two || !has_row(r) {
-            continue;
-        }
-        let pad = width(&lead) as usize;
-        let row = branch_row(r, &m.prefix, w.saturating_sub(pad));
-        let line = Rect { y, height: 1, ..inner };
-        let under = match Some(&r.id) == m.focused.as_ref() && !r.state.needs_you() {
+        let under = match focused && !r.state.needs_you() {
             true => DIM.bg(Color::Indexed(237)),
             false => DIM,
         };
-        buf.set_style(line, under);
-        buf.set_stringn(inner.x + pad as u16, y, row, w - pad, under);
-        if held.contains(&i) {
-            buf.set_stringn(inner.x + width(&slot) + 1, y, "│", 1, under);
+        // The rest of its name, then its dim rows, under the name, a lead's `│` down beside them.
+        let rest = name[1..].iter().map(|s| (s, style)).chain(dim.iter().map(|s| (s, under)));
+        for (s, st) in rest {
+            if y + 1 >= bottom {
+                break;
+            }
+            let line = Rect { y, height: 1, ..inner };
+            buf.set_style(line, st);
+            buf.set_stringn(inner.x + pad as u16, y, s, w.saturating_sub(pad), st);
+            // Under the tee, one past the slot.
+            let bar = r.slot.map_or(1, |s| width(&s.to_string())) + 1;
+            if held.contains(&i) && (bar as usize) < w {
+                buf.set_stringn(inner.x + bar, y, "│", 1, st);
+            }
+            hits.push(line, Hit::Resident(i));
+            y += 1;
         }
-        hits.push(line, Hit::Resident(i));
-        y += 1;
     }
     if !below.is_empty() && y + 1 < bottom {
         more(buf, Rect { y, height: 1, ..inner }, "↓", &below, m, hits);
@@ -571,16 +633,65 @@ fn cut(s: &str, most: usize) -> String {
     }
 }
 
-/// A resident's dim row in `room` columns: `⎇ branch`, `BRANCH_PREFIX` left off, then its tags.
-/// The branch is cut first, to no less than half the row, then the tags at their end.
+/// `s` in `most` columns, its middle cut to `…` when it is wider: a branch's end is what tells
+/// it from its siblings.
+fn cut_mid(s: &str, most: usize) -> String {
+    if width(s) as usize <= most {
+        return s.into();
+    }
+    // Taken by width, so a wide letter is never counted as one column.
+    let take = |cs: &mut dyn Iterator<Item = char>, mut room: usize| {
+        let mut v = Vec::new();
+        for c in cs {
+            let cw = width(c.encode_utf8(&mut [0; 4])) as usize;
+            if cw > room {
+                break;
+            }
+            room -= cw;
+            v.push(c);
+        }
+        v
+    };
+    let head = take(&mut s.chars(), most.saturating_sub(1) / 2);
+    let tail = take(&mut s.chars().rev(), most.saturating_sub(1) - most.saturating_sub(1) / 2);
+    head.into_iter().chain(['…']).chain(tail.into_iter().rev()).collect()
+}
+
+/// The branch on a resident's dim row, `BRANCH_PREFIX` left off: none when its last part only
+/// says the name again, `_` and `-` alike.
+fn shown_branch<'a>(r: &'a Resident, prefix: &str) -> Option<&'a str> {
+    let b = r.branch.as_deref()?;
+    let b = b.strip_prefix(prefix).filter(|b| !b.is_empty()).unwrap_or(b);
+    let same = |s: &str| s.to_lowercase().replace(['_', ' '], "-");
+    (same(b.rsplit('/').next().unwrap_or(b)) != same(&r.name)).then_some(b)
+}
+
+/// A resident's dim row in `room` columns: `⎇ branch`, then its tags. The branch is cut first,
+/// in its middle, to no less than half the row, then the tags at their end.
 fn branch_row(r: &Resident, prefix: &str, room: usize) -> String {
     let t = tags(&r.tags);
-    let Some(b) = r.branch.as_deref() else { return cut(&t, room) };
-    let b = b.strip_prefix(prefix).filter(|b| !b.is_empty()).unwrap_or(b);
+    let Some(b) = shown_branch(r, prefix) else { return cut(&t, room) };
     let after = if t.is_empty() { 0 } else { t.len() + 1 };
     let most = room.saturating_sub(2 + after).max(room.saturating_sub(2) / 2).max(2);
-    let b = format!("⎇ {}", cut(b, most));
+    let b = format!("⎇ {}", cut_mid(b, most));
     cut(&if t.is_empty() { b } else { format!("{b} {t}") }, room)
+}
+
+/// The dim row uncut, over as many rows of `room` as it takes, at most three.
+fn whole_row(r: &Resident, prefix: &str, room: usize) -> Vec<String> {
+    let t = tags(&r.tags);
+    let s = match shown_branch(r, prefix) {
+        Some(b) if t.is_empty() => format!("⎇ {b}"),
+        Some(b) => format!("⎇ {b} {t}"),
+        None => t,
+    };
+    if width(&s) as usize <= room {
+        return vec![s];
+    }
+    // Held to its branch by a no-break space, so `⎇` is not left on a row of its own.
+    let mut v = wrap(&s.replacen("⎇ ", "⎇\u{a0}", 1), room, 3);
+    v[0] = v[0].replacen('\u{a0}', " ", 1);
+    v
 }
 
 /// `calm` while a number is calm, else yellow or red over it.
@@ -755,33 +866,39 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     }
 }
 
-/// `s` in lines of at most `w` columns, broken at spaces where it can be, at most `n` of them;
-/// the last ends in `…` when some was left over.
+/// `s` in lines of at most `w` columns, broken at spaces where it can be, else after a `-` or a
+/// `/` as in a branch or a path, at most `n` of them; the last ends in `…` when some was left over.
 pub(super) fn wrap(s: &str, w: usize, n: usize) -> Vec<String> {
     let mut lines: Vec<String> = vec![String::new()];
     for word in s.split(' ') {
-        let cur = lines.last_mut().expect("never empty");
-        let sep = usize::from(!cur.is_empty());
-        if width(cur) as usize + sep + width(word) as usize <= w {
-            if sep == 1 {
-                cur.push(' ');
+        let pieces: Vec<&str> = match word.is_empty() {
+            true => vec![""],
+            false => word.split_inclusive(['-', '/']).collect(),
+        };
+        for (i, piece) in pieces.into_iter().enumerate() {
+            let cur = lines.last_mut().expect("never empty");
+            let sep = usize::from(i == 0 && !cur.is_empty());
+            if width(cur) as usize + sep + width(piece) as usize <= w {
+                if sep == 1 {
+                    cur.push(' ');
+                }
+                cur.push_str(piece);
+                continue;
             }
-            cur.push_str(word);
-            continue;
-        }
-        // Too long for a row of its own too: cut where it has to be.
-        if lines.last().is_some_and(String::is_empty) {
-            lines.pop();
-        }
-        let mut next = String::new();
-        for ch in word.chars() {
-            let cw = width(ch.encode_utf8(&mut [0; 4])) as usize;
-            if !next.is_empty() && width(&next) as usize + cw > w {
-                lines.push(std::mem::take(&mut next));
+            // Too long for a row of its own too: cut where it has to be.
+            if lines.last().is_some_and(String::is_empty) {
+                lines.pop();
             }
-            next.push(ch);
+            let mut next = String::new();
+            for ch in piece.chars() {
+                let cw = width(ch.encode_utf8(&mut [0; 4])) as usize;
+                if !next.is_empty() && width(&next) as usize + cw > w {
+                    lines.push(std::mem::take(&mut next));
+                }
+                next.push(ch);
+            }
+            lines.push(next);
         }
-        lines.push(next);
     }
     if lines.len() > n {
         lines.truncate(n);

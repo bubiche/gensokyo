@@ -17,7 +17,7 @@ and the user may close, banish, recall, wait on or read your helpers. After a `/
   turn: find where X is defined, summarise this file. It is invisible and dies with your turn.
 - **A helper** for work that takes a while, changes files, or that the user may want to watch
   or answer: a refactor in one package while you do another, a review, a long test hunt. Each
-  costs a full session, so a handful at most: you may have 5 live at once (config `HELPERS`).
+  costs a full session, so a handful at most: you may have 10 live at once (config `HELPERS`).
 
 A helper cannot summon helpers of its own, but it keeps subagents.
 

@@ -531,7 +531,7 @@ when the directory is in a git repository; leaving it empty works right there. g
 removes a worktree: `git worktree remove` is yours. It does not use `claude --worktree`, whose
 `/exit` stops at a keep-or-remove question. A lead's skill gives each helper its own this way.
 
-A lead has at most 5 live helpers (`HELPERS=` in the config), and a helper can't summon, though
+A lead has at most 10 live helpers (`HELPERS=` in the config), and a helper can't summon, though
 it keeps Claude Code's own subagents. A helper's finished turn is quiet while its lead waits on
 it or is busy, since the lead will read it; it rings once the lead's turn ends without having
 done so. Its permission prompts and questions always ring: only you can answer them. A helper

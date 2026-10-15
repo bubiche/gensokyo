@@ -268,7 +268,7 @@ fn mode_within(mode: &str, lead: &str) -> bool {
 
 /// How many live helpers one lead may have: config `HELPERS`.
 fn helpers_most() -> usize {
-    crate::paths::config("HELPERS").and_then(|v| v.trim().parse().ok()).unwrap_or(5)
+    crate::paths::config("HELPERS").and_then(|v| v.trim().parse().ok()).unwrap_or(10)
 }
 
 /// Whether resident `lead` may have one more live helper.

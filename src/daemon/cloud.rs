@@ -22,6 +22,11 @@ use std::time::Duration;
 /// A fire not seen this long after its time is no longer waited for: the hourly list finds it.
 const OVERDUE_MOST: i64 = 3600;
 
+/// A run neither idle nor heard from (nor said to) for this long is stale: looked at no more
+/// until the user says something to it or its routine fires again, and its end, found then, is
+/// not told. A failed or an expired run has not been seen yet, and might never say `idle`.
+const STALE: i64 = 86400;
+
 /// Failed rounds in a row before the watch says it is broken: the network is often down for the
 /// first tick after a wake.
 const FAILS_TOLD: u32 = 3;
@@ -63,9 +68,13 @@ struct Seen {
 #[serde(default)]
 pub(super) struct Watched {
     pub(super) routine: String,
-    /// Its turn has ended: the worker is `idle`, or the session no longer `active`. Anything
-    /// else (running, starting, a state not seen yet) is watched until it says so.
+    /// Looked at no more: its turn has ended (the worker is `idle`, or the session no longer
+    /// `active`), or it is stale. Anything else (running, starting, a state not seen yet) is
+    /// watched until it says so.
     pub(super) ended: bool,
+    pub(super) stale: bool,
+    /// When the user last said something to it: words queued may be all it has had for a while.
+    said: i64,
     pub(super) created: i64,
     /// The last event of the turn whose end was told, or was found ended at first sight.
     told: Option<i64>,
@@ -169,6 +178,7 @@ pub(super) fn info(sh: &Shrine) -> Option<CloudWatch> {
                 url: n.map_or_else(|| cloud::routine_link(&r.id), |n| n.url.clone()),
                 ran: n.map(|n| n.created),
                 going: n.is_some_and(|n| !n.ended),
+                stale: n.is_some_and(|n| n.stale),
             }
         })
         .collect();
@@ -194,7 +204,7 @@ async fn round(shrine: &Shared, now: i64) -> Result<Option<String>, String> {
     let mut seen = shrine.borrow().cloud.seen.clone().unwrap_or_default();
     for (id, t) in std::mem::take(&mut shrine.borrow_mut().cloud.said) {
         if let Some(w) = seen.runs.get_mut(&id) {
-            (w.ended, w.asked) = (false, Some(t));
+            (w.ended, w.stale, w.asked, w.said) = (false, false, Some(t), t);
         }
     }
     // Only a whole list says what is gone: one on a later page would come back as new, and
@@ -291,12 +301,15 @@ fn see(shrine: &Shared, seen: &mut Seen, r: &Routine, runs: &[Run], first: bool,
             w.asked = None;
         }
         let ended = idle && w.asked.is_none();
-        (w.ended, w.url) = (ended, run.url.clone());
+        let quiet = w.stale;
+        let heard = run.last_event.max(run.created).max(w.said);
+        w.stale = !idle && heard > 0 && now - heard >= STALE;
+        (w.ended, w.url) = (ended || w.stale, run.url.clone());
         if !ended || w.told == Some(run.last_event) {
             continue;
         }
         w.told = Some(run.last_event);
-        if first {
+        if first || quiet {
             continue;
         }
         let how = match run.status.as_str() {
@@ -368,16 +381,9 @@ fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
 
 /// `cloud_add`: a routine made on claude.ai, paused, with the connectors named and no others.
 pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> {
-    if let Some(r) = shrine.borrow().cloud.routines.iter().find(|r| r.name == a.name) {
-        return Err(format!(
-            "a routine named {} is on claude.ai already: {}",
-            r.name,
-            cloud::routine_link(&r.id)
-        ));
-    }
-    let env = paths::config("CLOUD_ENV").ok_or(
-        "no cloud environment to run routines in: CLOUD_ENV=env_… in the config names it (Claude \
-         Code's /schedule lists them, outside gensokyo)",
+    let env = a.env.clone().or_else(|| paths::config("CLOUD_ENV")).ok_or(
+        "no cloud environment to run routines in: --env env_…, or CLOUD_ENV=env_… in the config, \
+         names it (Claude Code's /schedule lists them, outside gensokyo)",
     )?;
     let known = paths::configs("CLOUD_CONNECTOR_");
     let mut conns = Vec::new();
@@ -396,6 +402,19 @@ pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> 
     let cron = cloud::utc_cron(&a.schedule, &tz, super::rituals::now())?;
     let uuid = cloud::uuid4().map_err(|e| format!("/dev/urandom: {e}"))?;
     let call = cloud::create(&a, &cron, &env, &conns, &uuid)?;
+    // The names as claude.ai has them now, whatever the watch saw or whether it is on (the
+    // first page, as the watch reads).
+    let (code, body) = ask(shrine, json!({"action": "list"})).await?;
+    if code != 200 {
+        return Err(format!("list: HTTP {code}: {}", cloud::error_of(&body)));
+    }
+    if let Some(r) = cloud::routines(&body)?.0.iter().find(|r| r.name == a.name) {
+        return Err(format!(
+            "a routine named {} is on claude.ai already: {}",
+            r.name,
+            cloud::routine_link(&r.id)
+        ));
+    }
     let (code, body) = ask(shrine, call).await?;
     let t = match code {
         200 | 201 => cloud::trigger(&body)?,
@@ -456,12 +475,16 @@ pub(super) async fn add(shrine: &Shared, a: CloudAdd) -> Result<String, String> 
     ))
 }
 
-/// `cloud_show`: a routine as claude.ai has it now.
-pub(super) async fn show(shrine: &Shared, who: &str) -> Result<String, String> {
+/// `cloud_show`: a routine as claude.ai has it now: its id, and what it is and does.
+pub(super) async fn show(shrine: &Shared, who: &str) -> Result<(String, String), String> {
     let id = routine_id(&shrine.borrow(), who)?;
     let (code, body) = ask(shrine, json!({"action": "get", "trigger_id": id})).await?;
     match code {
-        200 => Ok(cloud::about(&cloud::trigger(&body)?, &TimeZone::system())),
+        200 => {
+            let t = cloud::trigger(&body)?;
+            let r = cloud::routine(&t).ok_or("no routine in the reply")?;
+            Ok((r.id, cloud::about(&t, &TimeZone::system())))
+        }
         404 => Err(format!("{who} is gone from claude.ai")),
         _ => Err(format!("get: HTTP {code}: {}", cloud::error_of(&body))),
     }

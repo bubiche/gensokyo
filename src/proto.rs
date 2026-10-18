@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 16;
+pub const PROTO: u32 = 17;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -132,8 +132,8 @@ pub enum Request {
     /// A routine made on claude.ai, paused; answered with `done`. The daemon writes the
     /// routine from these fields, and only these.
     CloudAdd(CloudAdd),
-    /// A routine as claude.ai has it: its schedule, model, repos, connectors and prompt.
-    /// Answered with `done`.
+    /// A routine as claude.ai has it: its schedule, model, repos, connectors, environment and
+    /// prompt. Answered with `shown`.
     CloudShow {
         who: String,
     },
@@ -452,6 +452,8 @@ pub struct CloudAdd {
     pub repos: Vec<String>,
     pub connectors: Vec<String>,
     pub model: Option<String>,
+    /// The cloud environment its runs start in (`env_…`); none, the config's `CLOUD_ENV`.
+    pub env: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -540,6 +542,13 @@ pub enum Reply {
     },
     Done {
         id: u64,
+        message: String,
+    },
+    /// A routine as claude.ai has it: `routine` is its id, so what is done next is done to the
+    /// routine shown.
+    Shown {
+        id: u64,
+        routine: String,
         message: String,
     },
     Cards {
@@ -649,6 +658,9 @@ pub struct RoutineInfo {
     /// Its newest run's turn has not ended.
     #[serde(default)]
     pub going: bool,
+    /// Its newest run has been neither idle nor heard from for a day, and is looked at no more.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 /// A notice as the daemon keeps it.

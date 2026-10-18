@@ -437,7 +437,12 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                         Request::Cast(c) => cards::cast(&shrine, c, caller.as_deref()).await,
                         Request::CloudLog { who } => super::cloud::run_log(&shrine, &who).await,
                         Request::CloudAdd(a) => super::cloud::add(&shrine, a).await,
-                        Request::CloudShow { who } => super::cloud::show(&shrine, &who).await,
+                        Request::CloudShow { who } => {
+                            let r = super::cloud::show(&shrine, &who).await;
+                            let shown = |(routine, message)| Reply::Shown { id, routine, message };
+                            send(&out, &r.map_or_else(fail, shown)).await;
+                            return;
+                        }
                         Request::CloudAct { who, act } => {
                             super::cloud::act(&shrine, &who, act).await
                         }

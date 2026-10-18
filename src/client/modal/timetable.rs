@@ -109,6 +109,7 @@ impl Timetable {
                     let r = &cloud[i - order.len()];
                     let desc = match r.ran {
                         Some(_) if r.going => "a run is going".into(),
+                        Some(_) if r.stale => "a run is stale".into(),
                         Some(t) => format!("ran {} ago", ago(m.now - t)),
                         None => "on claude.ai".into(),
                     };

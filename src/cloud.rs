@@ -284,12 +284,14 @@ fn text(v: &Value, max: usize) -> String {
     plain(v.as_str().unwrap_or(""), max)
 }
 
-/// A run's id from its link, as the API pairs them: `…/code/session_X` is `cse_X`.
+/// A run's id from itself, from its link, or from the id `claude --cloud` prints: the API pairs
+/// `session_X` (and `…/code/session_X`) with `cse_X`.
 pub fn run_id(who: &str) -> Option<String> {
     if valid_id(who, "cse_") {
         return Some(who.into());
     }
-    let id = format!("cse_{}", link(who)?.strip_prefix(WEB)?.strip_prefix("session_")?);
+    let page = link(who).and_then(|l| l.strip_prefix(WEB));
+    let id = format!("cse_{}", page.unwrap_or(who).strip_prefix("session_")?);
     valid_id(&id, "cse_").then_some(id)
 }
 
@@ -369,24 +371,28 @@ pub fn runs(body: &str) -> Result<Vec<Run>, String> {
     Ok(data
         .iter()
         .filter(|r| r["id"].as_str().is_some_and(|id| valid_id(id, "cse_")))
-        .filter(|r| r["url"].as_str().is_some_and(|u| link(u).is_some()))
-        .map(|r| Run {
+        .filter_map(|r| Some((r, link(r["url"].as_str()?)?)))
+        .map(|(r, url)| Run {
             id: r["id"].as_str().unwrap_or_default().into(),
             title: text(&r["title"], 80),
             status: text(&r["status"], 20),
             worker: text(&r["worker_status"], 20),
             created: epoch(&r["created_at"]).unwrap_or(0),
             last_event: epoch(&r["last_event_at"]).unwrap_or(0),
-            url: r["url"].as_str().unwrap_or_default().into(),
+            url: url.into(),
         })
         .collect())
 }
 
 /// A link gensokyo will show or open: on claude.ai/code, and nothing in it a terminal or a
-/// shell could take for more than a link.
+/// shell could take for more than a link. Its query (`?from=cli&m=0`, as claude prints one) is
+/// left off.
 pub fn link(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix(WEB)?;
-    rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-/".contains(&b)).then_some(url)
+    let (page, query) = url.split_once('?').unwrap_or((url, ""));
+    let rest = page.strip_prefix(WEB)?;
+    let ok =
+        |s: &str, more: &[u8]| s.bytes().all(|b| b.is_ascii_alphanumeric() || more.contains(&b));
+    (ok(rest, b"_-/") && ok(query, b"_-=&")).then_some(page)
 }
 
 /// A claude.ai link opened in the browser, by `open` with no shell between
@@ -559,6 +565,7 @@ pub fn about(t: &Value, tz: &jiff::tz::TimeZone) -> String {
     let repos = list(&ctx["sources"], &|s| &s["git_repository"]["url"]);
     let conns = list(&t["mcp_connections"], &|c| &c["name"]);
     let model = text(&ctx["model"], 80);
+    let env = text(&t["job_config"]["ccr"]["environment_id"], 80);
     let schedule = match (&r.cron, r.next_run) {
         (Some(c), Some(n)) => format!("{c} UTC, next {}", crate::ritual::when(n, tz)),
         (Some(c), None) => format!("{c} UTC"),
@@ -571,6 +578,7 @@ pub fn about(t: &Value, tz: &jiff::tz::TimeZone) -> String {
         format!("  model       {}", if model.is_empty() { "?".into() } else { model }),
         format!("  repos       {repos}"),
         format!("  connectors  {conns}"),
+        format!("  environment {}", if env.is_empty() { "?" } else { &env }),
         format!("  page        {}", routine_link(&r.id)),
         "  prompt".into(),
     ];

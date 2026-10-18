@@ -47,7 +47,8 @@ pub enum Cmd {
     /// The schedule is cron in this Mac's time, as a ritual's; claude.ai keeps it in UTC, and
     /// runs a routine at most hourly. Each connector needs a `CLOUD_CONNECTOR_<name>=<uuid>
     /// <url>` line in the config, and every tool of each runs unasked, writes too.
-    /// `CLOUD_ENV=env_…` in the config names the cloud environment runs start in.
+    /// Its runs start in the cloud environment `--env` names, else `CLOUD_ENV=env_…` in the
+    /// config.
     Add {
         name: String,
         /// Five cron fields in local time, or @daily and the like
@@ -64,8 +65,11 @@ pub enum Cmd {
         connectors: Vec<String>,
         #[arg(long)]
         model: Option<String>,
+        /// The cloud environment its runs start in (env_…)
+        #[arg(long)]
+        env: Option<String>,
     },
-    /// A routine as claude.ai has it: schedule, model, repos, connectors and prompt
+    /// A routine as claude.ai has it: schedule, model, repos, connectors, environment and prompt
     Show { routine: String },
     /// Pause a routine: it fires no more until resumed
     Pause { routine: String },
@@ -91,14 +95,17 @@ pub fn main(cmd: Option<Cmd>) -> Result<(), String> {
         Cmd::Watch { to } => watch(to.as_deref()),
         Cmd::Open { routine } => open(routine.as_deref()),
         Cmd::Log { who } => say(request(Request::CloudLog { who }, false)),
-        Cmd::Add { name, schedule, prompt_file, repos, connectors, model } => {
+        Cmd::Add { name, schedule, prompt_file, repos, connectors, model, env } => {
             let prompt = std::fs::read_to_string(&prompt_file)
                 .map_err(|e| format!("{}: {e}", prompt_file.display()))?;
-            let a = CloudAdd { name, schedule, prompt, repos, connectors, model };
+            let a = CloudAdd { name, schedule, prompt, repos, connectors, model, env };
             say(request(Request::CloudAdd(a), false))
         }
         Cmd::Say { who, text } => say(request(Request::CloudSay { who, text }, false)),
-        Cmd::Show { routine } => say(request(Request::CloudShow { who: routine }, false)),
+        Cmd::Show { routine } => {
+            println!("{}", show(routine)?.1);
+            Ok(())
+        }
         Cmd::Pause { routine } => act(routine, CloudAct::Pause, true),
         Cmd::Resume { routine, yes } => act(routine, CloudAct::Resume, yes),
         Cmd::Run { routine, yes } => act(routine, CloudAct::Run, yes),
@@ -118,16 +125,9 @@ fn act(who: String, act: CloudAct, yes: bool) -> Result<(), String> {
         ));
     }
     // What is resumed is what was shown: by its id, whatever a list in between says.
-    let shown = match request(Request::CloudShow { who: who.clone() }, false)? {
-        Reply::Done { message, .. } => message,
-        other => return Err(format!("unexpected reply {other:?}")),
-    };
+    let (id, shown) = show(who)?;
     println!("{shown}");
-    let page = shown.lines().find_map(|l| l.trim_start().strip_prefix("page"));
-    let id = page.and_then(|p| p.trim().strip_prefix(&cloud::routine_link("")));
-    let id =
-        id.filter(|id| cloud::valid_id(id, "trig_")).ok_or("no routine's id in what was shown")?;
-    let doing = || request(Request::CloudAct { who: id.to_string(), act }, false);
+    let doing = || request(Request::CloudAct { who: id.clone(), act }, false);
     if !yes {
         let q = if act == CloudAct::Run { "run it now" } else { "resume it" };
         if !std::io::stdin().is_terminal() {
@@ -143,6 +143,14 @@ fn act(who: String, act: CloudAct, yes: bool) -> Result<(), String> {
         }
     }
     say(doing())
+}
+
+/// A routine as claude.ai has it: its id, and what it is and does.
+fn show(who: String) -> Result<(String, String), String> {
+    match request(Request::CloudShow { who }, false)? {
+        Reply::Shown { routine, message, .. } => Ok((routine, message)),
+        other => Err(format!("unexpected reply {other:?}")),
+    }
 }
 
 fn resident() -> bool {
@@ -217,6 +225,7 @@ fn list() -> Result<(), String> {
         };
         let going = match r.ran {
             Some(_) if r.going => " (going)".to_string(),
+            Some(_) if r.stale => " (stale)".to_string(),
             Some(t) => format!(" ({} ago)", crate::tele::age((now - t).max(0) as u64)),
             None => String::new(),
         };

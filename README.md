@@ -473,7 +473,7 @@ conversation is the resident's, to act on.
 gensokyo cloud watch on              # off until you say: each look is a short haiku `claude -p`
 gensokyo cloud                       # the routines, their next runs and newest run's link
 gensokyo cloud add digest --schedule "0 9 * * 1-5" --prompt-file p.md --connector Slack
-gensokyo cloud show digest           # its schedule, model, repos, connectors and prompt
+gensokyo cloud show digest           # its schedule, model, repos, connectors, environment, prompt
 gensokyo cloud resume digest         # shows it, asks, then starts it; also pause, run
 gensokyo cloud open [digest]         # its newest run in the browser, to read or continue
 gensokyo cloud say digest "and the PRs?"  # its newest run's next turn; told when it ends
@@ -482,7 +482,9 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
 ```
 
 - **The watch.** With it on, the daemon lists the routines hourly and after each one's time.
-  Their runs show in the timetable as `☁` rows, and a turn that ends rings with its link.
+  Their runs show in the timetable as `☁` rows, and a turn that ends rings with its link. A
+  run neither idle nor heard from for a day is `stale`: looked at no more until you say
+  something to it or its routine fires again, and its end, found then, rings nothing.
 - **Couriers.** Every call to claude.ai is a courier: a `claude -p` given only the
   `RemoteTrigger` tool and a hook that allows that one call. The reply is read from the tool's
   own result. gensokyo holds no token.
@@ -491,9 +493,9 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
     year, or refused when there is none.
   - The routine arrives **paused**, with exactly the connectors named.
   - Every tool of each connector runs unasked, writes too.
-- **The config.** `add` needs `CLOUD_ENV=env_…`, the cloud environment, and a
-  `CLOUD_CONNECTOR_<name>=<uuid> <url>` line for each connector. Claude Code's `/schedule`,
-  outside gensokyo, lists both.
+- **The config.** `add` needs the cloud environment, `--env env_…` or `CLOUD_ENV=env_…` in the
+  config, and a `CLOUD_CONNECTOR_<name>=<uuid> <url>` line for each connector. Claude Code's
+  `/schedule`, outside gensokyo, lists both. A name already on claude.ai is refused.
 - **Residents.**
   - They make routines through the `gensokyo-cloud` skill, and may show and pause them.
   - Resuming, running, saying something to a run, reading its log and taking it over are

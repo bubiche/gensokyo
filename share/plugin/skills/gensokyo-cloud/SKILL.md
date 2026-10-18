@@ -52,7 +52,7 @@ Write the prompt to a file first. The run starts with nothing else, so make it s
 
 ```sh
 gensokyo cloud add standup-digest --schedule "0 9 * * 1-5" --prompt-file /tmp/digest.md \
-  --connector Slack [--repo org/app] [--model claude-sonnet-5-5]
+  --connector Slack [--repo org/app] [--model claude-sonnet-5-5] [--env env_…]
 ```
 
 - **The schedule** is cron in local time, as for a ritual.
@@ -65,7 +65,8 @@ gensokyo cloud add standup-digest --schedule "0 9 * * 1-5" --prompt-file /tmp/di
   it: that command shows them what it does and asks. You cannot resume or run a routine, and
   you must not ask the user to pass `--yes` without reading it.
 - **Errors you hand to the user.** Your file tools are refused in gensokyo's config dir.
-  - "no cloud environment" or "no connector X in the config": the user adds a line,
+  - Pass `--env env_…` when the user names an environment. Otherwise "no cloud environment",
+    like "no connector X in the config", is theirs to fix: they add a line,
     `CLOUD_ENV=env_…` or `CLOUD_CONNECTOR_<Name>=<uuid> <url>`, to `~/.config/gensokyo/config`.
     Claude Code's `/schedule`, run outside gensokyo, lists both ids.
   - "the Claude GitHub App": it goes on each repository the routine names.
@@ -74,7 +75,7 @@ gensokyo cloud add standup-digest --schedule "0 9 * * 1-5" --prompt-file /tmp/di
 
 ```sh
 gensokyo cloud                   # each routine, its schedule, next run and newest run's link
-gensokyo cloud show NAME         # its schedule, model, repos, connectors and prompt
+gensokyo cloud show NAME         # its schedule, model, repos, connectors, environment, prompt
 gensokyo cloud pause NAME        # fires no more until the user resumes it
 ```
 

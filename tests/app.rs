@@ -358,11 +358,18 @@ fn the_routines_on_claude_ai_are_listed_below_the_rituals_and_only_opened() {
     let cloud = CloudWatch {
         listed: Some(0),
         failing: None,
-        routines: vec![routine("pr-sweep", "https://claude.ai/code/session_A", true)],
+        routines: vec![
+            routine("pr-sweep", "https://claude.ai/code/session_A", true),
+            RoutineInfo {
+                stale: true,
+                ..routine("digest", "https://claude.ai/code/session_C", false)
+            },
+        ],
     };
     daemon(&mut a, Reply::Rituals { id: 1, rituals: vec![], unusable: vec![], cloud: Some(cloud) });
     let rows = screen(&mut a);
     assert!(rows.iter().any(|l| l.contains("pr-sweep") && l.contains("☁ a run is going")));
+    assert!(rows.iter().any(|l| l.contains("digest") && l.contains("☁ a run is stale")));
     assert!(!rows.iter().any(|l| l.contains("nothing is scheduled")));
 
     // Below the rituals, and reached by the keys; Enter opens it in the browser (here a link

@@ -209,22 +209,53 @@ fn routines_and_runs_from_their_bodies_and_nothing_that_is_not_an_id_or_a_link()
          "url": "https://evil.example/code/session_022u"},
         {"id": "cse_033v", "title": "quoted", "status": "active", "worker_status": "idle",
          "url": "https://claude.ai/code/session_033v?x=$(id)"},
+        {"id": "cse_044w", "title": "from the cli", "status": "active", "worker_status": "idle",
+         "url": "https://claude.ai/code/session_044w?from=cli&m=0"},
     ]});
     let got = cloud::runs(&runs.to_string()).unwrap();
-    assert_eq!(
-        got,
-        [Run {
-            id: "cse_011t".into(),
-            title: "⚡ morning slack [2J".into(),
-            status: "active".into(),
-            worker: "idle".into(),
-            created: 1_791_788_950,
-            last_event: 1_791_788_960,
-            url: "https://claude.ai/code/session_011t".into(),
-        }]
-    );
+    let run = |id: &str, title: &str| Run {
+        id: format!("cse_{id}"),
+        title: title.into(),
+        status: "active".into(),
+        worker: "idle".into(),
+        url: format!("https://claude.ai/code/session_{id}"),
+        ..Default::default()
+    };
+    let first = Run { created: 1_791_788_950, last_event: 1_791_788_960, ..run("011t", "") };
+    let first = Run { title: "⚡ morning slack [2J".into(), ..first };
+    // Kept without its query.
+    assert_eq!(got, [first, run("044w", "from the cli")]);
     assert!(cloud::valid_id("cse_011t", "cse_") && !cloud::valid_id("cse_", "cse_"));
     assert!(!cloud::valid_id("trig_01'", "trig_"));
+}
+
+#[test]
+fn a_session_is_known_by_the_link_and_the_id_claude_prints() {
+    // `claude -p --cloud` (2.1.296), and `claude --cloud` alike (2.1.302), print the link with
+    // a query, and `--cloud` the id as `session_…`.
+    let stdout = json!({"ok": true, "session_id": "cse_011t9g8xsNtLw7ofu8E9eqKL",
+        "url": "https://claude.ai/code/session_011t9g8xsNtLw7ofu8E9eqKL?from=cli&m=0"});
+    cloud::said(&stdout.to_string(), "cse_011t9g8xsNtLw7ofu8E9eqKL").unwrap();
+    let url = stdout["url"].as_str().unwrap();
+    assert_eq!(cloud::link(url), Some("https://claude.ai/code/session_011t9g8xsNtLw7ofu8E9eqKL"));
+    assert_eq!(cloud::run_id(url).as_deref(), Some("cse_011t9g8xsNtLw7ofu8E9eqKL"));
+    assert_eq!(cloud::run_id("session_011t").as_deref(), Some("cse_011t"));
+    assert_eq!(
+        cloud::run_link(&cloud::run_id("session_011t").unwrap()),
+        cloud::run_link("cse_011t")
+    );
+    for bad in [
+        "session_",
+        "session_01;rm",
+        "cse_01 x",
+        "https://claude.ai/code/session_01?x=$(id)",
+        "https://claude.ai/code/session_01?from=cli\u{1b}[2J",
+        "https://claude.ai/code/session_01?from=cli#x",
+        "https://claude.ai/code/?from=cli",
+    ] {
+        assert_eq!(cloud::run_id(bad), None, "{bad}");
+    }
+    assert_eq!(cloud::link("https://claude.ai/code/session_01?x=a\"b"), None);
 }
 
 #[test]
@@ -709,7 +740,8 @@ fn trigger(id: &str, name: &str, enabled: bool, conns: &[(&str, &str)]) -> Value
         "cron_expression": "0 2 * * 1-5", "next_run_at": at(T0 + 7200),
         "mcp_connections": conns,
         "derived_state": {"prompt": "Read #me.\nPost a \u{1b}[31msummary\u{202e}."},
-        "job_config": {"ccr": {"session_context": {"model": "claude-sonnet-5-5",
+        "job_config": {"ccr": {"environment_id": "env_01X",
+            "session_context": {"model": "claude-sonnet-5-5",
             "sources": [{"git_repository": {"url": "https://github.com/org/app"}}]}}}})
 }
 
@@ -751,6 +783,11 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     // What it needs is the user's to name, in the config; and nothing is spent without it.
     let o = adding(&["--connector", "Slack"]);
     assert!(common::err(&o).contains("CLOUD_ENV=env_"), "{}", common::err(&o));
+    // One named for the routine needs none in the config.
+    let o = adding(&["--connector", "Slack", "--env", "env_02Y"]);
+    assert!(common::err(&o).contains("CLOUD_CONNECTOR_Slack=<uuid> <url>"), "{}", common::err(&o));
+    let o = adding(&["--env", "env_'x"]);
+    assert!(common::err(&o).contains("is not an environment's id"), "{}", common::err(&o));
     std::fs::write(&conf, "CLOUD_WATCH=on\nCLOUD_ENV=env_01X\n").unwrap();
     let o = adding(&["--connector", "Slack"]);
     assert!(common::err(&o).contains("CLOUD_CONNECTOR_Slack=<uuid> <url>"), "{}", common::err(&o));
@@ -775,6 +812,7 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
         said.contains("connectors  Slack") && said.contains("every tool of Slack runs"),
         "{said}"
     );
+    assert!(said.contains("\n  environment env_01X\n"), "{said}");
     // Nothing a terminal would act on, from what claude.ai keeps.
     assert!(said.contains("    Post a [31msummary.") && !said.contains('\u{1b}'), "{said}");
     let body = &wrote(&d)["body"];
@@ -786,8 +824,13 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let content = &body["job_config"]["ccr"]["events"][0]["data"]["message"]["content"];
     assert_eq!(content.as_str(), Some(text.as_str()));
     assert!(!pwned.exists() && !d.dir.join("stub/gate.denied").exists());
-    // The watch lists them all again, now.
-    common::wait(|| calls(&d).iter().filter(|c| *c == "list").count() == 2, "a list after");
+    // Listed first, for the name; and the watch lists them all again, now.
+    let lists = || calls(&d).iter().filter(|c| *c == "list").count();
+    common::wait(|| lists() == 3, "a list after");
+    // In the environment named for it, else the config's.
+    answer(&d, "create", 200, json!({"trigger": trigger("E", "elsewhere", false, &[])}));
+    command("elsewhere", &["--env", "env_02Y"]).output().unwrap();
+    assert_eq!(wrote(&d)["body"]["job_config"]["ccr"]["environment_id"], "env_02Y");
 
     // A name the watch lists is not made twice.
     let again = ["cloud", "add", "morning", "--schedule", "@daily", "--prompt-file", &p];
@@ -881,7 +924,6 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let mut twins = listing(&[("R1", T0 + 3600, T0 - 100), ("R3", T0 + 3600, T0 - 100)], false);
     twins["data"][1]["name"] = json!("morning");
     answer(&d, "list", 200, twins);
-    let lists = || calls(&d).iter().filter(|c| *c == "list").count();
     let before = lists();
     answer(&d, "update-trig_R1", 200, json!({"trigger": trigger("R1", "morning", false, &[])}));
     d.cli(&["cloud", "pause", "trig_R1"]);
@@ -904,6 +946,99 @@ fn routines_are_made_paused_and_only_the_user_runs_or_resumes_one_after_reading_
     let late = ["cloud", "add", "late", "--schedule", "@daily", "--prompt-file", &p];
     let said = common::out(&d.cli(&late));
     assert!(said.contains("(gensokyo cloud resume trig_L)"), "{said}");
+}
+
+#[test]
+fn a_name_on_claude_ai_is_not_made_twice_with_the_watch_off_and_show_names_its_routine() {
+    let d = watching("twice", false, &[]);
+    std::fs::write(d.dir.join("conf/config"), "CLOUD_ENV=env_01X\n").unwrap();
+    let prompt = d.dir.join("prompt.md");
+    std::fs::write(&prompt, "Say hi.").unwrap();
+    let p = prompt.display().to_string();
+    let adding = |name: &str| {
+        let a = ["cloud", "add", name, "--schedule", "@daily", "--prompt-file", &p];
+        d.command(&a).stdin(Stdio::null()).output().unwrap()
+    };
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    d.cli(&["list"]);
+    let e = common::err(&adding("morning"));
+    let link = "https://claude.ai/code/routines/trig_R1";
+    assert!(e.contains(&format!("a routine named morning is on claude.ai already: {link}")), "{e}");
+    assert_eq!(calls(&d), ["list"]);
+    // Nothing is made on a list that failed.
+    answer(&d, "list", 500, json!({"error": {"message": "overloaded"}}));
+    let e = common::err(&adding("other"));
+    assert!(e.contains("HTTP 500: overloaded"), "{e}");
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "create", 200, json!({"trigger": trigger("N", "other", false, &[])}));
+    let o = adding("other");
+    assert!(o.status.success(), "{}", common::err(&o));
+    assert_eq!(calls(&d), ["list", "list", "list", "create"]);
+
+    // What is shown names the routine by its id, for what is done after.
+    answer(&d, "get-trig_R1", 200, trigger("R1", "morning", false, &[]));
+    let r = d.req(json!({"t": "cloud_show", "id": 3, "who": "trig_R1"}));
+    assert_eq!((r["t"].as_str(), r["routine"].as_str()), (Some("shown"), Some("trig_R1")), "{r}");
+    assert!(r["message"].as_str().unwrap().starts_with("  routine     morning  (paused)"), "{r}");
+}
+
+#[test]
+fn a_run_quiet_for_a_day_is_stale_and_looked_at_no_more_until_it_is_said_to() {
+    let d = watching("stale", true, &[]);
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "running", T0 - 90)]));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+    // Still running a day on, with nothing new: stale, and never told as finished.
+    let day = T0 - 90 + 86400;
+    clock(&d, day);
+    rounds(&d, 4);
+    let said = common::out(&d.cli(&["cloud"]));
+    let row = said.lines().find(|l| l.contains("morning")).unwrap();
+    assert!(row.ends_with("https://claude.ai/code/session_A (stale)"), "{row}");
+    clock(&d, day + 3600);
+    rounds(&d, 5);
+    assert_eq!(calls(&d)[4], "list");
+    assert_eq!(told(&d), Vec::<String>::new());
+    // Said to, it is looked at again, even with nothing new from it yet, and the turn that
+    // starts is told when it ends.
+    d.cli(&["cloud", "say", "morning", "go on"]);
+    rounds(&d, 7);
+    clock(&d, day + 3700);
+    rounds(&d, 9);
+    assert_eq!(calls(&d)[7..], ["list", "list_runs trig_R1"]);
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "idle", day + 3710)]));
+    clock(&d, day + 3800);
+    rounds(&d, 11);
+    assert_eq!(told(&d), ["morning: finished https://claude.ai/code/session_A"]);
+}
+
+#[test]
+fn a_stale_run_found_ended_when_its_routine_fires_again_is_not_told() {
+    let d = watching("stale-fire", true, &[]);
+    answer(&d, "list", 200, routines(T0 + 3600, T0 - 100));
+    answer(&d, "list_runs-trig_R1", 200, runs(&[("A", "running", T0 - 90)]));
+    d.cli(&["list"]);
+    rounds(&d, 2);
+    let day = T0 - 90 + 86400;
+    clock(&d, day);
+    rounds(&d, 4);
+    // It fires: the new run is told when it ends, the stale one, ended since, never.
+    answer(&d, "list", 200, routines(day + 7200, day + 3610));
+    let mut both = runs(&[("B", "running", day + 3615), ("A", "idle", day + 3000)]);
+    both["data"][1]["status"] = json!("expired");
+    answer(&d, "list_runs-trig_R1", 200, both);
+    clock(&d, day + 3700);
+    rounds(&d, 6);
+    answer(
+        &d,
+        "list_runs-trig_R1",
+        200,
+        runs(&[("B", "idle", day + 3720), ("A", "idle", day + 3000)]),
+    );
+    clock(&d, day + 3800);
+    rounds(&d, 8);
+    assert_eq!(told(&d), ["morning: finished https://claude.ai/code/session_B"]);
 }
 
 #[test]
@@ -952,6 +1087,11 @@ fn the_user_says_something_to_a_run_and_the_turn_it_starts_is_told_when_it_ends(
     // A run by its link, which the watch need not know; and claude's word when it fails.
     let o = common::out(&d.cli(&["cloud", "say", "https://claude.ai/code/session_Z", "hi"]));
     assert_eq!(o, "said to https://claude.ai/code/session_Z: it answers there\n");
+    // And by the id `claude --cloud` prints, or the link with its query.
+    let o = common::out(&d.cli(&["cloud", "say", "session_Z", "hi"]));
+    assert_eq!(o, "said to https://claude.ai/code/session_Z: it answers there\n");
+    let o = d.cli(&["cloud", "say", "https://claude.ai/code/session_Z?from=cli&m=0", "hi"]);
+    assert_eq!(common::out(&o), "said to https://claude.ai/code/session_Z: it answers there\n");
     std::fs::write(d.dir.join("stub/cloud.say"), r#"{"ok": false, "error": "session ended"}"#)
         .unwrap();
     let o = d.command(&["cloud", "say", "cse_Z", "hi"]).output().unwrap();

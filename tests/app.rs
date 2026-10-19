@@ -1064,7 +1064,13 @@ fn the_role_stage_starts_a_cloud_session_on_the_task_typed() {
         host(&mut a, b"3");
     }
     assert_eq!(a.m.focused.as_deref(), Some("id-Aya"));
-    sent(&mut a);
+    // On screen: the daemon reads its log again.
+    let out = sent(&mut a);
+    assert!(out.iter().any(|v| v["t"] == "shown" && v["who"] == "id-Aya"), "{out:?}");
+    // And again on coming back to the terminal, from the browser perhaps.
+    host(&mut a, b"\x1b[I");
+    let out = sent(&mut a);
+    assert!(out.iter().any(|v| v["t"] == "shown" && v["who"] == "id-Aya"), "{out:?}");
     // `s` asks what to say, and sends it as its next turn.
     host(&mut a, b"s");
     assert!(matches!(a.m.modal, Some(Modal::Say { .. })));

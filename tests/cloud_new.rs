@@ -564,6 +564,19 @@ fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!((d.list()[0]["turns"].clone(), told(&d).len()), (json!(1), 1));
 
+    // Idle, it is not looked at at all, not even by a Mac waking a day later: on the screen, it
+    // is, once a minute at most.
+    let n = looks(&d);
+    clock(&d, T0 + 86400);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(looks(&d), n);
+    shown(&d, &me["id"]);
+    common::wait(|| looks(&d) > n, "a look once on screen");
+    clock(&d, T0 + 86430);
+    shown(&d, &me["id"]);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(looks(&d), n + 1);
+
     // Two turns ended between looks (the user went on with it on the web): both counted, the
     // newer's answer kept.
     let two = format!(
@@ -572,14 +585,36 @@ fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
         real()
     );
     logs(&d, &two);
-    clock(&d, T0 + 800);
+    clock(&d, T0 + 86500);
+    shown(&d, &me["id"]);
     at(&d, "three turns", |r| r["turns"] == 3);
     assert!(out(&d.cli(&["read", "Aya"])).contains("it broke"));
     assert_eq!(told(&d).last().unwrap(), &format!("☁ Aya stopped on an error: {LINK}"));
+
+    // A look that fails is tried again, backing off, until one gets through.
+    logs(&d, "HTTP 500\n{\"error\":{\"type\":\"api_error\",\"message\":\"down\"}}\n");
+    clock(&d, T0 + 86600);
+    shown(&d, &me["id"]);
+    let failed = || d.log().iter().any(|e| e["ev"] == "follow" && e["fails"] == 1);
+    common::wait(failed, "a failed look");
+    let n = looks(&d);
+    clock(&d, T0 + 86660);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    clock(&d, T0 + 86720);
+    common::wait(|| looks(&d) > n, "tried again");
+}
+
+/// The user has it on screen. No reply: the list after it says it was taken.
+fn shown(d: &Daemon, id: &Value) {
+    let (mut w, mut lines) = d.connect();
+    let shown = json!({"t": "shown", "id": 2, "who": id});
+    let list = json!({"t": "list", "id": 1});
+    std::io::Write::write_all(&mut w, format!("{shown}\n{list}\n").as_bytes()).unwrap();
+    common::next(&mut lines);
 }
 
 #[test]
-fn a_session_quiet_for_half_an_hour_is_looked_at_as_an_idle_one() {
+fn a_session_quiet_for_half_an_hour_is_looked_at_seldom() {
     let (d, work) = setup("quiet", "");
     let hour_ago = jiff::Timestamp::from_second(T0 - 3600).unwrap();
     logs(&d, &page(&[ASKED, &format!("[{hour_ago}] tool_use Bash: {{}}")]));
@@ -755,9 +790,10 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     };
     status("busy");
     at_one(&d, "Reimu", |r| r["state"] == "busy");
+    // Idle, it is looked at again when its lead says more.
+    let more = || assert!(inside(&d, &lead, &["cloud", "say", "Aya", "more"]).status.success());
     logs(&d, &turns(3));
-    // Idle, it is looked at seldom: a jump of over a minute (a Mac waking) looks at once.
-    clock(&d, T0 + 200);
+    more();
     at_one(&d, "Aya", |r| r["turns"] == 3);
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(told(&d).len(), 1, "held");
@@ -777,7 +813,7 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     local(&d, &work, "Patchouli", Some(&lead));
     let bg = waiting(&d, &lead, &["Aya", "Patchouli", "--timeout", "3s"]);
     logs(&d, &turns(4));
-    clock(&d, T0 + 300);
+    more();
     at_one(&d, "Aya", |r| r["turns"] == 4);
     assert_eq!(told(&d).len(), 2, "held while the wait holds");
     assert_eq!(bg.wait_with_output().unwrap().status.code(), Some(3), "timed out");
@@ -845,8 +881,7 @@ fn a_lead_hears_of_its_cloud_helpers_after_a_compact_and_one_left_behind_closes_
 
     // Its lead gone, it works on: still followed two hours on.
     logs(&d, &format!("{}[2026-10-19T02:00:00Z] user: more\n", turns(1)));
-    // Idle, it is looked at seldom: a jump of over a minute looks at once.
-    clock(&d, T0 + 100);
+    assert!(inside(&d, &lead, &["cloud", "say", "Aya", "more"]).status.success());
     at_one(&d, "Aya", |r| r["detail"] == "working");
     d.cli(&["close", "Reimu"]);
     at_one(&d, "Reimu", |r| r["state"] == "departed");

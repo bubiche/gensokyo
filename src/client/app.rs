@@ -500,6 +500,7 @@ impl App {
             Some(who) => self.send(Request::View { who }),
             None => self.send(Request::Unview),
         };
+        self.shown();
         self.modes();
         self.read_answer();
     }
@@ -784,6 +785,15 @@ impl App {
         self.read_answer();
     }
 
+    /// The cloud session on screen: the daemon reads its log again, as the user may have gone on
+    /// with it on the web.
+    fn shown(&mut self) {
+        let cloud = |r: &&Resident| r.departed.is_none() && r.cloud.is_some();
+        if let Some(who) = self.focused().filter(cloud).map(|r| r.id.clone()) {
+            self.send(Request::Shown { who });
+        }
+    }
+
     /// The cloud session on screen: its last answer, read again once it has a newer one.
     fn read_answer(&mut self) {
         let here = |r: &&Resident| r.cloud.is_some() && r.departed.is_none() && r.turns > 0;
@@ -859,6 +869,8 @@ impl App {
                 // A release away from the terminal is never seen.
                 if !gained {
                     (self.held, self.edge) = (None, None);
+                } else {
+                    self.shown();
                 }
                 if self.m.modal.is_none() {
                     self.forward(&c);

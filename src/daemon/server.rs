@@ -532,6 +532,10 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 set_view(&|v| v.1 = on);
                 None
             }
+            Request::Shown { who } => {
+                super::follow::shown(&mut shrine.borrow_mut(), &who, rituals::now());
+                None
+            }
             Request::Hook { resident, hook: h } => {
                 let briefs = h.briefs();
                 hook(&shrine, &resident, h);
@@ -677,6 +681,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         | Request::Search { .. }
         | Request::Select { .. }
         | Request::Focus { .. }
+        | Request::Shown { .. }
         | Request::Resize { .. } => Some(
             "the screens and keyboards are the user's: a resident does not type into, show or \
              size them (SendMessage reaches another resident)"

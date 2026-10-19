@@ -76,6 +76,10 @@ pub enum Request {
         who: String,
     },
     Unview,
+    /// The user has cloud session `who` on screen: its log is read again, unless it just was.
+    Shown {
+        who: String,
+    },
     /// Bytes for the resident's tty as they are, or a key for its own encoder to encode.
     Input {
         who: String,

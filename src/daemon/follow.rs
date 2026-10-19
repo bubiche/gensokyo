@@ -15,9 +15,10 @@ use std::path::Path;
 const COURIERS_MOST: usize = 3;
 
 /// Starting or working, a session is looked at every `BUSY` seconds for its first `BUSY_FOR`, then
-/// every `BUSY_LATER`; idle, or with nothing new in its log for `QUIET`, every `IDLE` for a day,
-/// then hourly, as the user may go on with it on the web. A failing look backs off as the watch
-/// does.
+/// every `BUSY_LATER`; with nothing new in its log for `QUIET` (a long command), every `IDLE` for
+/// a day, then hourly. Idle, it is not looked at: each look costs a courier, and only words said
+/// to it start another turn, from here (looked at then) or on the web (looked at once the user
+/// has it on screen). A failing look backs off as the watch does, until one gets through.
 const BUSY: i64 = 30;
 const BUSY_FOR: i64 = 300;
 const BUSY_LATER: i64 = 60;
@@ -53,26 +54,36 @@ pub(super) struct Follow {
 }
 
 impl Follow {
-    fn every(&self, now: i64) -> i64 {
+    fn every(&self, now: i64) -> Option<i64> {
+        if self.asked.is_none() && self.phase == Phase::Idle && self.fails == 0 {
+            return None;
+        }
         let long = now - self.since;
         let quiet = self.newest.is_some_and(|t| now - t / 1_000_000 >= QUIET);
-        let idle = self.asked.is_none() && (self.phase == Phase::Idle || quiet);
-        let pace = match idle {
+        let pace = match self.asked.is_none() && quiet {
             false if long < BUSY_FOR => BUSY,
             false => BUSY_LATER,
             true if long < DAY => IDLE,
             true => HOURLY,
         };
-        match self.fails {
+        Some(match self.fails {
             0 => pace,
             n => pace.max((BUSY_LATER << n.min(6)).min(HOURLY)),
-        }
+        })
     }
 
     /// The user said something to it: looked at again soon, and often.
     pub(super) fn asked(&mut self, now: i64) {
         (self.asked, self.since, self.again) = (Some((now, self.words)), now, true);
     }
+}
+
+/// The user has session `id` on screen: looked at on the next tick, unless it was within
+/// `BUSY_LATER`.
+pub(super) fn shown(sh: &mut Shrine, id: &str, now: i64) {
+    let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id && cloud_here(e)) else { return };
+    let f = &mut e.follow;
+    f.again |= !f.busy && f.looked.is_some_and(|t| now - t >= BUSY_LATER);
 }
 
 /// Every tick: a courier for each session due a look, the longest waiting first, as many as
@@ -85,8 +96,8 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
         }
         let due = |e: &&mut Entry| {
             let f = &e.follow;
-            let due = f.again || f.looked.is_none_or(|t| now - t >= f.every(now));
-            cloud_here(e) && !f.busy && (catch || due)
+            let due = |t| f.every(now).is_some_and(|p| catch || now - t >= p);
+            cloud_here(e) && !f.busy && (f.again || f.looked.is_none_or(due))
         };
         let Some(e) = sh.entries.iter_mut().filter(due).min_by_key(|e| e.follow.looked) else {
             return;

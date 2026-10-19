@@ -278,6 +278,27 @@ fn what_claude_says_instead_of_a_session_is_told_with_any_link_it_gave() {
 }
 
 #[test]
+fn a_claude_that_hangs_is_told_by_what_its_screen_said_and_stopped() {
+    let limit = [("GENSOKYO_CLOUD_START_LIMIT_MS", "4000")];
+    let (d, work) = setup_with("hang", "", &limit);
+    let hang = d.dir.join("stub/cloud.new.hang");
+    std::fs::write(&hang, "Error: Select an environment to continue\n").unwrap();
+    let r = summon(&d, &work, json!({"prompt": "go"}));
+    let e = r["error"].as_str().unwrap();
+    assert!(e.contains("took over") && e.contains("Select an environment"), "{e}");
+    assert!(e.contains("look there first"), "{e}");
+    assert!(d.list().is_empty());
+    let pid = std::fs::read_to_string(d.dir.join("stub/cloud.new.pid")).unwrap();
+    let alive = |pid: &str| unsafe { libc::kill(pid.trim().parse().unwrap(), 0) } == 0;
+    assert!(!alive(&pid), "claude was left running");
+    // A link it gave before it hung is told: the session may be there.
+    std::fs::write(&hang, format!("View: {LINK}\n")).unwrap();
+    let r = summon(&d, &work, json!({"prompt": "go"}));
+    let e = r["error"].as_str().unwrap();
+    assert!(e.contains("took over") && e.contains(LINK), "{e}");
+}
+
+#[test]
 fn a_lead_starts_cloud_helpers_counted_with_its_others_and_a_helper_starts_none() {
     let (d, work) = setup_with("lead", "HELPERS=2\n", &[("STUB_HOOKS", "1")]);
     let cloud = |id: &str, extra: Value| {

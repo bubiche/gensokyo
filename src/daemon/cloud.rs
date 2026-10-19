@@ -745,7 +745,8 @@ fn maybe(e: String) -> String {
 
 /// `claude --cloud`, which will not start without a terminal: in one of its own, as a
 /// resident's is, wide enough for the link to stay on one line. Its screen once it has left,
-/// or a moment after it named the session it made.
+/// or a moment after it named the session it made; stopped when it takes too long, with what
+/// its screen said then.
 async fn claude_tty(
     (claude, env): (PathBuf, Vec<(OsString, OsString)>),
     args: Vec<String>,
@@ -769,13 +770,22 @@ async fn claude_tty(
             }
         }
     };
-    let done = tokio::time::timeout(COURIER_LIMIT, said).await.is_ok();
+    let ms = std::env::var("GENSOKYO_CLOUD_START_LIMIT_MS").ok().and_then(|v| v.parse().ok());
+    let limit = ms.map_or(COURIER_LIMIT, Duration::from_millis);
+    let done = tokio::time::timeout(limit, said).await.is_ok();
+    // Before it is stopped, which may clear it.
+    let seen = screen();
     if h.exit().is_none() {
         super::pty::sweep(h.pid, Duration::from_secs(1)).await;
     }
-    match done {
-        true => Ok(screen()),
-        false => Err(maybe(format!("claude took over {}s", COURIER_LIMIT.as_secs()))),
+    let late = format!("claude took over {}s", limit.as_secs());
+    match (done, cloud::created(&seen)) {
+        // Named as the time ran out: it is there.
+        (true, _) | (false, Ok(_)) => Ok(seen),
+        (false, Err(_)) if seen.trim().is_empty() => {
+            Err(maybe(format!("{late} with nothing on its screen")))
+        }
+        (false, Err(e)) => Err(maybe(format!("{late}; {e}"))),
     }
 }
 

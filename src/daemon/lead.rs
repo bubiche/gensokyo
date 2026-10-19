@@ -3,7 +3,7 @@
 
 use super::aware::Pending;
 use super::log::log;
-use super::shrine::{Shared, Shrine, cloud_here, find, touch};
+use super::shrine::{Shared, Shrine, cloud_here, find, here, touch};
 use super::store::{self, Record, Store};
 use crate::proto::{Ended, Report, State, Until, Wait};
 use crate::tele;
@@ -172,7 +172,6 @@ fn news(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> bool {
 }
 
 fn gone(sh: &Shrine, id: &str) -> bool {
-    let here = |e: &super::shrine::Entry| e.handle.is_some() || cloud_here(e);
     sh.entries.iter().find(|e| e.rec.id == id).is_none_or(|e| !here(e))
 }
 
@@ -228,7 +227,7 @@ fn collect(sh: &mut Shrine, lead: &str, id: &str, until: Option<Until>) {
     if e.rec.owner.as_deref() != Some(lead) {
         return;
     }
-    let gone = e.handle.is_none() && !cloud_here(e);
+    let gone = !here(e);
     let saved = tell(&mut e.rec, gone);
     let quieted = turns && (std::mem::take(&mut e.held) | e.aware.seen());
     if saved {
@@ -249,7 +248,7 @@ pub(super) fn briefing(sh: &Shrine, lead: &str) -> Option<String> {
         .entries
         .iter()
         .filter(|e| e.rec.owner.as_deref() == Some(lead))
-        .filter(|e| e.handle.is_some() || cloud_here(e) || !e.rec.told_gone)
+        .filter(|e| here(e) || !e.rec.told_gone)
         .map(|e| {
             let r = &e.rec;
             let unread = match r.turns > r.told.0 {
@@ -383,8 +382,7 @@ pub(super) fn release(sh: &mut Shrine, lead: &str) {
     }
     for i in 0..sh.entries.len() {
         let e = &sh.entries[i];
-        let here = e.handle.is_some() || cloud_here(e);
-        let mine = e.held && here && e.rec.owner.as_deref() == Some(lead);
+        let mine = e.held && here(e) && e.rec.owner.as_deref() == Some(lead);
         if !mine || waited(sh, lead, &e.rec.id) {
             continue;
         }

@@ -1043,10 +1043,13 @@ fn a_dim_row_of_wide_letters_is_cut_by_columns() {
     assert!(dim.contains("pr=#12") && dim.ends_with('…'), "{rows:#?}");
 }
 
+/// As long as a real session's.
+const LINK: &str = "https://claude.ai/code/session_01FH9QhCJvH8WZj7jSJuNHzM";
+
 /// A cloud session, two turns in, its branch found.
 fn aya() -> Resident {
     let cloud = CloudSession {
-        url: "https://claude.ai/code/session_01X".into(),
+        url: LINK.into(),
         repo: "o/r".into(),
         base: "fix".into(),
         branch: Some("claude/fix-it-a1b2c3".into()),
@@ -1066,6 +1069,15 @@ fn a_cloud_session_on_screen_has_its_buttons_and_no_grid() {
         assert!(resolves(&map, Hit::Button(b)), "{b:?}");
     }
     assert!(!map.0.iter().any(|(_, h)| *h == Hit::Grid));
+    // Its link whole at 80 columns, wrapped, and a click on any of it opens it.
+    let (t, map) = draw(&m, 80, 24);
+    let buf = t.backend().buffer();
+    let pane = |y: u16| (26..79).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let y = (0..24).find(|&y| pane(y).contains("https://")).expect("its link");
+    assert_eq!(format!("{}{}", pane(y).trim(), pane(y + 1).trim()), LINK);
+    for y in [y, y + 1] {
+        assert_eq!(map.at(27, y).map(|h| h.1), Some(Hit::Button(Button::OpenFocused)), "{y}");
+    }
     // No answer yet, and a tiny screen: nothing breaks.
     let (t, _) = draw(&m, 40, 6);
     let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();

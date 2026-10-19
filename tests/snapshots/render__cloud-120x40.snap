@@ -4,7 +4,7 @@ expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 4 Aya · ~/work/.claude/worktrees/fix ───────────────────────────────────────────────────────┐"
 "│1 ○ Reimu              ││ ☁ on claude.ai · idle · 2 turns                                                             │"
-"│2 ○ Marisa             ││ https://claude.ai/code/session_01X                                                          │"
+"│2 ○ Marisa             ││ https://claude.ai/code/session_01FH9QhCJvH8WZj7jSJuNHzM                                     │"
 "│3 · Cirno              ││ o/r · fix → claude/fix-it-a1b2c3                                                            │"
 "│4 ☁ Aya                ││                                                                                             │"
 "│                       ││ Fixed the flaky test: the retry now waits for the socket, and the suite passed three times  │"

@@ -483,17 +483,19 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
   you type is its task. `close` takes it out of the sidebar; the session goes on at claude.ai
   (archive it there). A restart, a logout or a crash bring it back; quit leaves it departed,
   and `resume` brings it back.
-- **Followed.** The daemon reads the session's log with a courier: every 30 s while it starts or
-  works (every minute after five), and every 10 minutes once quiet for half an hour (hourly
-  after a day). An idle one is not read, as each read costs a little of your plan: `cloud say`
-  reads it again, and so does putting it on screen, in case you went on with it on the web. The
-  sidebar says `starting`, `working` or `idle`. A turn that ends is told with its link and
-  counted as a resident's, so `gensokyo wait` and `gensokyo read` work on it. The answer is the
-  log's, which cuts it at about 2000 characters: the rest is on claude.ai. A session archived or
-  deleted there departs. A session waits its turn while three couriers are out.
-- **On screen.** Its pane shows the repository, `base → branch` once its branch is found (the
-  `claude/…` branch on origin whose newest commit carries its `Claude-Session:` line), and the
-  last answer. Enter opens it in the browser, `s` says something to it, `x` closes it.
+- **Followed.** The daemon reads the session's log with a courier: every 40 s while it starts or
+  works (every minute after five), and every 10 minutes once quiet for half an hour (hourly a
+  day after its last event). An idle one is not read, as each read costs a little of your plan:
+  `cloud say` reads it again, and so does putting it on screen or coming back to the terminal
+  with it there (once a minute at most), in case you went on with it on the web. A turn that
+  ends is told with its link and counted as a resident's, so `gensokyo wait` and `gensokyo
+  read` work on it. The answer is the log's, which cuts it at about 2000 characters: the rest
+  is on claude.ai. A session archived or deleted there departs. A session waits its turn while
+  three couriers are out.
+- **On screen.** Its pane says `starting`, `working` or `idle`, and shows its link, the
+  repository, `base → branch` (`?` until its branch is found: the `claude/…` branch on origin
+  whose newest commit carries its `Claude-Session:` line), and the last answer. Enter or a
+  click on the link opens it in the browser, `s` says something to it, `x` closes it.
 - **By name.** `gensokyo cloud say NAME "…"` is its next turn, `gensokyo cloud log NAME` a page
   of its log, `gensokyo new --teleport NAME` takes it over here.
 - **As a helper.** A lead in `auto` or `bypassPermissions` mode (a cloud session runs its tools

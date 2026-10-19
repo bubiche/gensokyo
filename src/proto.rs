@@ -411,7 +411,7 @@ pub struct Summon {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teleport: Option<String>,
     /// A cloud session on claude.ai instead (`claude --cloud`), from the pushed branch of a
-    /// GitHub repository, its prompt the task. The user's alone.
+    /// GitHub repository, its prompt the task. The user's, or a lead's as its helper.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cloud: bool,
     /// The cloud environment it starts in (`env_…`); none, the config's `CLOUD_ENV`.
@@ -739,6 +739,13 @@ pub struct Resident {
     /// A cloud session: it runs on claude.ai, with no process here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud: Option<CloudSession>,
+}
+
+impl Resident {
+    /// A cloud session still followed: on claude.ai, with no screen here.
+    pub fn in_cloud(&self) -> bool {
+        self.cloud.is_some() && self.departed.is_none()
+    }
 }
 
 /// A cloud session in the sidebar.

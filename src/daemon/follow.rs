@@ -14,12 +14,13 @@ use std::path::Path;
 /// that many are out waits for the next tick.
 const COURIERS_MOST: usize = 3;
 
-/// Starting or working, a session is looked at every `BUSY` seconds for its first `BUSY_FOR`, then
-/// every `BUSY_LATER`; with nothing new in its log for `QUIET` (a long command), every `IDLE` for
-/// a day, then hourly. Idle, it is not looked at: each look costs a courier, and only words said
-/// to it start another turn, from here (looked at then) or on the web (looked at once the user
-/// has it on screen). A failing look backs off as the watch does, until one gets through.
-const BUSY: i64 = 30;
+/// Starting or working, a session is looked at every `BUSY` seconds (two ticks) for its first
+/// `BUSY_FOR`, then every `BUSY_LATER`; with nothing new in its log for `QUIET` (a long command),
+/// every `IDLE` until a day after its newest event, then hourly. Idle, it is not looked at: each
+/// look costs a courier, and only words said to it start another turn, from here (looked at
+/// then) or on the web (looked at once the user has it on screen). A failing look backs off as
+/// the watch does, until one gets through.
+const BUSY: i64 = 40;
 const BUSY_FOR: i64 = 300;
 const BUSY_LATER: i64 = 60;
 const QUIET: i64 = 1800;
@@ -40,8 +41,7 @@ pub(super) struct Follow {
     busy: bool,
     /// Looks in a row that failed.
     fails: u32,
-    /// The newest words to it and the newest event of any kind its log has shown, epoch µs.
-    words: Option<i64>,
+    /// The newest event of any kind its log has shown, epoch µs.
     newest: Option<i64>,
     /// When the user said something to it, and the newest words its log had shown then: until
     /// newer ones show, the words wait in a queue, and it is looked at as a working one is.
@@ -58,13 +58,12 @@ impl Follow {
         if self.asked.is_none() && self.phase == Phase::Idle && self.fails == 0 {
             return None;
         }
-        let long = now - self.since;
-        let quiet = self.newest.is_some_and(|t| now - t / 1_000_000 >= QUIET);
-        let pace = match self.asked.is_none() && quiet {
-            false if long < BUSY_FOR => BUSY,
-            false => BUSY_LATER,
-            true if long < DAY => IDLE,
-            true => HOURLY,
+        let quiet = self.newest.map(|t| now - t / 1_000_000).filter(|q| *q >= QUIET);
+        let pace = match quiet.filter(|_| self.asked.is_none()) {
+            None if now - self.since < BUSY_FOR => BUSY,
+            None => BUSY_LATER,
+            Some(q) if q < DAY => IDLE,
+            Some(_) => HOURLY,
         };
         Some(match self.fails {
             0 => pace,
@@ -72,9 +71,10 @@ impl Follow {
         })
     }
 
-    /// The user said something to it: looked at again soon, and often.
-    pub(super) fn asked(&mut self, now: i64) {
-        (self.asked, self.since, self.again) = (Some((now, self.words)), now, true);
+    /// The user said something to it, its log's newest words `words`: looked at again soon, and
+    /// often.
+    pub(super) fn asked(&mut self, now: i64, words: Option<i64>) {
+        (self.asked, self.since, self.again) = (Some((now, words)), now, true);
     }
 }
 
@@ -120,9 +120,13 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
             let mine = |e: &Entry| e.rec.id == id && cloud_here(e) && e.follow.looked == Some(now);
             let Some(i) = sh.entries.iter().position(mine) else { return };
             sh.entries[i].follow.busy = false;
+            // A 404 that says the session is not there: any other (a route moved, another
+            // account) is a look that failed.
+            let not_there =
+                |b: &str| cloud::json(b).is_ok_and(|v| v["error"]["type"] == "not_found_error");
             let failed = match r {
                 Ok((200, body)) => return seen(&shrine, &mut sh, i, &body, now),
-                Ok((404, body)) if gone_from(&body) => return gone(&mut sh, i),
+                Ok((404, body)) if not_there(&body) => return gone(&mut sh, i),
                 Ok((code, body)) => format!("HTTP {code}: {}", cloud::error_of(&body)),
                 Err(e) => e,
             };
@@ -133,40 +137,39 @@ pub(super) fn tick(shrine: &Shared, now: i64, catch: bool) {
     }
 }
 
-/// A 404 that says the session is not there: any other (a route moved, another account) is a
-/// look that failed.
-fn gone_from(body: &str) -> bool {
-    cloud::json(body).is_ok_and(|v| v["error"]["type"] == "not_found_error")
-}
-
 /// A page of its log read: its phase, and the turns that ended since the last counted.
 fn seen(shrine: &Shared, sh: &mut Shrine, i: usize, body: &str, now: i64) {
     let page = cloud::session(body);
     let e = &mut sh.entries[i];
     let Some(c) = e.rec.cloud.as_mut() else { return };
     let f = &mut e.follow;
-    (f.fails, f.words, f.newest) = (0, page.words, page.newest);
+    (f.fails, f.newest) = (0, page.newest);
     if f.asked.is_some_and(|(t, w)| page.words > w || now - t >= HOURLY) {
         f.asked = None;
     }
     if page.phase != f.phase {
         (f.phase, f.since) = (page.phase, now);
     }
+    // Kept: words said after a restart wait for newer ones than these. Its newest only, as a
+    // long turn pushes them off the page.
+    let said = page.words > c.words;
+    c.words = c.words.max(page.words);
     let new: Vec<&cloud::Turn> =
         page.turns.iter().filter(|t| c.ended.is_none_or(|x| t.at > x)).collect();
-    let seek = c.branch.is_none() && !f.seeking && (!new.is_empty() || !f.sought);
+    if c.branch.is_none() && !f.seeking && (!new.is_empty() || !f.sought) {
+        find_branch(shrine, e);
+    }
     let Some(last) = new.last() else {
-        if seek {
-            find_branch(shrine, e);
+        if said {
+            let r = e.rec.clone();
+            let _ = sh.store.save(&r);
         }
         return touch(sh);
     };
+    let Some(c) = e.rec.cloud.as_mut() else { return };
     c.ended = Some(last.at);
     e.rec.turns += new.len() as u64;
     let ended = if last.failed { Ended::Failed } else { Ended::Stop };
-    if seek {
-        find_branch(shrine, e);
-    }
     let (r, failed) = (e.rec.clone(), last.failed);
     super::lead::keep_answer(&sh.store, &r, ended, Some(&last.answer));
     let _ = sh.store.save(&r);

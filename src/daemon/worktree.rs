@@ -258,10 +258,15 @@ pub(super) async fn github(dir: &Path) -> Result<String, String> {
     crate::cloud::github(&url)
 }
 
-/// The branch `dir` is on, pushed to origin and tracked there.
-pub(super) async fn push(dir: &Path) -> Result<(), String> {
+/// The branch `dir` is on, which is to be `own`, pushed to origin and tracked there.
+pub(super) async fn push(dir: &Path, own: &str) -> Result<(), String> {
     let b = on(dir).await?;
-    let args = ["push", "-q", "-u", "origin", "--end-of-options", &b];
+    if b != own {
+        let shown = short(&dir.to_string_lossy());
+        return Err(format!("{shown} is on {b}, not {own}: switch it back, or name another"));
+    }
+    let refname = format!("refs/heads/{b}");
+    let args = ["push", "-q", "-u", "origin", "--end-of-options", &refname];
     git(dir, &args, LOCAL).await.map(drop).map_err(|e| format!("git push: {e}"))
 }
 
@@ -332,8 +337,9 @@ fn plain_ref(r: &str) -> bool {
 
 /// The branch `dir` is on.
 async fn on(dir: &Path) -> Result<String, String> {
-    let b = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"], LOCAL).await;
-    b.map_err(|_| {
+    // Not `--short`, which a tag of the same name makes `heads/<b>`.
+    let b = git(dir, &["symbolic-ref", "-q", "HEAD"], LOCAL).await;
+    b.ok().and_then(|b| b.strip_prefix("refs/heads/").map(String::from)).ok_or_else(|| {
         let shown = short(&dir.to_string_lossy());
         format!("{shown} is not on a branch: a cloud session starts from a pushed one")
     })

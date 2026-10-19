@@ -205,6 +205,11 @@ pub(super) fn cloud_here(e: &Entry) -> bool {
     e.rec.cloud.is_some() && e.rec.departed.is_none()
 }
 
+/// Running here, or followed on claude.ai.
+pub(super) fn here(e: &Entry) -> bool {
+    e.handle.is_some() || cloud_here(e)
+}
+
 /// A cloud session's state, as a resident's: busy until its turn ends.
 pub(super) fn cloud_state(e: &Entry) -> State {
     match e.follow.phase {
@@ -303,8 +308,8 @@ fn helpers_most() -> usize {
 /// Whether resident `lead` may have one more live helper: its cloud sessions count, those still
 /// being started too.
 pub(super) fn room(sh: &Shrine, lead: &str) -> Result<(), String> {
-    let live = |e: &&Entry| e.handle.is_some() || cloud_here(e);
-    let mine = sh.entries.iter().filter(live).filter(|e| e.rec.owner.as_deref() == Some(lead));
+    let mine =
+        sh.entries.iter().filter(|e| here(e)).filter(|e| e.rec.owner.as_deref() == Some(lead));
     let n = mine.count() + sh.starting.iter().filter(|l| *l == lead).count();
     let most = helpers_most();
     match n < most {
@@ -337,9 +342,6 @@ pub(super) fn summon(
         Some(who) => Some(super::cloud::run_of(&shrine.borrow(), who)?),
         None => None,
     };
-    if s.cloud {
-        return Err("a cloud session runs on claude.ai, not here".into());
-    }
     let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
     let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
     // Named, so a helper never starts in the user's defaultMode where that is wider.
@@ -410,9 +412,16 @@ pub(super) fn may_summon(
     if let Some(t) = s.allowed_tools.iter().find(|t| t.starts_with('-')) {
         return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
     }
+    if s.cloud {
+        may_cloud(s)?;
+    } else if caller.is_some() && s.teleport.is_some() {
+        return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
+                    of residents' reach: the user takes a run over (gensokyo new --teleport)"
+            .into());
+    }
     {
         let sh = shrine.borrow();
-        if let Some(r) = s.role.as_ref().filter(|_| !s.cloud) {
+        if let Some(r) = &s.role {
             role::find(r, sh.share.as_deref())?;
         }
         if sh.quitting {
@@ -423,13 +432,6 @@ pub(super) fn may_summon(
             Some(n) if taken(&sh, n) => return Err(format!("{n} is already here")),
             _ => {}
         }
-    }
-    if s.cloud {
-        may_cloud(s)?;
-    } else if caller.is_some() && s.teleport.is_some() {
-        return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
-                    of residents' reach: the user takes a run over (gensokyo new --teleport)"
-            .into());
     }
     // A resident's summon is a helper of its own.
     if let Some(c) = caller {
@@ -511,7 +513,8 @@ fn may_cloud(s: &Summon) -> Result<(), String> {
     if let Some((what, _)) = not.iter().find(|(_, asked)| *asked) {
         return Err(format!("a cloud session takes no {what}: claude.ai sets it up"));
     }
-    match s.env.as_deref().filter(|e| !crate::cloud::valid_id(e, "env_")) {
+    let env = super::cloud::env_of(s.env.clone());
+    match env.filter(|e| !crate::cloud::valid_id(e, "env_")) {
         Some(e) => Err(format!("environment {e}: an environment's id is env_ and letters")),
         None => Ok(()),
     }
@@ -581,7 +584,6 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     let rec = Record {
         id: id.clone(),
         session: id.clone(),
-        session_at: 0,
         name,
         slot,
         cwd: cwd.to_string_lossy().into_owned(),
@@ -596,17 +598,9 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         teleport: s.teleport,
         owner: s.owner,
         quiet: s.quiet,
-        turns: 0,
-        needs: 0,
-        told: (0, 0),
-        told_gone: false,
         launched: store::now(),
         pid: running_as(&handle),
-        departed: None,
-        exit: None,
-        signal: None,
-        tags: Vec::new(),
-        cloud: None,
+        ..Record::default()
     };
     let _ = sh.store.save(&rec);
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid,
@@ -640,32 +634,16 @@ pub(super) fn arrive(
     let rec = Record {
         id: id.clone(),
         session: id.clone(),
-        session_at: 0,
         name,
         slot,
         cwd,
         program: "claude".into(),
         argv,
         prompt: Some(prompt),
-        ritual: None,
-        keep: None,
-        extra: Vec::new(),
-        role: None,
-        system_prompt: None,
-        teleport: None,
         owner,
-        quiet: false,
-        turns: 0,
-        needs: 0,
-        told: (0, 0),
-        told_gone: false,
         launched: store::now(),
-        pid: None,
-        departed: None,
-        exit: None,
-        signal: None,
-        tags: Vec::new(),
         cloud: Some(cloud),
+        ..Record::default()
     };
     let _ = sh.store.save(&rec);
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "cloud": rec.cloud}));
@@ -688,7 +666,7 @@ pub(super) fn recall(
         return Err("the daemon is stopping".into());
     }
     let (mut rec, at) = match find(&sh, who) {
-        Some(i) if sh.entries[i].handle.is_some() || cloud_here(&sh.entries[i]) => {
+        Some(i) if here(&sh.entries[i]) => {
             return Err(format!("{} is still here", sh.entries[i].rec.name));
         }
         Some(i) => (sh.entries[i].rec.clone(), Some(i)),

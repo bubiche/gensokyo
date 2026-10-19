@@ -788,15 +788,14 @@ impl App {
     /// The cloud session on screen: the daemon reads its log again, as the user may have gone on
     /// with it on the web.
     fn shown(&mut self) {
-        let cloud = |r: &&Resident| r.departed.is_none() && r.cloud.is_some();
-        if let Some(who) = self.focused().filter(cloud).map(|r| r.id.clone()) {
+        if let Some(who) = self.focused().filter(|r| r.in_cloud()).map(|r| r.id.clone()) {
             self.send(Request::Shown { who });
         }
     }
 
     /// The cloud session on screen: its last answer, read again once it has a newer one.
     fn read_answer(&mut self) {
-        let here = |r: &&Resident| r.cloud.is_some() && r.departed.is_none() && r.turns > 0;
+        let here = |r: &&Resident| r.in_cloud() && r.turns > 0;
         let Some(r) = self.focused().filter(here) else { return };
         let (who, turns) = (r.id.clone(), r.turns);
         let had = |a: Option<(&String, u64)>| a == Some((&who, turns));
@@ -812,7 +811,7 @@ impl App {
     /// The cloud session on screen: Enter opens it in the browser, `s` says something to it.
     /// Whether the key was its.
     fn cloud_key(&mut self, c: &Chunk) -> bool {
-        if !self.focused().is_some_and(|r| r.departed.is_none() && r.cloud.is_some()) {
+        if !self.focused().is_some_and(Resident::in_cloud) {
             return false;
         }
         match super::modal::Key::of(c) {
@@ -824,7 +823,7 @@ impl App {
     }
 
     fn say_focused(&mut self) {
-        if let Some(r) = self.focused().filter(|r| r.departed.is_none() && r.cloud.is_some()) {
+        if let Some(r) = self.focused().filter(|r| r.in_cloud()) {
             let (id, name) = (r.id.clone(), r.name.clone());
             self.m.modal = Some(Modal::Say { id, name, text: String::new() });
         }
@@ -924,7 +923,8 @@ impl App {
             if self.talked.is_some_and(|t| now.duration_since(t) < TYPING) {
                 self.talked = Some(now);
                 if let Some(r) = self.focused() {
-                    let say = format!("{} has left; what was typed went nowhere", r.name);
+                    let how = if r.in_cloud() { "is on claude.ai" } else { "has left" };
+                    let say = format!("{} {how}; what was typed went nowhere", r.name);
                     self.say(Say::Info, say);
                 }
                 return;
@@ -934,7 +934,9 @@ impl App {
             }
             // On a departed screen `r` is its own `[recall r]`, and `Ctrl-] r` the whole list.
             match ch {
-                Chord::Recall if self.focused().is_some() => self.recall_focused(),
+                Chord::Recall if self.focused().is_some_and(|r| r.departed.is_some()) => {
+                    self.recall_focused()
+                }
                 ch => self.chord(ch),
             }
         }

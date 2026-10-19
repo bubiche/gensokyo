@@ -186,11 +186,7 @@ fn signalled(shrine: &Shared, quit: &Rc<Stop>, sig: &str) {
     let path = paths::comeback_path();
     if !shrine.borrow().quitting && !path.exists() {
         let sh = shrine.borrow();
-        let mut live: Vec<_> = sh
-            .entries
-            .iter()
-            .filter(|e| e.handle.is_some() || super::shrine::cloud_here(e))
-            .collect();
+        let mut live: Vec<_> = sh.entries.iter().filter(|e| super::shrine::here(e)).collect();
         live.sort_by_key(|e| (e.rec.slot.unwrap_or(u8::MAX), e.rec.launched));
         let mut ids = format!("# {sig}\n");
         for e in &live {

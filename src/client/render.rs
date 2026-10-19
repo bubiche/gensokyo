@@ -288,7 +288,7 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
                 [("[ recall r ]", Button::RecallFocused), ("[ close x ]", Button::CloseFocused)];
             flow_centered(buf, g, y + 1, &row, &mut hits);
         }
-        Some(r) if r.departed.is_none() && r.cloud.is_some() => cloud_pane(m, r, g, buf, &mut hits),
+        Some(r) if r.in_cloud() => cloud_pane(m, r, g, buf, &mut hits),
         Some(_) => {
             if let Some(fr) = &m.screen {
                 grid(fr, g, buf);
@@ -326,11 +326,11 @@ fn cloud_pane(m: &Model, r: &Resident, g: Rect, buf: &mut Buffer, hits: &mut Hit
         n if n > 1 => format!(" · {n} turns"),
         _ => String::new(),
     };
-    let mut rows = vec![
-        (format!("☁ on claude.ai · {state}{turns}"), Style::new()),
-        (c.url.clone(), BUTTON),
-        (format!("{} · {} → {}", c.repo, c.base, c.branch.as_deref().unwrap_or("?")), Style::new()),
-    ];
+    let mut rows = vec![(format!("☁ on claude.ai · {state}{turns}"), Style::new())];
+    // As it is copied or clicked: a narrow pane wraps it.
+    rows.extend(wrap(&c.url, w, 2).into_iter().map(|l| (l, BUTTON)));
+    let branch = c.branch.as_deref().unwrap_or("?");
+    rows.push((format!("{} · {} → {branch}", c.repo, c.base), Style::new()));
     if let Some(e) = &c.env {
         rows.push((format!("environment {e}"), DIM));
     }
@@ -347,6 +347,10 @@ fn cloud_pane(m: &Model, r: &Resident, g: Rect, buf: &mut Buffer, hits: &mut Hit
     let x = g.x + 1;
     for (y, (l, st)) in (g.y..).zip(&rows) {
         buf.set_stringn(x, y, l, w, *st);
+        // The link opens it, as its button does.
+        if *st == BUTTON {
+            hits.push(Rect::new(x, y, width(l), 1), Hit::Button(Button::OpenFocused));
+        }
     }
     let y = g.y + rows.len() as u16;
     let row = [
@@ -362,9 +366,10 @@ fn cloud_pane(m: &Model, r: &Resident, g: Rect, buf: &mut Buffer, hits: &mut Hit
         BUTTON,
         hits,
     );
-    if y + 1 < g.bottom() {
-        let hint = format!("gensokyo cloud log {0} · new --teleport {0} takes it over", r.name);
-        buf.set_stringn(x, y + 1, &hint, w, DIM);
+    let hint = format!("gensokyo cloud log {0} · new --teleport {0} takes it over", r.name);
+    let n = g.bottom().saturating_sub(y + 1).clamp(1, 2) as usize;
+    for (y, l) in (y + 1..g.bottom()).zip(wrap(&hint, w, n)) {
+        buf.set_stringn(x, y, &l, w, DIM);
     }
 }
 
@@ -546,7 +551,7 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             (true, false) => "└",
         };
         // A cloud session: on claude.ai, with nothing here to be in a state.
-        let glyph = if r.cloud.is_some() && r.departed.is_none() { "☁" } else { r.state.glyph() };
+        let glyph = if r.in_cloud() { "☁" } else { r.state.glyph() };
         format!("{slot} {tee}{glyph} ")
     };
     // Behind the claude installed now, or on its way to it.

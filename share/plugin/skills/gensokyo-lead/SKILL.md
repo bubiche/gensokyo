@@ -76,13 +76,16 @@ BRIEF
   and up to date: the session sees only what is on GitHub.
 - **Your mode**: it runs its tools and connectors with nobody asked, so you start one only in
   `auto` or `bypassPermissions`. In a narrower mode, suggest the command to the user instead.
-- **No role, mode, effort or allowed tools**: claude.ai sets the session up. `--model` works.
+- **No role, system prompt, mode, effort or allowed tools**: claude.ai sets the session up.
+  `--model` works.
 - **The brief also says**:
   - its last message is its report, **under 1500 characters**: its log cuts longer ones;
   - detail goes in commits and the PR description, on its branch;
   - it uses connectors only when the task needs them: each one's tools run unasked there.
 - **Wait and read** as for any helper. `read` ends with the session's link, where the whole report
-  is. Its branch shows in `gensokyo list --json` (`cloud.branch`) once found; `gh pr view` it.
+  is. It has no screen here and asks nobody, so `read --screen`, `wait --until needs` and
+  `banish` don't apply: look at a slow one on its link. Its branch shows in
+  `gensokyo list --json` (`cloud.branch`) once found; `gh pr view` it.
 - **Follow up** with `gensokyo cloud say Aya "<words>"`, not SendMessage, which cannot reach it.
   Then wait again.
 - **Close** it when its work is in: gensokyo stops following it, and the session stays on

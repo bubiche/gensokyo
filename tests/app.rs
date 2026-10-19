@@ -1090,6 +1090,11 @@ fn the_role_stage_starts_a_cloud_session_on_the_task_typed() {
     assert!(screen(&mut a).iter().any(|l| l.contains("Fixed it.")));
     daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), one] });
     assert!(sent(&mut a).is_empty(), "read once");
+    // `r` is the recall list's, as on any screen that takes no keys.
+    host(&mut a, b"r");
+    assert!(matches!(a.m.modal, Some(Modal::Recall(_))));
+    a.m.modal = None;
+    sent(&mut a);
     // There, nothing typed goes to it; `x` closes it with no /exit to ask.
     host(&mut a, b"x");
     let out = sent(&mut a);

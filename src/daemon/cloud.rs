@@ -15,6 +15,7 @@ use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -570,8 +571,13 @@ pub(super) async fn say(
         Some(c) => helper_run(&shrine.borrow(), c, who)?,
         None => run_of(&shrine.borrow(), who)?,
     };
-    // Before the words are queued: the run's events come after this.
+    let ours = |e: &super::shrine::Entry| {
+        super::shrine::cloud_here(e) && e.rec.cloud.as_ref().is_some_and(|c| c.session == id)
+    };
+    // Before the words are queued: the run's events, and the words its log shows, come after.
     let at = super::rituals::now();
+    let words =
+        shrine.borrow().entries.iter().find(|e| ours(e)).and_then(|e| e.rec.cloud.as_ref()?.words);
     let (stdout, code, stderr) = claude_p(shrine, cloud::say_args(&id, text)).await?;
     let r = cloud::said(&stdout, &id);
     log(json!({"ev": "cloud", "said": id, "exit": code, "ok": r.is_ok()}));
@@ -582,11 +588,8 @@ pub(super) async fn say(
         sh.cloud.said.insert(id.clone(), at);
         sh.cloud.again = true;
     }
-    let ours = |e: &&mut super::shrine::Entry| {
-        super::shrine::cloud_here(e) && e.rec.cloud.as_ref().is_some_and(|c| c.session == id)
-    };
-    if let Some(e) = sh.entries.iter_mut().find(ours) {
-        e.follow.asked(at);
+    if let Some(e) = sh.entries.iter_mut().find(|e| ours(e)) {
+        e.follow.asked(at, words);
         watched = true;
     }
     drop(sh);
@@ -623,32 +626,32 @@ async fn make(
     mut s: Summon,
     caller: Option<&str>,
 ) -> Result<(proto::Resident, Option<String>), String> {
+    // Found before anything is made or pushed for it.
+    let claude = shrine.borrow().claude("").filter(|(p, _)| p.is_file());
+    let claude = claude.ok_or("claude not found on PATH")?;
     let repo = super::worktree::github(Path::new(&s.cwd)).await?;
-    let env = s.env.take().or_else(|| paths::config("CLOUD_ENV")).filter(|e| !e.trim().is_empty());
-    if let Some(e) = env.as_deref().filter(|e| !cloud::valid_id(e, "env_")) {
-        return Err(format!("environment {e}: an environment's id is env_ and letters"));
-    }
+    let env = env_of(s.env.take());
     let mut note = None;
     if let Some(ask) = s.worktree.take() {
         let prefix = paths::config("BRANCH_PREFIX").unwrap_or_default();
         let made = super::worktree::make(Path::new(&s.cwd), &ask, &prefix).await?;
         log(json!({"ev": "worktree", "path": made.path, "note": made.note}));
-        super::worktree::push(Path::new(&made.path)).await?;
+        // Its own branch only: a worktree found on another may hold anyone's.
+        let own = ask.branch.unwrap_or_else(|| format!("{prefix}{}", ask.slug));
+        super::worktree::push(Path::new(&made.path), &own).await?;
         (s.cwd, note) = (made.path, made.note);
     }
     let dir = std::fs::canonicalize(&s.cwd).map_err(|e| format!("{}: {e}", s.cwd))?;
     let base = super::worktree::pushed(&dir).await?;
     let task = s.prompt.unwrap_or_default().trim().to_string();
     let mut args = cloud::new_args(&task, env.as_deref(), s.model.as_deref());
-    // From here on the session may be on claude.ai whatever went wrong.
-    let maybe = |e: String| format!("{e}; it may be at {} already: look there first", cloud::WEB);
-    let screen = claude_tty(shrine, args.clone(), &dir).await.map_err(maybe)?;
+    let screen = claude_tty(claude, args.clone(), &dir).await?;
     let made = cloud::created(&screen);
     log(json!({"ev": "cloud", "made": made.as_ref().ok().map(|m| &m.0)}));
     let (session, url) = made.map_err(maybe)?;
     // The task is kept as its prompt.
     args.pop();
-    let cloud = Cloud { session, url, repo, base, env, branch: None, ended: None };
+    let cloud = Cloud { session, url, repo, base, env, branch: None, ended: None, words: None };
     let cwd = dir.to_string_lossy().into_owned();
     let owner = caller.map(String::from);
     let r = super::shrine::arrive(shrine, s.name, cwd, task, args, cloud, owner)?;
@@ -730,11 +733,24 @@ async fn claude_p(
     Ok((text(&out.stdout), out.status.code(), text(&out.stderr)))
 }
 
+/// The environment a cloud session is asked for, else the configured one.
+pub(super) fn env_of(asked: Option<String>) -> Option<String> {
+    asked.or_else(|| paths::config("CLOUD_ENV").filter(|e| !e.trim().is_empty()))
+}
+
+/// Once claude has run, the session may be on claude.ai whatever went wrong.
+fn maybe(e: String) -> String {
+    format!("{e}; it may be at {} already: look there first", cloud::WEB)
+}
+
 /// `claude --cloud`, which will not start without a terminal: in one of its own, as a
 /// resident's is, wide enough for the link to stay on one line. Its screen once it has left,
 /// or a moment after it named the session it made.
-async fn claude_tty(shrine: &Shared, args: Vec<String>, cwd: &Path) -> Result<String, String> {
-    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
+async fn claude_tty(
+    (claude, env): (PathBuf, Vec<(OsString, OsString)>),
+    args: Vec<String>,
+    cwd: &Path,
+) -> Result<String, String> {
     let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
     let spawn =
         super::pty::Spawn { program: &claude, args: &args, env: &env, cwd, cols: 400, rows: 50 };
@@ -759,7 +775,7 @@ async fn claude_tty(shrine: &Shared, args: Vec<String>, cwd: &Path) -> Result<St
     }
     match done {
         true => Ok(screen()),
-        false => Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
+        false => Err(maybe(format!("claude took over {}s", COURIER_LIMIT.as_secs()))),
     }
 }
 

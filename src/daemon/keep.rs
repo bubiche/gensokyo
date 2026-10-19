@@ -186,8 +186,9 @@ async fn orphan(shrine: &Shared, id: &str) {
     let rec = shrine.borrow().entries.iter().find(|e| e.rec.id == id).map(|e| e.rec.clone());
     if retire(shrine, id).await {
         log(json!({"ev": "orphan", "id": id, "closed": rec.as_ref().map(|r| &r.name)}));
-        // Started by its lead, not the user: where it goes on.
-        if let Some((name, c)) = rec.and_then(|r| Some((r.name, r.cloud?))) {
+        // Started by its lead, not the user: where it goes on, unless it was gone from there.
+        let here = rec.filter(|r| r.departed.is_none());
+        if let Some((name, c)) = here.and_then(|r| Some((r.name, r.cloud?))) {
             let text = format!("☁ {name} closed, its lead gone: the session goes on at {}", c.url);
             shrine.borrow_mut().notice(&text);
         }

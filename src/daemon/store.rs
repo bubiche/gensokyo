@@ -20,7 +20,7 @@ pub const DEPARTED_KEPT: usize = 100;
 /// Past the newest `DEPARTED_KEPT`, a record departed longer ago than this goes.
 pub const DEPARTED_DAYS: i64 = 30;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Record {
     /// The resident's id and its first session id.
     pub id: String,
@@ -109,6 +109,10 @@ pub struct Cloud {
     /// counts none twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended: Option<i64>,
+    /// The newest words to it its log has shown, epoch µs: words said after a restart wait for
+    /// newer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<i64>,
 }
 
 pub struct Store {

@@ -137,6 +137,8 @@ fn what_claude_prints_for_a_new_session_is_read_strictly() {
 #[test]
 fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process() {
     let (d, work) = setup("new", "CLOUD_ENV=env_01A\n");
+    // A tag of the branch's name changes nothing.
+    git(&work, &["tag", "main"]);
     let r = summon(&d, &work, json!({"name": "Aya", "prompt": "fix the bug\nand say so"}));
     assert_eq!(r["t"], "summoned", "{r}");
     let me = &r["resident"];
@@ -152,7 +154,10 @@ fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process
     let rec = record(&d, &me["id"]);
     let want = json!({"session": "cse_01NewStub", "url": LINK, "repo": "o/r", "base": "main",
                       "env": "env_01A"});
-    assert_eq!(rec["cloud"], want, "{rec}");
+    let mut cloud = rec["cloud"].clone();
+    // The newest words its log shows, once looked at.
+    cloud.as_object_mut().unwrap().remove("words");
+    assert_eq!(cloud, want, "{rec}");
     assert_eq!(rec["prompt"], "fix the bug\nand say so");
     let listed = d.list();
     assert_eq!((listed.len(), &listed[0]["cloud"]["url"]), (1, &json!(LINK)));
@@ -183,6 +188,26 @@ fn a_cloud_session_in_a_worktree_pushes_its_new_branch_first() {
     assert_eq!(git(&wt, &["rev-parse", "--abbrev-ref", "@{u}"]), "origin/me/fix");
     let rec = record(&d, &r["resident"]["id"]);
     assert_eq!((&rec["cloud"]["base"], &rec["cwd"]), (&json!("me/fix"), &json!(wt)), "{rec}");
+
+    // Found again on another branch, that branch is not pushed: it may be anyone's.
+    git(&wt, &["switch", "-q", "-c", "other"]);
+    git(&wt, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+    let r = summon(&d, &work, json!({"prompt": "go", "worktree": {"slug": "fix"}}));
+    let e = r["error"].as_str().unwrap_or_else(|| panic!("{r}"));
+    assert!(e.contains("on other, not me/fix"), "{e}");
+    let heads = git(&d.dir.join("remote.git"), &["for-each-ref", "--format=%(refname)"]);
+    assert!(!heads.contains("other"), "{heads}");
+}
+
+#[test]
+fn with_no_claude_to_run_nothing_is_pushed() {
+    let (d, work) = setup_with("noclaude", "", &[("GENSOKYO_CLAUDE", "/nonexistent/claude")]);
+    let r = summon(&d, &work, json!({"prompt": "go", "worktree": {"slug": "fix"}}));
+    let e = r["error"].as_str().unwrap_or_else(|| panic!("{r}"));
+    assert!(e.contains("claude not found") && !e.contains("claude.ai"), "{e}");
+    assert!(!work.join(".claude/worktrees/fix").exists());
+    let heads = git(&d.dir.join("remote.git"), &["for-each-ref", "--format=%(refname)"]);
+    assert_eq!(heads, "refs/heads/main");
 }
 
 #[test]
@@ -200,6 +225,7 @@ fn a_repo_the_cloud_cannot_clone_or_a_branch_it_would_not_see_is_refused_before_
         refused(json!({"prompt": task}), "which claude would attach to");
     }
     refused(json!({"prompt": "go", "env": "prod"}), "env_");
+    refused(json!({"prompt": "go", "env": ""}), "env_");
     for f in ["role", "system_prompt", "teleport", "mode", "effort"] {
         refused(json!({"prompt": "go", f: "x"}), "a cloud session");
     }
@@ -524,8 +550,8 @@ fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
     common::wait(|| read(&d) >= 1, "a first look");
     let me = at(&d, "starting", |r| r["detail"] == "starting");
     assert_eq!(me["state"], "busy");
-    // Starting, it is looked at again 30s on.
-    clock(&d, T0 + 30);
+    // Starting, it is looked at again 40s on.
+    clock(&d, T0 + 40);
     common::wait(|| read(&d) >= 2, "a second look");
     // A long turn, its first events off the page.
     logs(
@@ -535,12 +561,12 @@ fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
             "[2026-10-19T01:48:41Z] tool_use Bash: {}",
         ]),
     );
-    clock(&d, T0 + 60);
+    clock(&d, T0 + 80);
     at(&d, "working", |r| r["detail"] == "working");
     let wait = d.command(&["wait", "Aya", "--timeout", "60s"]).spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));
     logs(&d, &real());
-    clock(&d, T0 + 90);
+    clock(&d, T0 + 120);
     let me = at(&d, "idle", |r| r["detail"] == "idle");
     assert_eq!((&me["state"], &me["turns"]), (&json!("resting"), &json!(1)), "{me}");
     assert!(wait.wait_with_output().unwrap().status.success(), "the wait ended with the turn");
@@ -553,7 +579,7 @@ fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
     // Idle, it is looked at seldom. (A jump of over a minute is a Mac waking: everyone is
     // looked at.)
     let n = looks(&d);
-    clock(&d, T0 + 140);
+    clock(&d, T0 + 160);
     std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(looks(&d), n);
 
@@ -620,7 +646,7 @@ fn a_session_quiet_for_half_an_hour_is_looked_at_seldom() {
     logs(&d, &page(&[ASKED, &format!("[{hour_ago}] tool_use Bash: {{}}")]));
     summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
     at(&d, "working", |r| r["detail"] == "working");
-    for t in [30, 60] {
+    for t in [40, 80] {
         clock(&d, T0 + t);
         std::thread::sleep(std::time::Duration::from_millis(600));
         assert_eq!(read(&d), 1, "looked at {t}s on");
@@ -640,11 +666,11 @@ fn said_to_a_session_is_looked_at_often_until_it_answers() {
     assert!(args.contains("cse_01NewStub\n"), "{args}");
     common::wait(|| looks(&d) > n, "a look at once");
     // Its log still reads idle, the words queued: looked at again as a working one is.
-    clock(&d, T0 + 30);
-    common::wait(|| looks(&d) > n + 1, "a look 30s on");
+    clock(&d, T0 + 40);
+    common::wait(|| looks(&d) > n + 1, "a look 40s on");
     // The words show: still working.
     logs(&d, &format!("{}[2026-10-19T03:00:00Z] user: more please\n", real()));
-    clock(&d, T0 + 60);
+    clock(&d, T0 + 80);
     at(&d, "working", |r| r["detail"] == "working");
 
     // Said to again while it works: the turn under way ends, and the words wait behind it, so it
@@ -659,11 +685,61 @@ fn said_to_a_session_is_looked_at_often_until_it_answers() {
             real()
         ),
     );
-    clock(&d, T0 + 90);
+    clock(&d, T0 + 120);
     at(&d, "two turns", |r| r["turns"] == 2);
     let n = read(&d);
-    clock(&d, T0 + 120);
-    common::wait(|| read(&d) > n, "a look 30s on, the words still queued");
+    clock(&d, T0 + 160);
+    common::wait(|| read(&d) > n, "a look 40s on, the words still queued");
+}
+
+#[test]
+fn said_to_while_a_look_from_before_a_restart_is_out_it_is_still_followed() {
+    let (d, work) = setup("say-restart", "");
+    logs(&d, &real());
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "idle", |r| r["detail"] == "idle");
+    // Started again, its first look slow: the page it brings is from before the words.
+    std::fs::write(d.dir.join("stub/courier.sleep"), "2").unwrap();
+    let (n, r) = (looks(&d), read(&d));
+    d.cli(&["restart"]);
+    common::wait(|| looks(&d) > n, "the look after the restart");
+    d.cli(&["cloud", "say", "Aya", "more please"]);
+    assert_eq!(read(&d), r, "said while that look was out");
+    common::wait(|| read(&d) > r, "that look back");
+    std::fs::remove_file(d.dir.join("stub/courier.sleep")).unwrap();
+    common::wait(|| read(&d) >= r + 2, "the look the words asked for");
+    // Its log still reads idle, the words queued: looked at again as a working one is.
+    let n = looks(&d);
+    for (t, more) in [(40, 1), (80, 2)] {
+        clock(&d, T0 + t);
+        common::wait(|| looks(&d) >= n + more, &format!("a look {t}s on"));
+    }
+}
+
+/// The clock moved on to `to` in steps a wake would not be taken for.
+fn walk(d: &Daemon, from: i64, to: i64) {
+    for t in (from..=to).step_by(50).skip(1).chain([to]) {
+        clock(d, t);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+#[test]
+fn a_session_quiet_after_a_day_of_work_is_looked_at_every_ten_minutes_for_a_day() {
+    let (d, work) = setup("long", "");
+    let ts = |t: i64| jiff::Timestamp::from_second(t).unwrap();
+    logs(&d, &page(&[ASKED, &format!("[{}] tool_use Bash: {{}}", ts(T0))]));
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "working", |r| r["detail"] == "working");
+    // Working a day on (a wake, so looked at), then quiet half an hour.
+    let day = T0 + 86400;
+    logs(&d, &page(&[ASKED, &format!("[{}] tool_use Bash: {{}}", ts(day))]));
+    clock(&d, day);
+    common::wait(|| looks(&d) >= 2, "a look a day on");
+    clock(&d, day + 1800);
+    common::wait(|| looks(&d) >= 3, "a look on the wake");
+    walk(&d, day + 1800, day + 2400);
+    common::wait(|| looks(&d) >= 4, "a look ten minutes on");
 }
 
 #[test]
@@ -754,7 +830,7 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     common::wait(|| read(&d) >= 1, "a first look");
     let bg = waiting(&d, &lead, &["Aya", "--timeout", "60s"]);
     logs(&d, &turns(1));
-    clock(&d, T0 + 30);
+    clock(&d, T0 + 40);
     let o = bg.wait_with_output().unwrap();
     assert!(o.status.success(), "{}", err(&o));
     let l: Value = serde_json::from_str(out(&o).lines().next().unwrap()).unwrap();
@@ -780,7 +856,7 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     common::wait(|| looks(&d) > n, "a look at once");
     // Nobody waits on it, and its lead rests: the user hears.
     logs(&d, &turns(2));
-    clock(&d, T0 + 60);
+    clock(&d, T0 + 80);
     common::wait(|| told(&d).len() == 1, "the user told");
     assert_eq!(told(&d), [format!("☁ Aya answered: {LINK}")]);
     // Its lead busy: held, and rung once the lead's turn ends without it.
@@ -873,7 +949,7 @@ fn a_lead_hears_of_its_cloud_helpers_after_a_compact_and_one_left_behind_closes_
     let told = briefed(&d, &lead);
     assert!(told.contains(&format!("- Aya: working on claude.ai, {LINK}")), "{told}");
     logs(&d, &turns(1));
-    clock(&d, T0 + 30);
+    clock(&d, T0 + 40);
     at_one(&d, "Aya", |r| r["turns"] == 1);
     let told = briefed(&d, &lead);
     assert!(told.contains("- Aya: resting on claude.ai"), "{told}");
@@ -899,16 +975,42 @@ fn a_lead_hears_of_its_cloud_helpers_after_a_compact_and_one_left_behind_closes_
     clock(&d, T0 + 4 * 3600 + 200);
     common::wait(|| d.list().iter().all(|r| r["name"] != "Aya"), "closed");
     // The user hears where it goes on: they never started it.
-    let (mut w, mut lines) = d.connect();
-    std::io::Write::write_all(&mut w, format!("{}\n", json!({"t": "watch"})).as_bytes()).unwrap();
-    let kept = loop {
-        let v = common::next(&mut lines);
-        if v["t"] == "notices" {
-            break v["notices"].to_string();
-        }
-    };
+    let kept = kept(&d);
     assert!(kept.contains(&format!("☁ Aya closed, its lead gone: the session goes on at {LINK}")));
     let all = d.req(json!({"t": "list", "id": 1, "all": true}))["residents"].clone();
     let aya = all.as_array().unwrap().iter().find(|r| r["name"] == "Aya").cloned().unwrap();
     assert_eq!(aya["owner"], lead["id"]);
+}
+
+#[test]
+fn a_helper_gone_from_claude_ai_and_left_behind_closes_without_saying_it_goes_on() {
+    let (d, work) = setup_with("orphan-gone", "", &[("STUB_HOOKS", "1")]);
+    let lead = local(&d, &work, "Reimu", None);
+    let o = inside(&d, &lead, &["new", "--cloud", "--name", "Aya", "--prompt-file", "-"]);
+    assert!(o.status.success(), "{}", err(&o));
+    logs(
+        &d,
+        "HTTP 404\n{\"error\": {\"message\": \"Session cse_01NewStub not found\", \"type\": \"not_found_error\"}}",
+    );
+    clock(&d, T0 + 40);
+    at_one(&d, "Aya", |r| !r["departed"].is_null());
+    d.cli(&["close", "Reimu"]);
+    at_one(&d, "Reimu", |r| r["state"] == "departed");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    clock(&d, T0 + 2 * 3600 + 120);
+    common::wait(|| d.list().iter().all(|r| r["name"] != "Aya"), "closed");
+    let kept = kept(&d);
+    assert!(kept.contains("☁ Aya is gone from claude.ai") && !kept.contains("goes on"), "{kept}");
+}
+
+/// The notices the daemon keeps, as a client watching is given them.
+fn kept(d: &Daemon) -> String {
+    let (mut w, mut lines) = d.connect();
+    std::io::Write::write_all(&mut w, format!("{}\n", json!({"t": "watch"})).as_bytes()).unwrap();
+    loop {
+        let v = common::next(&mut lines);
+        if v["t"] == "notices" {
+            break v["notices"].to_string();
+        }
+    }
 }

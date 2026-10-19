@@ -7,6 +7,11 @@ fits - `implementer` to make a change, `reviewer` to check one, `researcher` to 
 question, `debugger` to chase a failure. To ask a resident that is already here, write to it
 with the `gensokyo-peers` skill.
 
+Name each helper for its work with `--name`, not the shipped default, so the user can tell at a
+glance who is doing what: a word or two joined by hyphens, like `auth-fix`, `login-review` or
+`flaky-ci`. A name starts with a letter and uses letters, digits, `_` `.` `-` only. If a summon
+says the name is already here, pick another.
+
 Check results before you pass them on: have a reviewer look at an implementer's work, and read
 the reports yourself rather than forwarding them.
 

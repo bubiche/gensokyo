@@ -1281,11 +1281,17 @@ impl App {
                 self.m.modal = Some(Modal::Summon(Summon::default()));
                 self.refresh_modal();
             }
-            Chord::Banish => {
-                if let Some(r) = self.focused().filter(|r| r.departed.is_none()) {
+            Chord::Banish => match self.focused().filter(|r| r.departed.is_none()) {
+                // It has no process here to banish.
+                Some(r) if r.in_cloud() => {
+                    let text = format!("{} is a cloud session: close it with ^] x", r.name);
+                    self.say(Say::Info, text);
+                }
+                Some(r) => {
                     self.m.modal = Some(Modal::Banish { id: r.id.clone(), name: r.name.clone() });
                 }
-            }
+                None => {}
+            },
             Chord::Recall => {
                 self.m.modal = Some(Modal::Recall(Recall::default()));
                 self.refresh_modal();

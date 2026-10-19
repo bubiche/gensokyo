@@ -1588,6 +1588,33 @@ fn a_sidebar_too_short_for_everyone_keeps_the_one_on_screen_and_counts_the_rest(
 }
 
 #[test]
+fn a_cloud_session_takes_no_empty_say_and_points_banish_at_close() {
+    let mut a = shrine();
+    let cloud =
+        CloudSession { url: "https://claude.ai/code/session_01X".into(), ..Default::default() };
+    let aya = Resident { pid: None, cloud: Some(cloud), ..resident(3, "Aya") };
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), aya] });
+    host(&mut a, b"\x1d3");
+    screen(&mut a);
+    sent(&mut a);
+    // `[send]` with nothing typed, or only spaces, sends nothing and keeps asking.
+    host(&mut a, b"s");
+    click(&mut a, "[send");
+    host(&mut a, b"  ");
+    click(&mut a, "[send");
+    let out = sent(&mut a);
+    assert!(out.is_empty(), "{out:?}");
+    assert!(matches!(a.m.modal, Some(Modal::Say { .. })));
+    host(&mut a, b"go\r");
+    assert_eq!(kinds(&sent(&mut a)), ["cloud_say"]);
+    // It has no process to banish: closing it is how it goes.
+    host(&mut a, b"\x1db");
+    assert!(a.m.modal.is_none(), "{:?}", a.m.modal);
+    assert!(sent(&mut a).is_empty());
+    assert_eq!(said(&a), Some("Aya is a cloud session: close it with ^] x"));
+}
+
+#[test]
 fn a_cloud_answer_read_for_one_no_longer_on_screen_is_dropped() {
     let mut a = shrine();
     let cloud =

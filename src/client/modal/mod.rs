@@ -211,7 +211,7 @@ impl App {
                 Key::Text(ch) => text.push(ch),
                 Key::Paste(t) => text.push_str(&t.replace(['\r', '\n'], " ")),
                 Key::Back => _ = text.pop(),
-                Key::Enter if !text.trim().is_empty() => self.confirm(),
+                Key::Enter => self.confirm(),
                 _ => {}
             },
             None => {}
@@ -278,6 +278,10 @@ impl App {
 
     /// Enter, `y`, or the modal's confirm button.
     pub(super) fn confirm(&mut self) {
+        // Nothing to say yet: it keeps asking, whether by Enter or its button.
+        if matches!(&self.m.modal, Some(Modal::Say { text, .. }) if text.trim().is_empty()) {
+            return;
+        }
         let Some(modal) = self.m.modal.take() else { return };
         match modal {
             Modal::Summon(s) => self.summon_confirm(s),

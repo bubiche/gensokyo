@@ -85,6 +85,23 @@ pub struct Record {
     pub signal: Option<i32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "crate::proto::pairs")]
     pub tags: crate::proto::Tags,
+    /// A cloud session: it runs on claude.ai, and nothing of it runs here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<Cloud>,
+}
+
+/// A cloud session as `claude --cloud` made it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cloud {
+    /// Its id, `cse_…`.
+    pub session: String,
+    pub url: String,
+    /// The GitHub repository it cloned, `owner/name`.
+    pub repo: String,
+    /// The pushed branch it started from; it works on a branch of its own.
+    pub base: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
 }
 
 pub struct Store {

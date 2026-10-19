@@ -320,6 +320,77 @@ pub fn said(stdout: &str, id: &str) -> Result<(), String> {
     }
 }
 
+/// `claude --cloud`, which makes a session on claude.ai with the task and returns at once:
+/// `env` picks its environment for this launch alone.
+pub fn new_args(task: &str, env: Option<&str>, model: Option<&str>) -> Vec<String> {
+    let mut a = Vec::new();
+    if let Some(e) = env {
+        let s = json!({"remote": {"defaultEnvironmentId": e}});
+        a.extend(["--settings".into(), s.to_string()]);
+    }
+    if let Some(m) = model {
+        a.extend(["--model".into(), m.into()]);
+    }
+    a.extend(["--cloud".into(), task.into()]);
+    a
+}
+
+/// The session claude says it made, as `View: <link>` and `Resume with: claude --teleport
+/// session_X` name it, the two agreeing: its id (`cse_…`) and link.
+pub fn created(screen: &str) -> Result<(String, String), String> {
+    let lines = lines(screen);
+    let after = |p: &str| lines.iter().find_map(|l| l.trim().strip_prefix(p).map(str::trim));
+    let view = after("View:").and_then(link);
+    let resume = after("Resume with: claude --teleport");
+    match (view.and_then(run_id), resume.and_then(run_id)) {
+        (Some(a), Some(b)) if a == b => Ok((a.clone(), run_link(&a))),
+        _ if view.is_some() || resume.is_some() => {
+            let seen = view.or(resume).unwrap_or_default();
+            Err(format!("claude's answer did not name one session plainly ({seen})"))
+        }
+        _ if after("Created cloud session:").is_some() => {
+            Err("claude made a session, and its link could not be read".into())
+        }
+        _ => Err(format!("claude did not say it made a session: {}", plain(screen.trim(), 200))),
+    }
+}
+
+/// A repository's `owner/name` from origin's URL, when it is on GitHub as a cloud session can
+/// clone it: behind an SSH host alias, `claude --cloud` sends a copy with no remote instead,
+/// from which the session can neither push nor be followed.
+pub fn github(url: &str) -> Result<String, String> {
+    let path = ["git@github.com:", "ssh://git@github.com/", "https://github.com/"]
+        .iter()
+        .find_map(|p| url.strip_prefix(p));
+    let ok = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s != "."
+            && s != ".."
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    };
+    if let Some(p) = path {
+        let p = p.trim_end_matches('/');
+        let p = p.strip_suffix(".git").unwrap_or(p);
+        if let Some((o, r)) = p.split_once('/').filter(|(o, r)| ok(o) && ok(r)) {
+            return Ok(format!("{o}/{r}"));
+        }
+    }
+    let host = url.strip_prefix("git@").and_then(|h| h.split_once(':'));
+    if let Some((h, p)) = host.filter(|(h, _)| h.starts_with("github.com") && *h != "github.com") {
+        return Err(format!(
+            "origin, {url}, goes through an SSH host alias ({h}): a cloud session would get a \
+             copy with no remote and could not push. `git remote set-url origin \
+             git@github.com:{p}` fixes it, and `git remote set-url --push origin {url}` keeps \
+             pushes on the alias"
+        ));
+    }
+    // Not echoed: an https URL may carry a token.
+    Err("origin is not a GitHub repository (git@github.com:, ssh://git@github.com/ or \
+         https://github.com/), which a cloud session clones"
+        .into())
+}
+
 /// Text of many lines as a terminal may be shown it: no control or hidden character left in a
 /// line.
 fn lines(s: &str) -> Vec<String> {

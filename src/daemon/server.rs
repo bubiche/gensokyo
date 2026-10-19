@@ -184,7 +184,11 @@ fn signalled(shrine: &Shared, quit: &Rc<Stop>, sig: &str) {
     let path = paths::comeback_path();
     if !shrine.borrow().quitting && !path.exists() {
         let sh = shrine.borrow();
-        let mut live: Vec<_> = sh.entries.iter().filter(|e| e.handle.is_some()).collect();
+        let mut live: Vec<_> = sh
+            .entries
+            .iter()
+            .filter(|e| e.handle.is_some() || super::shrine::cloud_here(e))
+            .collect();
         live.sort_by_key(|e| (e.rec.slot.unwrap_or(u8::MAX), e.rec.launched));
         let mut ids = format!("# {sig}\n");
         for e in &live {
@@ -360,9 +364,10 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                 Some(fail(why))
             }
             Request::List { all } => Some(Reply::List { id, residents: list(&shrine, all) }),
-            // A worktree first, by a task of its own: a checkout takes seconds. Refused, it
-            // makes none. One whose client leaves meanwhile still comes: git is half done.
-            Request::Summon(s) if s.worktree.is_some() => {
+            // A worktree or a cloud session first, by a task of its own: a checkout or a push
+            // takes seconds. Refused, it makes none. One whose client leaves meanwhile still
+            // comes: git is half done, and claude.ai may have the session.
+            Request::Summon(s) if s.worktree.is_some() || s.cloud => {
                 match super::shrine::may_summon(
                     &shrine,
                     &s,
@@ -373,7 +378,12 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                     Ok(()) => {
                         let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                         tokio::task::spawn_local(async move {
-                            let r = super::shrine::summon_in(&shrine, s, caller.as_deref()).await;
+                            let r = match s.cloud {
+                                true => super::cloud::start(&shrine, s).await,
+                                false => {
+                                    super::shrine::summon_in(&shrine, s, caller.as_deref()).await
+                                }
+                            };
                             let r = r.map_or_else(fail, |(resident, note)| Reply::Summoned {
                                 id,
                                 resident,

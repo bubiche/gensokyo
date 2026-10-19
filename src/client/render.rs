@@ -486,7 +486,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             (true, true) => "├",
             (true, false) => "└",
         };
-        format!("{slot} {tee}{} ", r.state.glyph())
+        // A cloud session: on claude.ai, with nothing here to be in a state.
+        let glyph = if r.cloud.is_some() && r.departed.is_none() { "☁" } else { r.state.glyph() };
+        format!("{slot} {tee}{glyph} ")
     };
     // Behind the claude installed now, or on its way to it.
     let renew = |r: &Resident| match (r.renewing, r.outdated.is_some()) {

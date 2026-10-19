@@ -64,6 +64,12 @@ pub(super) fn ask(shrine: &Shared, who: &[String]) -> Result<String, String> {
             for w in who {
                 let i = find(&sh, w).ok_or_else(|| format!("no resident {w}"))?;
                 let e = &sh.entries[i];
+                if super::shrine::cloud_here(e) {
+                    return Err(format!(
+                        "{} is a cloud session: it has no process here",
+                        e.rec.name
+                    ));
+                }
                 if e.handle.as_ref().is_none_or(|h| h.exit().is_some()) {
                     return Err(format!(
                         "{} has departed: a recall starts it on the claude installed now",

@@ -957,8 +957,8 @@ fn the_role_stage_sends_the_role_picked_and_the_words_typed() {
     let Some(Modal::Summon(s)) = &mut a.m.modal else { panic!("no summon modal") };
     assert_eq!((s.stage, s.role), (Stage::Role, 0), "none is picked first");
     s.roles = vec!["debugger".into(), "reviewer".into()];
-    // Down past the end stays on the last, the cloud run; Up comes back one at a time.
-    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[A\x1b[A");
+    // Down past the end stays on the last, a cloud session; Up comes back one at a time.
+    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[A\x1b[A\x1b[A");
     host(&mut a, b"mind the SQL");
     host(&mut a, b"\x1b[200~ layer\nonly\n\x1b[201~");
     host(&mut a, b"\r");
@@ -983,8 +983,8 @@ fn the_role_stage_takes_a_cloud_run_over_instead_of_a_role() {
     s.roles = vec!["debugger".into()];
     host(&mut a, b"\x1b[B");
     host(&mut a, b"mind the SQL");
-    // Down past the end stays on the cloud run.
-    host(&mut a, b"\x1b[B\x1b[B");
+    // On to the cloud run, after the roles.
+    host(&mut a, b"\x1b[B");
     let rows = screen(&mut a);
     for want in ["› a cloud run, taken over", "run: ", "routines: digest"] {
         assert!(rows.iter().any(|l| l.contains(want)), "{want}: {rows:#?}");
@@ -1017,6 +1017,53 @@ fn the_role_stage_takes_a_cloud_run_over_instead_of_a_role() {
         (&json!("debugger"), &json!("mind the SQL"))
     );
     assert!(out[0].get("teleport").is_none(), "{}", out[0]);
+}
+
+/// After the cloud run, a cloud session: what is typed is its task, and in a repository the
+/// worktree stage follows as for any summon.
+#[test]
+fn the_role_stage_starts_a_cloud_session_on_the_task_typed() {
+    let mut a = shrine();
+    host(&mut a, b"\x1dn");
+    sent(&mut a);
+    host(&mut a, b"/\r\r");
+    let Some(Modal::Summon(s)) = &mut a.m.modal else { panic!("no summon modal") };
+    (s.roles, s.repo) = (vec!["debugger".into()], true);
+    host(&mut a, b"\x1b[B\x1b[B\x1b[B\x1b[B");
+    let rows = screen(&mut a);
+    for want in ["› a cloud session", "task: ", "it starts on claude.ai"] {
+        assert!(rows.iter().any(|l| l.contains(want)), "{want}: {rows:#?}");
+    }
+    sent(&mut a);
+    host(&mut a, b"\r");
+    assert!(sent(&mut a).is_empty(), "no task, nothing sent");
+    let error = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => s.error.clone(),
+        _ => None,
+    };
+    assert_eq!(error(&a).as_deref(), Some("say what it is to do"));
+    host(&mut a, b"fix the flaky test\r");
+    assert!(sent(&mut a).is_empty(), "on to the worktree");
+    host(&mut a, b"fix\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["summon"]);
+    assert_eq!((&out[0]["cloud"], &out[0]["prompt"]), (&json!(true), &json!("fix the flaky test")));
+    assert_eq!(out[0]["worktree"]["slug"], "fix", "{}", out[0]);
+    for f in ["role", "system_prompt", "teleport"] {
+        assert!(out[0].get(f).is_none(), "{f}: {}", out[0]);
+    }
+    // There, it is on screen with no screen to view: nothing typed goes to it.
+    let id = out[0]["id"].as_u64().unwrap();
+    let aya = Resident {
+        pid: None,
+        cloud: Some("https://claude.ai/code/session_01X".into()),
+        ..resident(3, "Aya")
+    };
+    daemon(&mut a, Reply::Summoned { id, resident: aya.clone(), note: None });
+    daemon(&mut a, Reply::List { id: 0, residents: vec![resident(1, "Reimu"), aya] });
+    host(&mut a, b"x");
+    let out = sent(&mut a);
+    assert!(!kinds(&out).iter().any(|k| *k == "view" || *k == "input"), "{out:?}");
 }
 
 #[test]

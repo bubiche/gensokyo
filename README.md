@@ -460,6 +460,30 @@ Rituals fire only while the daemon runs, and on a machine that is awake. A lapto
 shut through a fire makes it up at the next tick after it wakes. A run keeps the Mac awake while
 it goes (`Ctrl-] w`); a ritual waiting for its time does not.
 
+## Cloud sessions
+
+A **cloud session** is Claude Code working on a task on claude.ai, on a branch of a GitHub
+repository, while you do something else. gensokyo starts one with `claude --cloud` and keeps it
+in the sidebar as `☁ name`. It has no process and no screen here: claude.ai runs it, and its
+link takes you there.
+
+```sh
+gensokyo new --cloud --prompt "fix the flaky login test"   # from the branch here, as pushed
+gensokyo new --cloud --worktree flaky --prompt-file task.md   # a new branch, pushed first
+gensokyo new --cloud --env env_01… --prompt "…"           # another environment than CLOUD_ENV
+```
+
+- **The repository.** Origin must be on github.com. Behind an SSH host alias
+  (`git@github.com-me:…`) claude.ai gets a copy with no remote, so the session could not push:
+  gensokyo refuses and says how to set a plain fetch URL (pushes may keep the alias).
+- **The branch.** The session starts from origin's copy of your branch, so the branch must be
+  pushed, with origin where yours is. With `--worktree`, its new branch is pushed for it first. The
+  session works on a `claude/…` branch of its own.
+- **In the shrine.** In the summon dialog, the role list's last entry is "a cloud session": what
+  you type is its task. `close` takes it out of the sidebar; the session goes on at claude.ai
+  (archive it there). A restart, a logout or a crash bring it back; quit leaves it departed,
+  and `resume` brings it back. Only you start one.
+
 ## Cloud routines
 
 A Claude Code **routine** is a prompt that claude.ai runs on its own schedule, in a cloud session,

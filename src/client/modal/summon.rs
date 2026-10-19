@@ -1,7 +1,7 @@
 //! Summon: a directory (typed with Tab completion, or one of the recent ones), then a name, then
 //! a role and words of the user's own for its system prompt, or instead a cloud run whose
-//! conversation it starts from, and in a git repository a worktree to work in, which is none
-//! unless one is named.
+//! conversation it starts from, or a cloud session's task, and in a git repository a worktree to
+//! work in, which is none unless one is named.
 
 use super::Key;
 use crate::client::app::App;
@@ -27,12 +27,15 @@ pub struct Summon {
     /// The roles there are, by name (`role.rs`).
     pub roles: Vec<String>,
     /// The one picked: 0 is none, else one past its index in `roles`; one past the last role is
-    /// a cloud run taken over, here with no role or words (`new --teleport` takes both).
+    /// a cloud run taken over, here with no role or words (`new --teleport` takes both), and the
+    /// one after a cloud session.
     pub role: usize,
     /// Words of the user's own for its system prompt, with the role.
     pub words: String,
     /// The cloud run taken over: a link, a run id, or a routine for its newest run.
     pub run: String,
+    /// A cloud session's task.
+    pub task: String,
     /// A worktree to make, or find, by its name; empty works in the directory itself.
     pub worktree: String,
     pub error: Option<String>,
@@ -49,8 +52,9 @@ pub enum Stage {
     Worktree,
 }
 
-/// The role list's last entry.
+/// The role list's last entries.
 const TAKE_OVER: &str = "a cloud run, taken over";
+const CLOUD: &str = "a cloud session";
 
 impl Summon {
     /// A cloud run is picked instead of a role.
@@ -58,9 +62,18 @@ impl Summon {
         self.role == self.roles.len() + 1
     }
 
-    /// What is typed in the role stage goes to the run, or to the words.
+    /// A cloud session is picked instead of a role.
+    pub fn cloud(&self) -> bool {
+        self.role == self.roles.len() + 2
+    }
+
+    /// What is typed in the role stage goes to the run, the task, or the words.
     fn typed(&mut self) -> &mut String {
-        if self.takes_over() { &mut self.run } else { &mut self.words }
+        match (self.takes_over(), self.cloud()) {
+            (true, _) => &mut self.run,
+            (_, true) => &mut self.task,
+            _ => &mut self.words,
+        }
     }
 
     pub(super) fn view(&self, m: &Model) -> (String, Vec<Row>) {
@@ -96,7 +109,7 @@ impl Summon {
             ],
             Stage::Role => {
                 let names = std::iter::once("none").chain(self.roles.iter().map(String::as_str));
-                let names: Vec<&str> = names.chain([TAKE_OVER]).collect();
+                let names: Vec<&str> = names.chain([TAKE_OVER, CLOUD]).collect();
                 let mut rows = vec![Row::text(&format!("In {}", tilde(&self.path, &m.home)))];
                 rows.push(Row::dim("role"));
                 rows.extend(window(names.len(), self.role, 8).map(|i| {
@@ -110,15 +123,20 @@ impl Summon {
                     if !routines.is_empty() {
                         rows.push(Row::dim(&format!("routines: {}", routines.join("  "))));
                     }
+                } else if self.cloud() {
+                    rows.push(Row::Field(format!("task: {}", self.task), PICK));
                 } else {
                     rows.push(Row::Field(format!("your words: {}", self.words), PICK));
                 }
-                rows.push(Row::dim(match (self.waiting, self.takes_over()) {
-                    (true, _) => "summoning…",
-                    (false, false) => {
+                rows.push(Row::dim(match (self.waiting, self.takes_over(), self.cloud()) {
+                    (true, ..) => "summoning…",
+                    (false, true, _) => "its link or id, or a routine for its newest run",
+                    (false, _, true) => {
+                        "what it is to do: it starts on claude.ai, from the branch as pushed"
+                    }
+                    (false, ..) => {
                         "↑↓ a role, and what you type goes with it into its system prompt"
                     }
-                    (false, true) => "its link or id, or a routine for its newest run",
                 }));
                 rows
             }
@@ -184,7 +202,7 @@ impl Summon {
                 self.error = None;
             }
             (Stage::Role, Key::Up) => self.role = self.role.saturating_sub(1),
-            (Stage::Role, Key::Down) => self.role = (self.role + 1).min(self.roles.len() + 1),
+            (Stage::Role, Key::Down) => self.role = (self.role + 1).min(self.roles.len() + 2),
             (Stage::Role, Key::Back) => {
                 self.typed().pop();
                 self.error = None;
@@ -252,13 +270,18 @@ impl App {
             }
             let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
             s.roles = crate::role::names(share.as_deref());
-            s.role = s.role.min(s.roles.len() + 1);
+            s.role = s.role.min(s.roles.len() + 2);
             (s.stage, s.error) = (Stage::Role, None);
             self.m.modal = Some(super::Modal::Summon(s));
             return;
         }
         if s.stage == Stage::Role && s.takes_over() && s.run.trim().is_empty() {
             s.error = Some("name the run: its link or id, or a routine".into());
+            self.m.modal = Some(super::Modal::Summon(s));
+            return;
+        }
+        if s.stage == Stage::Role && s.cloud() && s.task.trim().is_empty() {
+            s.error = Some("say what it is to do".into());
             self.m.modal = Some(super::Modal::Summon(s));
             return;
         }
@@ -271,9 +294,11 @@ impl App {
             let cwd = expand(&s.path, &home).to_string_lossy().into_owned();
             let name = Some(s.name.trim().to_string()).filter(|n| !n.is_empty());
             let teleport = s.takes_over().then(|| s.run.trim().to_string());
+            let cloud = s.cloud();
             let role = s.role.checked_sub(1).and_then(|i| s.roles.get(i)).cloned();
-            let system_prompt =
-                Some(s.words.trim().to_string()).filter(|w| !w.is_empty() && teleport.is_none());
+            let system_prompt = Some(s.words.trim().to_string())
+                .filter(|w| !w.is_empty() && teleport.is_none() && !cloud);
+            let prompt = cloud.then(|| s.task.trim().to_string());
             let slug = s.worktree.trim().to_string();
             let worktree = (s.stage == Stage::Worktree && !slug.is_empty())
                 .then(|| proto::WorktreeAsk { slug, ..Default::default() });
@@ -284,6 +309,8 @@ impl App {
                 system_prompt,
                 worktree,
                 teleport,
+                cloud,
+                prompt,
                 ..Default::default()
             };
             let id = self.send(Request::Summon(ask));

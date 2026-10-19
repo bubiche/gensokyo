@@ -171,6 +171,7 @@ fn summon(stage: Stage) -> Modal {
         role: 5,
         words: if stage == Stage::Role { "focus on the SQL layer".into() } else { String::new() },
         run: String::new(),
+        task: String::new(),
         worktree: if stage == Stage::Worktree { "fix-login".into() } else { String::new() },
         error: (stage == Stage::Name).then(|| "Yuyu is already here".into()),
         waiting: false,
@@ -1017,4 +1018,17 @@ fn a_dim_row_of_wide_letters_is_cut_by_columns() {
     let marisa = rows.iter().position(|r| r.starts_with("2 ○ Marisa")).unwrap();
     let dim = rows[marisa + 1].trim_end();
     assert!(dim.contains("pr=#12") && dim.ends_with('…'), "{rows:#?}");
+}
+
+#[test]
+fn a_cloud_session_is_drawn_as_a_cloud_and_departed_as_anyone() {
+    let mut m = shrine();
+    let mut aya = resident(4, "Aya", "work", None);
+    (aya.pid, aya.cloud) = (None, Some("https://claude.ai/code/session_01X".into()));
+    m.residents.push(aya.clone());
+    let (rows, _) = side(&m, AREA);
+    assert!(rows.iter().any(|r| r.contains("4 ☁ Aya")), "{rows:#?}");
+    m.residents[3] = Resident { departed: Some(NOW), state: State::Departed, ..aya };
+    let (rows, _) = side(&m, AREA);
+    assert!(rows.iter().any(|r| r.contains("4 · Aya")), "{rows:#?}");
 }

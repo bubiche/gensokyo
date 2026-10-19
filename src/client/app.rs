@@ -474,14 +474,15 @@ impl App {
         self.m.residents.iter().find(|r| Some(&r.id) == self.m.focused.as_ref())
     }
 
-    /// The resident on screen, if it is running.
+    /// The resident on screen, if it is running here: a cloud session has no screen.
     fn live(&self) -> Option<String> {
-        self.focused().filter(|r| r.departed.is_none()).map(|r| r.id.clone())
+        self.running().map(|(id, _)| id)
     }
 
     /// The live one on screen, and the process it runs as: a recall or a renew changes that.
     fn running(&self) -> Option<(String, Option<i32>)> {
-        self.focused().filter(|r| r.departed.is_none()).map(|r| (r.id.clone(), r.pid))
+        let here = |r: &&Resident| r.departed.is_none() && r.cloud.is_none();
+        self.focused().filter(here).map(|r| (r.id.clone(), r.pid))
     }
 
     fn focus(&mut self, id: Option<String>) {

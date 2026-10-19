@@ -246,6 +246,55 @@ pub(super) async fn make(dir: &Path, ask: &WorktreeAsk, prefix: &str) -> Result<
     Ok(Made::at(&path, &here, dir, note))
 }
 
+/// The GitHub repository a cloud session started in `dir` would clone, `owner/name`, from
+/// origin's URL as set.
+pub(super) async fn github(dir: &Path) -> Result<String, String> {
+    let shown = short(&dir.to_string_lossy());
+    let not_repo = |_| format!("{shown} is not in a git repository");
+    git(dir, &["rev-parse", "--show-toplevel"], LOCAL).await.map_err(not_repo)?;
+    let url = git(dir, &["config", "--get", "remote.origin.url"], LOCAL).await;
+    let url =
+        url.map_err(|_| format!("{shown} has no origin: a cloud session clones from GitHub"))?;
+    crate::cloud::github(&url)
+}
+
+/// The branch `dir` is on, pushed to origin and tracked there.
+pub(super) async fn push(dir: &Path) -> Result<(), String> {
+    let b = on(dir).await?;
+    let args = ["push", "-q", "-u", "origin", "--end-of-options", &b];
+    git(dir, &args, LOCAL).await.map(drop).map_err(|e| format!("git push: {e}"))
+}
+
+/// The branch `dir` is on, when origin has it just as it is here: a cloud session starts from
+/// origin's, where commits not pushed are not. Asked where pushes go, which reads the same
+/// repository and may be the only way in (an SSH host alias).
+pub(super) async fn pushed(dir: &Path) -> Result<String, String> {
+    let b = on(dir).await?;
+    let head = git(dir, &["rev-parse", "HEAD"], LOCAL).await?;
+    let url = git(dir, &["remote", "get-url", "--push", "origin"], LOCAL).await?;
+    let refname = format!("refs/heads/{b}");
+    let heads = git(dir, &["ls-remote", "--end-of-options", &url, &refname], net()).await;
+    let heads = heads.map_err(|e| format!("origin could not be reached ({e})"))?;
+    let theirs = heads.lines().find_map(|l| l.split_once('\t').filter(|(_, r)| *r == refname));
+    match theirs {
+        None => Err(format!("{b} is not on origin: push it first (git push -u origin {b})")),
+        Some((h, _)) if h == head => Ok(b),
+        Some(_) => Err(format!(
+            "origin's {b} is not where yours is: push or pull first, since a cloud session \
+             starts from origin's"
+        )),
+    }
+}
+
+/// The branch `dir` is on.
+async fn on(dir: &Path) -> Result<String, String> {
+    let b = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"], LOCAL).await;
+    b.map_err(|_| {
+        let shown = short(&dir.to_string_lossy());
+        format!("{shown} is not on a branch: a cloud session starts from a pushed one")
+    })
+}
+
 /// `.claude/worktrees/` kept out of `git status`, in the repo's own exclude file, unless
 /// something already ignores it. Never twice: a `.gitignore` that un-ignores it wins over the
 /// line however often it is there.

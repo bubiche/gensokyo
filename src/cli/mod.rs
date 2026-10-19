@@ -224,6 +224,14 @@ struct New {
     /// any other: its tools, hooks and system prompt are gensokyo's, not the run's
     #[arg(long, value_name = "RUN")]
     teleport: Option<String>,
+    /// Start a cloud session on claude.ai instead (claude --cloud), its prompt the task: from
+    /// the branch here as pushed, or with --worktree from its branch, pushed first. Origin must
+    /// be on github.com, not behind an SSH host alias
+    #[arg(long, conflicts_with_all = ["effort", "mode", "allowed_tools", "role", "system_prompt", "teleport"])]
+    cloud: bool,
+    /// The cloud environment it starts in (env_…); the config's CLOUD_ENV when left out
+    #[arg(long, value_name = "ENV", requires = "cloud")]
+    env: Option<String>,
 }
 
 pub fn main(args: &[String]) -> ExitCode {
@@ -437,6 +445,8 @@ fn new(n: New) -> Result<(), String> {
         system_prompt: n.system_prompt.filter(|p| !p.trim().is_empty()),
         worktree: n.worktree.map(|slug| WorktreeAsk { slug, branch: n.branch, base: n.base }),
         teleport: n.teleport,
+        cloud: n.cloud,
+        env: n.env,
     };
     let reply = request(Request::Summon(s), true)?;
     if let Reply::Summoned { note: Some(note), .. } = &reply {
@@ -448,8 +458,13 @@ fn new(n: New) -> Result<(), String> {
             Ok(())
         }
         Reply::Summoned { resident: r, .. } => {
-            let slot = r.slot.map_or(String::new(), |s| format!(" (slot {s})"));
-            println!("summoned {}{slot} in {}", r.name, r.cwd);
+            match &r.cloud {
+                Some(link) => println!("started {} in the cloud: {link}", r.name),
+                None => {
+                    let slot = r.slot.map_or(String::new(), |s| format!(" (slot {s})"));
+                    println!("summoned {}{slot} in {}", r.name, r.cwd);
+                }
+            }
             Ok(())
         }
         other => Err(format!("unexpected reply {other:?}")),

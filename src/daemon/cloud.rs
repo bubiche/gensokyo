@@ -6,16 +6,16 @@
 
 use super::log::log;
 use super::shrine::{Shared, Shrine, touch};
-use super::store::write_atomic;
+use super::store::{Cloud, write_atomic};
 use crate::cloud::{self, Pace, Routine, Run, on};
 use crate::paths;
-use crate::proto::{CloudAct, CloudAdd, CloudWatch, RoutineInfo};
+use crate::proto::{self, CloudAct, CloudAdd, CloudWatch, RoutineInfo, Summon};
 use crate::ritual::{Dir, when};
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -552,6 +552,43 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
     Ok(format!("said to {}: {then}", cloud::run_link(&id)))
 }
 
+/// `new --cloud`: a session on claude.ai from the pushed branch of a GitHub repository, its
+/// worktree made and pushed first when one is asked for. Its entry, and how the worktree came.
+pub(super) async fn start(
+    shrine: &Shared,
+    mut s: Summon,
+) -> Result<(proto::Resident, Option<String>), String> {
+    let repo = super::worktree::github(Path::new(&s.cwd)).await?;
+    let env = s.env.take().or_else(|| paths::config("CLOUD_ENV")).filter(|e| !e.trim().is_empty());
+    if let Some(e) = env.as_deref().filter(|e| !cloud::valid_id(e, "env_")) {
+        return Err(format!("environment {e}: an environment's id is env_ and letters"));
+    }
+    let mut note = None;
+    if let Some(ask) = s.worktree.take() {
+        let prefix = paths::config("BRANCH_PREFIX").unwrap_or_default();
+        let made = super::worktree::make(Path::new(&s.cwd), &ask, &prefix).await?;
+        log(json!({"ev": "worktree", "path": made.path, "note": made.note}));
+        super::worktree::push(Path::new(&made.path)).await?;
+        (s.cwd, note) = (made.path, made.note);
+    }
+    let dir = std::fs::canonicalize(&s.cwd).map_err(|e| format!("{}: {e}", s.cwd))?;
+    let base = super::worktree::pushed(&dir).await?;
+    let task = s.prompt.unwrap_or_default().trim().to_string();
+    let mut args = cloud::new_args(&task, env.as_deref(), s.model.as_deref());
+    // From here on the session may be on claude.ai whatever went wrong.
+    let maybe = |e: String| format!("{e}; it may be at {} already: look there first", cloud::WEB);
+    let screen = claude_tty(shrine, args.clone(), &dir).await.map_err(maybe)?;
+    let made = cloud::created(&screen);
+    log(json!({"ev": "cloud", "made": made.as_ref().ok().map(|m| &m.0)}));
+    let (session, url) = made.map_err(maybe)?;
+    // The task is kept as its prompt.
+    args.pop();
+    let cloud = Cloud { session, url, repo, base, env };
+    let cwd = dir.to_string_lossy().into_owned();
+    let r = super::shrine::arrive(shrine, s.name, cwd, task, args, cloud)?;
+    Ok((r, note))
+}
+
 /// A routine as a write left it, in the timetable at once; the watch lists them all again.
 fn landed(shrine: &Shared, r: &Routine) {
     let mut sh = shrine.borrow_mut();
@@ -616,6 +653,39 @@ async fn claude_p(
     };
     let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
     Ok((text(&out.stdout), out.status.code(), text(&out.stderr)))
+}
+
+/// `claude --cloud`, which will not start without a terminal: in one of its own, as a
+/// resident's is, wide enough for the link to stay on one line. Its screen once it has left,
+/// or a moment after it named the session it made.
+async fn claude_tty(shrine: &Shared, args: Vec<String>, cwd: &Path) -> Result<String, String> {
+    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
+    let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+    let spawn =
+        super::pty::Spawn { program: &claude, args: &args, env: &env, cwd, cols: 400, rows: 50 };
+    let h = super::resident::start(spawn).map_err(|e| format!("could not start claude: {e}"))?;
+    let screen = || h.live_text().join("\n");
+    let mut changes = h.changes();
+    let said = async {
+        loop {
+            if cloud::created(&screen()).is_ok() {
+                let _ = tokio::time::timeout(Duration::from_secs(2), h.exited()).await;
+                return;
+            }
+            tokio::select! {
+                _ = h.exited() => return,
+                r = changes.changed() => if r.is_err() { return },
+            }
+        }
+    };
+    let done = tokio::time::timeout(COURIER_LIMIT, said).await.is_ok();
+    if h.exit().is_none() {
+        super::pty::sweep(h.pid, Duration::from_secs(1)).await;
+    }
+    match done {
+        true => Ok(screen()),
+        false => Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
+    }
 }
 
 /// Why a `claude -p` that printed nothing gave no answer: its own words.

@@ -406,6 +406,13 @@ pub struct Summon {
     /// user's alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teleport: Option<String>,
+    /// A cloud session on claude.ai instead (`claude --cloud`), from the pushed branch of a
+    /// GitHub repository, its prompt the task. The user's alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
+    /// The cloud environment it starts in (`env_…`); none, the config's `CLOUD_ENV`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -725,6 +732,9 @@ pub struct Resident {
     pub renewing: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "pairs")]
     pub tags: Tags,
+    /// A cloud session's link: it runs on claude.ai, with no process here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<String>,
 }
 
 /// A resident's tags, `key` and `value`, in the order each key was first set.

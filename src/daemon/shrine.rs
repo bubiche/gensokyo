@@ -66,10 +66,10 @@ impl Entry {
         moved
     }
 
-    fn new(rec: Record, handle: Rc<Handle>) -> Entry {
+    fn new(rec: Record, handle: Option<Rc<Handle>>) -> Entry {
         Entry {
             rec,
-            handle: Some(handle),
+            handle,
             aware: Aware::default(),
             tele: None,
             here: None,
@@ -152,7 +152,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         exit: r.exit,
         signal: r.signal,
         state: if r.departed.is_some() { State::Departed } else { State::Resting },
-        detail: None,
+        detail: (r.cloud.is_some() && r.departed.is_none()).then(|| "starting".into()),
         mode: flag(&r.argv, "--permission-mode"),
         branch: None,
         telemetry: None,
@@ -164,6 +164,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         outdated: None,
         renewing: false,
         tags: r.tags.clone(),
+        cloud: r.cloud.as_ref().map(|c| c.url.clone()),
     }
 }
 
@@ -182,6 +183,11 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
     r.outdated = installed.filter(|_| super::renew::behind(e, installed)).map(String::from);
     r.renewing = e.renew.is_some() && e.handle.is_some();
     r
+}
+
+/// A cloud session followed here: in the shrine with no process, and not departed.
+pub(super) fn cloud_here(e: &Entry) -> bool {
+    e.rec.cloud.is_some() && e.rec.departed.is_none()
 }
 
 /// A flag's value in a launch argv, before any `--`.
@@ -309,6 +315,9 @@ pub(super) fn summon(
         Some(who) => Some(super::cloud::run_of(&shrine.borrow(), who)?),
         None => None,
     };
+    if s.cloud {
+        return Err("a cloud session runs on claude.ai, not here".into());
+    }
     let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
     let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
     // Named, so a helper never starts in the user's defaultMode where that is wider.
@@ -381,7 +390,7 @@ pub(super) fn may_summon(
     }
     {
         let sh = shrine.borrow();
-        if let Some(r) = &s.role {
+        if let Some(r) = s.role.as_ref().filter(|_| !s.cloud) {
             role::find(r, sh.share.as_deref())?;
         }
         if sh.quitting {
@@ -392,6 +401,9 @@ pub(super) fn may_summon(
             Some(n) if taken(&sh, n) => return Err(format!("{n} is already here")),
             _ => {}
         }
+    }
+    if s.cloud {
+        return may_cloud(s, caller);
     }
     if caller.is_some() && s.teleport.is_some() {
         return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
@@ -440,6 +452,44 @@ pub(super) fn may_summon(
         ));
     }
     Ok(())
+}
+
+/// Whether this cloud session would be refused before git or claude is asked: it is the user's,
+/// its task is its prompt, and claude.ai sets up the rest.
+fn may_cloud(s: &Summon, caller: Option<&str>) -> Result<(), String> {
+    if caller.is_some() {
+        return Err("the user starts cloud sessions: each is a session on claude.ai".into());
+    }
+    let task = s.prompt.as_deref().unwrap_or_default().trim();
+    if task.is_empty() {
+        return Err("a cloud session needs a prompt: its task".into());
+    }
+    if task.starts_with('-') {
+        return Err("the task starts with -, which claude would read as a flag".into());
+    }
+    // `--cloud` attaches to a session named by its id or link.
+    if crate::cloud::run_id(task).is_some()
+        || !task.contains(char::is_whitespace) && task.contains("://")
+    {
+        return Err("the task is a session's id or a link, which claude would attach to: say \
+                    what it is to do"
+            .into());
+    }
+    let not = [
+        ("role", s.role.is_some()),
+        ("system prompt", s.system_prompt.is_some()),
+        ("run to take over", s.teleport.is_some()),
+        ("permission mode", s.mode.is_some()),
+        ("effort", s.effort.is_some()),
+        ("allowed tools", !s.allowed_tools.is_empty()),
+    ];
+    if let Some((what, _)) = not.iter().find(|(_, asked)| *asked) {
+        return Err(format!("a cloud session takes no {what}: claude.ai sets it up"));
+    }
+    match s.env.as_deref().filter(|e| !crate::cloud::valid_id(e, "env_")) {
+        Some(e) => Err(format!("environment {e}: an environment's id is env_ and letters")),
+        None => Ok(()),
+    }
 }
 
 /// What a resident is started with: a summon's fields, and a ritual run's own.
@@ -531,12 +581,70 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         exit: None,
         signal: None,
         tags: Vec::new(),
+        cloud: None,
     };
     let _ = sh.store.save(&rec);
     log(json!({"ev": "summoned", "id": id, "name": rec.name, "pid": handle.pid,
                "ritual": rec.ritual, "owner": rec.owner}));
     let r = info(&rec, Some(handle.pid));
-    sh.entries.push(Entry::new(rec, handle));
+    sh.entries.push(Entry::new(rec, Some(handle)));
+    touch(&sh);
+    Ok(r)
+}
+
+/// A cloud session `claude --cloud` made, in the shrine: an entry with no process, its prompt
+/// the task it was given.
+pub(super) fn arrive(
+    shrine: &Shared,
+    name: Option<String>,
+    cwd: String,
+    prompt: String,
+    argv: Vec<String>,
+    cloud: store::Cloud,
+) -> Result<proto::Resident, String> {
+    let mut sh = shrine.borrow_mut();
+    if sh.quitting {
+        return Err(format!("the daemon is stopping: the session is at {}", cloud.url));
+    }
+    // Taken while claude ran: the session is made by now, so it comes under another name.
+    let share = sh.share.clone().unwrap_or_default();
+    let name = name.filter(|n| !taken(&sh, n)).unwrap_or_else(|| pick_name(&sh, &share));
+    let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
+    let id = store::uuid();
+    let rec = Record {
+        id: id.clone(),
+        session: id.clone(),
+        session_at: 0,
+        name,
+        slot,
+        cwd,
+        program: "claude".into(),
+        argv,
+        prompt: Some(prompt),
+        ritual: None,
+        keep: None,
+        extra: Vec::new(),
+        role: None,
+        system_prompt: None,
+        teleport: None,
+        owner: None,
+        quiet: false,
+        turns: 0,
+        needs: 0,
+        told: (0, 0),
+        told_gone: false,
+        launched: store::now(),
+        pid: None,
+        departed: None,
+        exit: None,
+        signal: None,
+        tags: Vec::new(),
+        cloud: Some(cloud),
+    };
+    let _ = sh.store.save(&rec);
+    log(json!({"ev": "summoned", "id": id, "name": rec.name, "cloud": rec.cloud}));
+    let r = info(&rec, None);
+    sh.entries.push(Entry::new(rec, None));
     touch(&sh);
     Ok(r)
 }
@@ -554,7 +662,7 @@ pub(super) fn recall(
         return Err("the daemon is stopping".into());
     }
     let (mut rec, at) = match find(&sh, who) {
-        Some(i) if sh.entries[i].handle.is_some() => {
+        Some(i) if sh.entries[i].handle.is_some() || cloud_here(&sh.entries[i]) => {
             return Err(format!("{} is still here", sh.entries[i].rec.name));
         }
         Some(i) => (sh.entries[i].rec.clone(), Some(i)),
@@ -570,18 +678,25 @@ pub(super) fn recall(
     if let Some(c) = caller {
         room(&sh, c)?;
     }
-    let (program, argv, handle, resume) = come_back(shrine, &sh, &rec, None)?;
+    // A cloud session is followed again, and nothing starts here.
+    let (handle, resume) = match rec.cloud {
+        Some(_) => (None, false),
+        None => {
+            let (program, argv, handle, resume) = come_back(shrine, &sh, &rec, None)?;
+            (rec.program, rec.argv) = (program, argv);
+            (Some(handle), resume)
+        }
+    };
     let free =
         |n: u8| sh.entries.iter().enumerate().all(|(i, e)| Some(i) == at || e.rec.slot != Some(n));
     rec.slot = rec.slot.filter(|&n| free(n)).or_else(|| (1..=9).find(|&n| free(n)));
-    (rec.program, rec.argv, rec.told_gone) = (program, argv, false);
+    rec.told_gone = false;
     (rec.launched, rec.departed, rec.exit, rec.signal) = (store::now(), None, None, None);
-    rec.pid = running_as(&handle);
+    let pid = handle.as_ref().map(|h| h.pid);
+    rec.pid = handle.as_deref().and_then(running_as);
     let _ = sh.store.restore(&rec);
-    log(
-        json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": handle.pid, "resumed": resume}),
-    );
-    let r = info(&rec, Some(handle.pid));
+    log(json!({"ev": "recalled", "id": rec.id, "name": rec.name, "pid": pid, "resumed": resume}));
+    let r = info(&rec, pid);
     let mut entry = Entry::new(rec, handle);
     if resume {
         entry.aware.resumed();
@@ -726,6 +841,9 @@ pub(super) fn live(shrine: &Shared, who: &str) -> Result<(String, String, Rc<Han
     let e = &sh.entries[i];
     match &e.handle {
         Some(h) if h.exit().is_none() => Ok((e.rec.id.clone(), e.rec.name.clone(), h.clone())),
+        None if cloud_here(e) => {
+            Err(format!("{} is a cloud session: it has no process here", e.rec.name))
+        }
         _ => Err(format!("{} has already departed", e.rec.name)),
     }
 }
@@ -805,10 +923,16 @@ pub(super) async fn close(shrine: &Shared, who: &str) -> Result<String, String> 
         match sh.entries[i].handle.clone() {
             Some(h) => (sh.entries[i].rec.name.clone(), h),
             None => {
-                let e = sh.entries.remove(i);
+                let mut e = sh.entries.remove(i);
+                if e.rec.departed.is_none() {
+                    depart(&mut e.rec, None);
+                }
                 let _ = sh.store.retire(&e.rec);
                 touch(&sh);
-                return Ok(format!("closed {}", e.rec.name));
+                return Ok(match &e.rec.cloud {
+                    Some(c) => format!("closed {}: the session goes on at {}", e.rec.name, c.url),
+                    None => format!("closed {}", e.rec.name),
+                });
             }
         }
     };
@@ -870,8 +994,10 @@ pub(super) async fn leave_all(shrine: &Shared) {
         super::ingest::tally(&mut sh, i, None);
     }
     for mut e in std::mem::take(&mut sh.entries) {
-        if let Some(h) = &e.handle {
-            depart(&mut e.rec, h.exit());
+        match &e.handle {
+            Some(h) => depart(&mut e.rec, h.exit()),
+            None if e.rec.departed.is_none() => depart(&mut e.rec, None),
+            None => {}
         }
         let _ = sh.store.retire(&e.rec);
     }

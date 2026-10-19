@@ -160,6 +160,21 @@ if [ -n "$printing" ] && [ -n "$cloud" ]; then
   exit 0
 fi
 
+# A cloud session made (`--cloud "<task>"`, no -p, in a terminal as claude requires): made at
+# once, as claude says in three lines,
+# unless cloud.new holds what it says instead. Its argv, each arg ended by a NUL, is
+# cloud.new.args, and where it ran cloud.new.cwd.
+if [ -n "$cloud" ]; then
+  [ -t 0 ] && [ -t 1 ] || { echo "Error: --cloud requires an interactive terminal." >&2; exit 1; }
+  printf '%s\0' "$@" > "$STUB_STATE/cloud.new.args"
+  pwd -P > "$STUB_STATE/cloud.new.cwd"
+  [ -f "$STUB_STATE/cloud.new" ] && { cat "$STUB_STATE/cloud.new"; exit 0; }
+  printf 'Created cloud session: %s\n' "$(printf '%s' "$cloud" | head -1)"
+  printf 'View: https://claude.ai/code/session_01NewStub?from=cli&m=0\n'
+  printf 'Resume with: claude --teleport session_01NewStub\n'
+  exit 0
+fi
+
 if [ -n "$printing" ]; then
   fmt=text prompt=''
   printf '%s\n' "$*" > "$STUB_STATE/print.args"

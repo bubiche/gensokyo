@@ -857,12 +857,13 @@ fn a_session_gone_from_claude_ai_departs_and_a_recall_follows_it_again() {
 #[test]
 fn the_branch_a_session_pushed_to_is_found_by_its_trailer() {
     let (d, work) = setup("branch", "");
-    let bare = d.dir.join("remote.git").display().to_string();
+    // Made on origin itself, as the cloud pushes it: a push from `work` to a URL that is origin's
+    // writes `origin/<name>` there too, since git 2.56.
+    let bare = d.dir.join("remote.git");
     let push = |name: &str, link: &str| {
         let msg = format!("work\n\nClaude-Session: {link}");
-        git(&work, &["commit", "-q", "--allow-empty", "-m", &msg]);
-        git(&work, &["push", "-q", &bare, &format!("HEAD:refs/heads/{name}")]);
-        git(&work, &["reset", "-q", "--hard", "HEAD~"]);
+        let tip = git(&bare, &["commit-tree", "main^{tree}", "-p", "main", "-m", &msg]);
+        git(&bare, &["update-ref", &format!("refs/heads/{name}"), &tip]);
     };
     push("claude/other-a1b2c3", "https://claude.ai/code/session_01Other");
     push("claude/live-txt-test-h9ynw5", LINK);

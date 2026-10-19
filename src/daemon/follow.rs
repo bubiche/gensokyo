@@ -16,10 +16,11 @@ const COURIERS_MOST: usize = 3;
 
 /// Starting or working, a session is looked at every `BUSY` seconds (two ticks) for its first
 /// `BUSY_FOR`, then every `BUSY_LATER`; with nothing new in its log for `QUIET` (a long command),
-/// every `IDLE` until a day after its newest event, then hourly. Idle, it is not looked at: each
-/// look costs a courier, and only words said to it start another turn, from here (looked at
-/// then) or on the web (looked at once the user has it on screen). A failing look backs off as
-/// the watch does, until one gets through.
+/// every `IDLE` until a day after its newest event, then hourly; a turn that left work in the
+/// background is working until that work is back, or `QUIET` after the turn with no word of it.
+/// Idle, it is not looked at: each look costs a courier, and only words said to it start another
+/// turn, from here (looked at then) or on the web (looked at once the user has it on screen). A
+/// failing look backs off as the watch does, until one gets through.
 const BUSY: i64 = 40;
 const BUSY_FOR: i64 = 300;
 const BUSY_LATER: i64 = 60;
@@ -147,8 +148,11 @@ fn seen(shrine: &Shared, sh: &mut Shrine, i: usize, body: &str, now: i64) {
     if f.asked.is_some_and(|(t, w)| page.words > w || now - t >= HOURLY) {
         f.asked = None;
     }
-    if page.phase != f.phase {
-        (f.phase, f.since) = (page.phase, now);
+    let ended = page.turns.last().map(|t| t.at / 1_000_000);
+    let lost = page.waiting && ended.is_some_and(|t| now - t >= QUIET);
+    let phase = if lost { Phase::Idle } else { page.phase };
+    if phase != f.phase {
+        (f.phase, f.since) = (phase, now);
     }
     // Kept: words said after a restart wait for newer ones than these. Its newest only, as a
     // long turn pushes them off the page.

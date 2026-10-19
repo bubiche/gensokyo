@@ -543,6 +543,98 @@ fn a_sessions_log_says_where_it_is_and_which_turns_ended() {
     assert_eq!(p.turns[0].answer, "it broke [31m");
 }
 
+/// A turn that ended with work left running in the background, as a live session's log has it
+/// (shortened): the harness refuses a plain `sleep`.
+const WAITS: [&str; 4] = [
+    "[2026-10-19T01:48:43.9Z] tool_result: Command running in background with ID: b1. Output is being written to: /tmp/t/b1.output. You will be notified when it completes.",
+    "[2026-10-19T01:48:45.6Z] tool_result: Monitor started (task b2, expires in 5m unless the source ends first). You will be notified on each event.",
+    "[2026-10-19T01:48:46.7Z] assistant: The wait is running in the background. I'll commit once it completes.",
+    "[2026-10-19T01:48:47.5Z] result: success is_error=false turns=5 duration=9s — The wait is running in the background.",
+];
+
+/// The turn the session starts itself when that work is done, as the live log has it: no
+/// words before it, and the Monitor's notice (a `user:` line, not words) inside it.
+const BACK: [&str; 5] = [
+    "[2026-10-19T01:49:29.1Z] init: model=claude-haiku-5-5 cwd=/home/user/r",
+    "[2026-10-19T01:49:30.7Z] tool_use Bash: {\"command\":\"git commit -m one && git push\"}",
+    "[2026-10-19T01:49:32.6Z] user: <task-notification> <task-id>b2</task-id> <status>completed</status>",
+    "[2026-10-19T01:49:33.5Z] assistant: Committed and pushed.",
+    "[2026-10-19T01:49:34.6Z] result: success is_error=false turns=2 duration=6s — Committed and pushed.",
+];
+
+#[test]
+fn a_turn_that_leaves_work_in_the_background_is_not_the_end_of_it() {
+    let asked: jiff::Timestamp = "2026-10-19T01:48:31.838955Z".parse().unwrap();
+    let p = cloud::session(&page(&[&[ASKED][..], &WAITS].concat()));
+    assert_eq!((p.phase, p.turns.len(), p.waiting), (cloud::Phase::Working, 1, true));
+    // The sandbox's own lines after it are not the session moving.
+    let env = "[2026-10-19T01:58:00Z] env[info]: Sandbox paused";
+    assert!(cloud::session(&page(&[&[ASKED][..], &WAITS, &[env]].concat())).waiting);
+    // Back, it ends; the harness's notice is no words of the user's.
+    let p = cloud::session(&page(&[&[ASKED][..], &WAITS, &BACK].concat()));
+    assert_eq!((p.phase, p.turns.len()), (cloud::Phase::Idle, 2));
+    assert_eq!(p.turns[1].answer, "Committed and pushed.");
+    assert_eq!(p.words, Some(asked.as_microsecond()));
+    // One command, no Monitor: a turn it starts with no words before it is that work back.
+    let bash = [ASKED, WAITS[0], WAITS[2], WAITS[3], BACK[0], BACK[1], BACK[3], BACK[4]];
+    assert_eq!(cloud::session(&page(&bash)).phase, cloud::Phase::Idle);
+    // A turn the user started meanwhile is not; under way, it is working for its own sake.
+    let said = [ASKED, WAITS[0], WAITS[2], WAITS[3], "[2026-10-19T01:49:00Z] user: and this"];
+    let p = cloud::session(&page(&[&said[..], &[BACK[0], BACK[1]]].concat()));
+    assert_eq!((p.phase, p.waiting), (cloud::Phase::Working, false));
+    let said = [&said[..], &[BACK[0], BACK[3], BACK[4]]].concat();
+    assert_eq!(cloud::session(&page(&said)).phase, cloud::Phase::Working);
+}
+
+#[test]
+fn a_session_whose_turn_left_work_in_the_background_is_followed_until_it_comes_back() {
+    let (d, work) = setup("background", "");
+    logs(&d, &page(&[&[ASKED][..], &WAITS].concat()));
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    let me = at(&d, "a turn, still working", |r| r["turns"] == 1);
+    assert_eq!((&me["state"], &me["detail"]), (&json!("busy"), &json!("working")), "{me}");
+    assert_eq!(told(&d), [format!("☁ Aya answered: {LINK}")]);
+    // Nobody says a thing: it goes on by itself, and is seen to.
+    logs(&d, &page(&[&[ASKED][..], &WAITS, &BACK].concat()));
+    clock(&d, T0 + 40);
+    let me = at(&d, "the turn it started itself", |r| r["turns"] == 2);
+    assert_eq!(me["detail"], "idle");
+    assert!(out(&d.cli(&["read", "Aya"])).contains("Committed and pushed."));
+    assert_eq!(told(&d).len(), 2);
+}
+
+#[test]
+fn work_left_in_the_background_and_never_heard_of_again_is_taken_for_done() {
+    let (d, work) = setup("background-lost", "");
+    // Half an hour and more since the turn ended, the work never back.
+    let t = |s: i64| jiff::Timestamp::from_second(T0 - 3600 + s).unwrap();
+    let lines = [
+        format!("[{}] user: go", t(0)),
+        format!("[{}] tool_result: Command running in background with ID: b1.", t(5)),
+        format!("[{}] result: success is_error=false turns=2 duration=9s — Waiting.", t(9)),
+    ];
+    logs(&d, &page(&lines.iter().map(String::as_str).collect::<Vec<_>>()));
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    let me = at(&d, "its turn", |r| r["turns"] == 1);
+    assert_eq!((&me["state"], &me["detail"]), (&json!("resting"), &json!("idle")), "{me}");
+}
+
+#[test]
+fn said_to_while_work_is_in_the_background_it_is_followed_past_the_works_return() {
+    let (d, work) = setup("background-say", "");
+    logs(&d, &page(&[&[ASKED][..], &WAITS].concat()));
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "a turn, still working", |r| r["turns"] == 1);
+    d.cli(&["cloud", "say", "Aya", "and then this"]);
+    // The work comes back first, the words still queued behind it: those are not the words.
+    logs(&d, &page(&[&[ASKED][..], &WAITS, &BACK].concat()));
+    clock(&d, T0 + 40);
+    at(&d, "the turn it started itself", |r| r["turns"] == 2);
+    let n = looks(&d);
+    clock(&d, T0 + 80);
+    common::wait(|| looks(&d) > n, "a look 40s on, the words still queued");
+}
+
 #[test]
 fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
     let (d, work) = setup("follow", "");

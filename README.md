@@ -485,13 +485,14 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
   and `resume` brings it back.
 - **Followed.** The daemon reads the session's log with a courier: every 40 s while it starts or
   works (every minute after five), and every 10 minutes once quiet for half an hour (hourly a
-  day after its last event). An idle one is not read, as each read costs a little of your plan:
-  `cloud say` reads it again, and so does putting it on screen or coming back to the terminal
-  with it there (once a minute at most), in case you went on with it on the web. A turn that
-  ends is told with its link and counted as a resident's, so `gensokyo wait` and `gensokyo
-  read` work on it. The answer is the log's, which cuts it at about 2000 characters: the rest
-  is on claude.ai. A session archived or deleted there departs. A session waits its turn while
-  three couriers are out.
+  day after its last event). A turn that leaves a command or a watch running in the background
+  keeps it working until that work is back (or half an hour passes with no word of it). An
+  idle one is not read, as each read costs a little of your plan: `cloud say` reads it again,
+  and so does putting it on screen or coming back to the terminal with it there (once a minute
+  at most), in case you went on with it on the web. A turn that ends is told with its link and
+  counted as a resident's, so `gensokyo wait` and `gensokyo read` work on it. The answer is the
+  log's, which cuts it at about 2000 characters: the rest is on claude.ai. A session archived
+  or deleted there departs. A session waits its turn while three couriers are out.
 - **On screen.** Its pane says `starting`, `working` or `idle`, and shows its link, the
   repository, `base → branch` (`?` until its branch is found: the `claude/…` branch on origin
   whose newest commit carries its `Claude-Session:` line), and the last answer. Enter or a

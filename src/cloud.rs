@@ -419,8 +419,10 @@ pub enum Phase {
     /// Nothing of Claude Code's on the page yet: a sandbox being made.
     #[default]
     Starting,
+    /// At a turn, or between turns with work it left running in the background.
     Working,
-    /// Its newest turn has ended, and nothing was said to it since.
+    /// Its newest turn has ended, with no work left in the background, and nothing was said to
+    /// it since.
     Idle,
 }
 
@@ -447,16 +449,27 @@ pub struct Turn {
 /// turns that ended on it, oldest first, and when (epoch µs) the newest words to it came and the
 /// newest event of any kind. Only a line that starts with a time and a kind counts: the log puts
 /// each event on one line, so a quote of one inside another's text cannot begin a line.
+///
+/// A turn may end with work left in the background (the harness refuses a plain `sleep`): it is
+/// back when the session starts a turn with no words before it, or when the harness's notice of
+/// it (a `user:` line, not words) comes inside a turn. Work started off the page, or more than
+/// one piece of it, reads as back once one is; work back inside a turn the user started reads
+/// as out until another turn starts.
 #[derive(Debug, Default)]
 pub struct Page {
     pub phase: Phase,
     pub turns: Vec<Turn>,
     pub words: Option<i64>,
     pub newest: Option<i64>,
+    /// Working only for work left in the background: nothing has moved since its newest turn
+    /// ended.
+    pub waiting: bool,
 }
 
 pub fn session(body: &str) -> Page {
     let (mut p, mut said) = (Page::default(), None);
+    // Work out in the background; words said since the newest turn ended.
+    let (mut out, mut spoke) = (false, false);
     for l in lines(body.split_once('\n').map_or("", |(_, rest)| rest)) {
         let Some((at, rest)) = l.strip_prefix('[').and_then(|l| l.split_once("] ")) else {
             continue;
@@ -465,15 +478,26 @@ pub fn session(body: &str) -> Page {
         let at = at.as_microsecond();
         p.newest = Some(at);
         let (kind, text) = rest.split_once(':').unwrap_or((rest, ""));
-        let text = text.trim();
-        match kind.split(' ').next().unwrap_or("") {
+        let (kind, text) = (kind.split(' ').next().unwrap_or(""), text.trim());
+        // The session moved on; the sandbox's own lines (`env[…]`) are not it moving.
+        if matches!(kind, "user" | "init" | "tool_use" | "tool_result" | "assistant") {
+            p.waiting = false;
+        }
+        match kind {
             "user" => {
-                (p.words, said) = (Some(at), None);
+                match text.starts_with("<task-notification>") {
+                    true => (out, said) = (false, None),
+                    false => (p.words, said, spoke) = (Some(at), None, true),
+                }
                 if p.phase == Phase::Idle {
                     p.phase = Phase::Working;
                 }
             }
-            "init" | "tool_use" | "tool_result" => p.phase = Phase::Working,
+            "tool_result" if BACKGROUND.iter().any(|b| text.starts_with(b)) => {
+                (out, p.phase) = (true, Phase::Working);
+            }
+            "init" => (out, p.phase) = (out && spoke, Phase::Working),
+            "tool_use" | "tool_result" => p.phase = Phase::Working,
             "assistant" => {
                 p.phase = Phase::Working;
                 if text != "[thinking]" {
@@ -485,13 +509,18 @@ pub fn session(body: &str) -> Page {
                 let answer = said.take().unwrap_or_else(|| end.to_string());
                 let failed = how.contains("is_error=true");
                 p.turns.push(Turn { at, failed, answer: plain(&answer, ANSWER_MOST) });
-                p.phase = Phase::Idle;
+                (p.waiting, spoke) = (out, false);
+                p.phase = if out { Phase::Working } else { Phase::Idle };
             }
             _ => {}
         }
     }
     p
 }
+
+/// How the harness answers a tool that leaves work in the background, a Bash command or a
+/// Monitor. The start of a line, so the log's cut cannot take it.
+const BACKGROUND: [&str; 2] = ["Command running in background", "Monitor started"];
 
 /// The most of a session's answer kept: the log cuts one at about 2000.
 const ANSWER_MOST: usize = 2400;

@@ -1086,9 +1086,19 @@ fn the_role_stage_starts_a_cloud_session_on_the_task_typed() {
     assert_eq!((&out[0]["who"], &out[0]["bare"]), (&json!("id-Aya"), &json!(true)));
     let id = out[0]["id"].as_u64().unwrap();
     daemon(&mut a, Reply::Done { id, message: "Fixed it.".into() });
-    assert_eq!(a.m.answer, Some(("id-Aya".into(), 1, "Fixed it.".into())));
+    assert_eq!(a.m.answer, Some(("id-Aya".into(), 1, Ok("Fixed it.".into()))));
     assert!(screen(&mut a).iter().any(|l| l.contains("Fixed it.")));
     daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), one] });
+    assert!(sent(&mut a).is_empty(), "read once");
+    // A read that fails is kept as why, in the pane rather than as a message.
+    let two = Resident { turns: 2, ..aya.clone() };
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), two.clone()] });
+    let id = sent(&mut a)[0]["id"].as_u64().unwrap();
+    let why = "Aya's last turn ended with no answer kept";
+    daemon(&mut a, Reply::Error { id, error: why.into() });
+    assert_eq!(a.m.answer, Some(("id-Aya".into(), 2, Err(why.into()))));
+    assert!(a.m.message.is_none(), "{:?}", a.m.message);
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), two] });
     assert!(sent(&mut a).is_empty(), "read once");
     // `r` is the recall list's, as on any screen that takes no keys.
     host(&mut a, b"r");
@@ -1597,5 +1607,5 @@ fn a_cloud_answer_read_for_one_no_longer_on_screen_is_dropped() {
     assert!(a.m.message.is_none(), "{:?}", a.m.message);
     let id = second["id"].as_u64().unwrap();
     daemon(&mut a, Reply::Done { id, message: "Sanae's answer".into() });
-    assert_eq!(a.m.answer, Some(("id-Sanae".into(), 1, "Sanae's answer".into())));
+    assert_eq!(a.m.answer, Some(("id-Sanae".into(), 1, Ok("Sanae's answer".into()))));
 }

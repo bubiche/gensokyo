@@ -78,8 +78,9 @@ pub struct Model {
     pub cloud: Option<CloudWatch>,
     /// Keeping the Mac awake, once the daemon has said.
     pub awake: Option<Awake>,
-    /// The last answer of the cloud session on screen: its id, its turns then, and the text.
-    pub answer: Option<(String, u64, String)>,
+    /// The last answer of the cloud session on screen: its id, its turns then, and the text, or
+    /// why it could not be read.
+    pub answer: Option<(String, u64, Result<String, String>)>,
 }
 
 /// Whether the daemon keeps the Mac from idle-sleeping while work runs, and whether it holds it
@@ -335,13 +336,15 @@ fn cloud_pane(m: &Model, r: &Resident, g: Rect, buf: &mut Buffer, hits: &mut Hit
         rows.push((format!("environment {e}"), DIM));
     }
     rows.push((String::new(), Style::new()));
-    let said = m.answer.as_ref().filter(|a| a.0 == r.id).map(|a| a.2.as_str());
+    let (said, st) = match m.answer.as_ref().filter(|a| a.0 == r.id).map(|a| &a.2) {
+        Some(Ok(text)) => (text.as_str(), Style::new()),
+        Some(Err(e)) => (e.as_str(), ERROR),
+        None => ("no answer yet", DIM),
+    };
     // The buttons and a hint below, whatever is cut.
     let room = (g.height as usize).saturating_sub(2);
     let left = room.saturating_sub(rows.len() + 1).max(1);
-    for l in wrap(said.unwrap_or("no answer yet"), w, left) {
-        rows.push((l, if said.is_some() { Style::new() } else { DIM }));
-    }
+    rows.extend(wrap(said, w, left).into_iter().map(|l| (l, st)));
     rows.push((String::new(), Style::new()));
     rows.truncate(room);
     let x = g.x + 1;

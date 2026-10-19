@@ -396,10 +396,10 @@ fn screens() -> Vec<(&'static str, Model)> {
                 m.answer = Some((
                     aya.id.clone(),
                     2,
-                    "Fixed the flaky test: the retry now waits for \
+                    Ok("Fixed the flaky test: the retry now waits for \
                 the socket, and the suite passed three times in a row. Pushed to \
                 claude/fix-it-a1b2c3; no pull request opened."
-                        .into(),
+                        .into()),
                 ));
                 m.residents.push(aya);
             }),
@@ -1082,6 +1082,27 @@ fn a_cloud_session_on_screen_has_its_buttons_and_no_grid() {
     let (t, _) = draw(&m, 40, 6);
     let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
     assert!(text.contains("☁"), "{text}");
+}
+
+#[test]
+fn a_cloud_answer_that_could_not_be_read_reads_as_an_error() {
+    use ratatui::style::Color;
+    let mut m = shrine();
+    m.residents.push(aya());
+    m.focused = Some("id-Aya".into());
+    let why = "Aya's last turn ended with no answer kept";
+    let colour = |m: &Model| {
+        let mut buf = Buffer::empty(AREA);
+        render::render(m, AREA, &mut buf);
+        let row = |y: u16| (0..AREA.width).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y = (0..AREA.height).find(|&y| row(y).contains("Aya's last turn")).expect("drawn");
+        let x = row(y).find("Aya's").unwrap() as u16;
+        buf[(x, y)].fg
+    };
+    m.answer = Some(("id-Aya".into(), 2, Err(why.into())));
+    assert_eq!(colour(&m), Color::LightRed);
+    m.answer = Some(("id-Aya".into(), 2, Ok("Aya's last turn fixed it".into())));
+    assert_eq!(colour(&m), Color::Reset);
 }
 
 #[test]

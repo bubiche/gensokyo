@@ -696,11 +696,16 @@ impl App {
                     false => self.focus(Some(resident.id)),
                 }
             }
-            Reply::Done { id, message: text } | Reply::Error { id, error: text }
+            Reply::Done { id, .. } | Reply::Error { id, .. }
                 if self.reading.iter().any(|r| r.0 == id) =>
             {
                 let i = self.reading.iter().position(|r| r.0 == id).expect("matched");
                 let (_, who, turns) = self.reading.remove(i);
+                let text = match r {
+                    Reply::Done { message, .. } => Ok(message),
+                    Reply::Error { error, .. } => Err(error),
+                    _ => unreachable!("matched"),
+                };
                 if self.m.focused.as_ref() == Some(&who) {
                     self.m.answer = Some((who, turns, text));
                 }

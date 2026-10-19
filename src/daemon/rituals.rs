@@ -218,6 +218,7 @@ fn tick(shrine: &Shared, now: i64, catch: bool) {
     super::keep::orphans(shrine, now);
     push(shrine, &rs, &bad);
     super::cloud::tick(shrine, now, catch);
+    super::follow::tick(shrine, now, catch);
 }
 
 /// A fire waiting behind a run whose turn has come; one too old is dropped, and says so.

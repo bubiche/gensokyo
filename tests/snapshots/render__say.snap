@@ -1,0 +1,10 @@
+---
+source: tests/render.rs
+expression: modal_box(&m).backend()
+---
+"┌ say ───────────────────────────────────────────┐"
+"│ To Aya, on claude.ai:                          │"
+"│ and the docs too                               │"
+"│ Its next turn; gensokyo tells when it answers. │"
+"│ [send ⏎] [cancel esc]                          │"
+"└────────────────────────────────────────────────┘"

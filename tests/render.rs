@@ -2,7 +2,7 @@
 
 use gensokyo::client::modal::{self, Cast, History, Modal, Recall, Stage, Summon, Timetable};
 use gensokyo::client::render::{self, Awake, Button, Find, Hit, HitMap, Message, Model, Say};
-use gensokyo::proto::{Card, Limit, Resident, RitualInfo, State, Telemetry};
+use gensokyo::proto::{Card, CloudSession, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -386,6 +386,29 @@ fn screens() -> Vec<(&'static str, Model)> {
             with(&|m| {
                 m.rituals = Some(rituals());
                 m.modal = Some(timetable(Some("slack-morning"), true));
+            }),
+        ),
+        (
+            "cloud",
+            with(&|m| {
+                let aya = aya();
+                m.focused = Some(aya.id.clone());
+                m.answer = Some((
+                    aya.id.clone(),
+                    2,
+                    "Fixed the flaky test: the retry now waits for \
+                the socket, and the suite passed three times in a row. Pushed to \
+                claude/fix-it-a1b2c3; no pull request opened."
+                        .into(),
+                ));
+                m.residents.push(aya);
+            }),
+        ),
+        (
+            "say",
+            with(&|m| {
+                let text = "and the docs too".into();
+                m.modal = Some(Modal::Say { id: "id-Aya".into(), name: "Aya".into(), text });
             }),
         ),
         ("quit", with(&|m| m.modal = Some(Modal::Quit))),
@@ -1020,11 +1043,39 @@ fn a_dim_row_of_wide_letters_is_cut_by_columns() {
     assert!(dim.contains("pr=#12") && dim.ends_with('…'), "{rows:#?}");
 }
 
+/// A cloud session, two turns in, its branch found.
+fn aya() -> Resident {
+    let cloud = CloudSession {
+        url: "https://claude.ai/code/session_01X".into(),
+        repo: "o/r".into(),
+        base: "fix".into(),
+        branch: Some("claude/fix-it-a1b2c3".into()),
+        env: None,
+    };
+    let me = resident(4, "Aya", "work/.claude/worktrees/fix", None);
+    Resident { pid: None, detail: Some("idle".into()), turns: 2, cloud: Some(cloud), ..me }
+}
+
+#[test]
+fn a_cloud_session_on_screen_has_its_buttons_and_no_grid() {
+    let mut m = shrine();
+    m.residents.push(aya());
+    m.focused = Some("id-Aya".into());
+    let map = hits(&m, AREA);
+    for b in [Button::OpenFocused, Button::SayFocused, Button::CloseFocused] {
+        assert!(resolves(&map, Hit::Button(b)), "{b:?}");
+    }
+    assert!(!map.0.iter().any(|(_, h)| *h == Hit::Grid));
+    // No answer yet, and a tiny screen: nothing breaks.
+    let (t, _) = draw(&m, 40, 6);
+    let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("☁"), "{text}");
+}
+
 #[test]
 fn a_cloud_session_is_drawn_as_a_cloud_and_departed_as_anyone() {
     let mut m = shrine();
-    let mut aya = resident(4, "Aya", "work", None);
-    (aya.pid, aya.cloud) = (None, Some("https://claude.ai/code/session_01X".into()));
+    let aya = aya();
     m.residents.push(aya.clone());
     let (rows, _) = side(&m, AREA);
     assert!(rows.iter().any(|r| r.contains("4 ☁ Aya")), "{rows:#?}");

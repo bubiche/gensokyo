@@ -6,7 +6,8 @@ use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
 use gensokyo::client::render::grid_rect;
 use gensokyo::proto::{
-    Card, CloudWatch, NAME_RULE, Notice, Reply, Resident, RitualInfo, RoutineInfo, State,
+    Card, CloudSession, CloudWatch, NAME_RULE, Notice, Reply, Resident, RitualInfo, RoutineInfo,
+    State,
 };
 use gensokyo::vt::{Frame, Modes, Run, Style, Vt};
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -1054,16 +1055,41 @@ fn the_role_stage_starts_a_cloud_session_on_the_task_typed() {
     }
     // There, it is on screen with no screen to view: nothing typed goes to it.
     let id = out[0]["id"].as_u64().unwrap();
-    let aya = Resident {
-        pid: None,
-        cloud: Some("https://claude.ai/code/session_01X".into()),
-        ..resident(3, "Aya")
-    };
+    let cloud =
+        CloudSession { url: "https://claude.ai/code/session_01X".into(), ..Default::default() };
+    let aya = Resident { pid: None, cloud: Some(cloud), ..resident(3, "Aya") };
     daemon(&mut a, Reply::Summoned { id, resident: aya.clone(), note: None });
-    daemon(&mut a, Reply::List { id: 0, residents: vec![resident(1, "Reimu"), aya] });
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), aya.clone()] });
+    if a.m.focused.as_deref() != Some("id-Aya") {
+        host(&mut a, b"3");
+    }
+    assert_eq!(a.m.focused.as_deref(), Some("id-Aya"));
+    sent(&mut a);
+    // `s` asks what to say, and sends it as its next turn.
+    host(&mut a, b"s");
+    assert!(matches!(a.m.modal, Some(Modal::Say { .. })));
+    host(&mut a, b"and the docs\r");
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["cloud_say"], "{out:?}");
+    assert_eq!((&out[0]["who"], &out[0]["text"]), (&json!("id-Aya"), &json!("and the docs")));
+    // A turn ended: its answer is read, once a turn.
+    let one = Resident { turns: 1, ..aya.clone() };
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), one.clone()] });
+    let out = sent(&mut a);
+    assert_eq!(kinds(&out), ["read"], "{out:?}");
+    assert_eq!((&out[0]["who"], &out[0]["bare"]), (&json!("id-Aya"), &json!(true)));
+    let id = out[0]["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Done { id, message: "Fixed it.".into() });
+    assert_eq!(a.m.answer, Some(("id-Aya".into(), 1, "Fixed it.".into())));
+    assert!(screen(&mut a).iter().any(|l| l.contains("Fixed it.")));
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), one] });
+    assert!(sent(&mut a).is_empty(), "read once");
+    // There, nothing typed goes to it; `x` closes it with no /exit to ask.
     host(&mut a, b"x");
     let out = sent(&mut a);
     assert!(!kinds(&out).iter().any(|k| *k == "view" || *k == "input"), "{out:?}");
+    assert_eq!(kinds(&out), ["close"], "{out:?}");
+    assert!(a.m.modal.is_none());
 }
 
 #[test]
@@ -1538,4 +1564,27 @@ fn a_sidebar_too_short_for_everyone_keeps_the_one_on_screen_and_counts_the_rest(
     host(&mut a, format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", y + 1, y + 1).as_bytes());
     assert_eq!(a.m.focused.as_deref(), Some("id-Marisa"));
     assert!(has(&side(&mut a), "Marisa").is_some());
+}
+
+#[test]
+fn a_cloud_answer_read_for_one_no_longer_on_screen_is_dropped() {
+    let mut a = shrine();
+    let cloud =
+        CloudSession { url: "https://claude.ai/code/session_01X".into(), ..Default::default() };
+    let aya = Resident { pid: None, turns: 1, cloud: Some(cloud.clone()), ..resident(3, "Aya") };
+    let sanae = Resident { pid: None, turns: 1, cloud: Some(cloud), ..resident(4, "Sanae") };
+    daemon(&mut a, Reply::Residents { residents: vec![resident(1, "Reimu"), aya, sanae] });
+    sent(&mut a);
+    host(&mut a, b"\x1d3");
+    let first = sent(&mut a).into_iter().find(|v| v["t"] == "read").expect("Aya's read");
+    host(&mut a, b"\x1d4");
+    let second = sent(&mut a).into_iter().find(|v| v["t"] == "read").expect("Sanae's read");
+    assert_eq!(second["who"], "id-Sanae");
+    let id = first["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Done { id, message: "Aya's answer".into() });
+    assert_eq!(a.m.answer, None);
+    assert!(a.m.message.is_none(), "{:?}", a.m.message);
+    let id = second["id"].as_u64().unwrap();
+    daemon(&mut a, Reply::Done { id, message: "Sanae's answer".into() });
+    assert_eq!(a.m.answer, Some(("id-Sanae".into(), 1, "Sanae's answer".into())));
 }

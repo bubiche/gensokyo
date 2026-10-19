@@ -483,6 +483,18 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
   you type is its task. `close` takes it out of the sidebar; the session goes on at claude.ai
   (archive it there). A restart, a logout or a crash bring it back; quit leaves it departed,
   and `resume` brings it back. Only you start one.
+- **Followed.** The daemon reads the session's log with a courier: every 30 s while it starts or
+  works (every minute after five), every 10 minutes once idle or quiet for half an hour, hourly
+  after a day. The sidebar
+  says `starting`, `working` or `idle`. A turn that ends is told with its link and counted as a
+  resident's, so `gensokyo wait` and `gensokyo read` work on it. The answer is the log's, which
+  cuts it at about 2000 characters: the rest is on claude.ai. A session archived or deleted
+  there departs. A session waits its turn while three couriers are out.
+- **On screen.** Its pane shows the repository, `base → branch` once its branch is found (the
+  `claude/…` branch on origin whose newest commit carries its `Claude-Session:` line), and the
+  last answer. Enter opens it in the browser, `s` says something to it, `x` closes it.
+- **By name.** `gensokyo cloud say NAME "…"` is its next turn, `gensokyo cloud log NAME` a page
+  of its log, `gensokyo new --teleport NAME` takes it over here.
 
 ## Cloud routines
 

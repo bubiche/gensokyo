@@ -52,6 +52,8 @@ pub(super) struct Entry {
     pub(super) held: bool,
     /// To be started again on the claude installed now (`renew.rs`).
     pub(super) renew: Option<super::renew::Renew>,
+    /// A cloud session: how its log is being read.
+    pub(super) follow: super::follow::Follow,
 }
 
 impl Entry {
@@ -77,6 +79,7 @@ impl Entry {
             orphan_since: None,
             held: false,
             renew: None,
+            follow: Default::default(),
         }
     }
 }
@@ -112,6 +115,8 @@ pub(super) struct Shrine {
     pub(super) awake: super::awake::Awake,
     /// The user's routines on claude.ai, while they have the watch on.
     pub(super) cloud: super::cloud::Watch,
+    /// Couriers out now.
+    pub(super) couriers: usize,
 }
 
 impl Shrine {
@@ -164,7 +169,13 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         outdated: None,
         renewing: false,
         tags: r.tags.clone(),
-        cloud: r.cloud.as_ref().map(|c| c.url.clone()),
+        cloud: r.cloud.as_ref().map(|c| proto::CloudSession {
+            url: c.url.clone(),
+            repo: c.repo.clone(),
+            base: c.base.clone(),
+            branch: c.branch.clone(),
+            env: c.env.clone(),
+        }),
     }
 }
 
@@ -175,6 +186,8 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
     if e.handle.is_some() {
         (r.state, r.detail) = (e.aware.state(), e.aware.detail.clone());
         (r.blocked, r.finished) = (e.aware.blocked().map(Into::into), e.aware.finished());
+    } else if cloud_here(e) {
+        (r.state, r.detail) = (cloud_state(e), Some(e.follow.phase.word().into()));
     }
     r.mode = e.aware.mode.clone().or(r.mode);
     r.here = e.here.as_ref().map(|(_, d)| d.clone()).filter(|d| *d != e.rec.cwd);
@@ -188,6 +201,14 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
 /// A cloud session followed here: in the shrine with no process, and not departed.
 pub(super) fn cloud_here(e: &Entry) -> bool {
     e.rec.cloud.is_some() && e.rec.departed.is_none()
+}
+
+/// A cloud session's state, as a resident's: busy until its turn ends.
+pub(super) fn cloud_state(e: &Entry) -> State {
+    match e.follow.phase {
+        crate::cloud::Phase::Idle => State::Resting,
+        _ => State::Busy,
+    }
 }
 
 /// A flag's value in a launch argv, before any `--`.
@@ -790,7 +811,7 @@ fn pick_name(sh: &Shrine, share: &Path) -> String {
 }
 
 /// Departed now, with the status `wait()` gave if it gave one.
-fn depart(r: &mut Record, x: Option<resident::Exit>) {
+pub(super) fn depart(r: &mut Record, x: Option<resident::Exit>) {
     r.departed = Some(store::now());
     r.exit = x.and_then(|x| x.code);
     r.signal = x.and_then(|x| x.signal);

@@ -18,6 +18,7 @@ use super::app::App;
 use super::framer::Chunk;
 use super::render::{CHORDS, Model, Row};
 use crate::proto::{Request, Resident, State};
+use ratatui::style::Style;
 
 #[derive(Clone, Debug)]
 pub enum Modal {
@@ -42,6 +43,12 @@ pub enum Modal {
     Help,
     /// What was said, newest first.
     History(History),
+    /// Words for a cloud session, its next turn.
+    Say {
+        id: String,
+        name: String,
+        text: String,
+    },
 }
 
 impl Modal {
@@ -91,6 +98,15 @@ impl Modal {
             ),
             Modal::Help => help(),
             Modal::History(hs) => hs.view(m, w, h),
+            Modal::Say { name, text, .. } => (
+                " say ".into(),
+                vec![
+                    Row::text(&format!("To {name}, on claude.ai:")),
+                    Row::Field(text.clone(), Style::new()),
+                    Row::dim("Its next turn; gensokyo tells when it answers."),
+                    Row::yes_no("[send ⏎]", "[cancel esc]"),
+                ],
+            ),
         }
     }
 }
@@ -107,6 +123,7 @@ fn help() -> (String, Vec<Row>) {
     rows.push(Row::text("Search: / back, ? on, then n more the same way, N the other."));
     rows.push(Row::text("Drag to copy, past an edge to scroll; double-click a word."));
     rows.push(Row::text("y copies the last answer of the resident on screen."));
+    rows.push(Row::text("A cloud session: ⏎ opens it, s says something to it."));
     let legend: Vec<String> = [
         (State::Busy, "busy"),
         (State::Awaits, "needs you"),
@@ -190,6 +207,13 @@ impl App {
             Some(Modal::Cast(_)) => self.cast_key(k),
             Some(Modal::Timetable(_)) => self.timetable_key(k),
             Some(Modal::History(_)) => self.history_key(c),
+            Some(Modal::Say { text, .. }) => match k {
+                Key::Text(ch) => text.push(ch),
+                Key::Paste(t) => text.push_str(&t.replace(['\r', '\n'], " ")),
+                Key::Back => _ = text.pop(),
+                Key::Enter if !text.trim().is_empty() => self.confirm(),
+                _ => {}
+            },
             None => {}
         }
     }
@@ -276,6 +300,9 @@ impl App {
             Modal::Quit => {
                 self.quit = Some(self.send(Request::Quit));
                 self.gone = Some("the shrine is empty; the daemon stopped".into());
+            }
+            Modal::Say { id, text, .. } => {
+                self.send(Request::CloudSay { who: id, text });
             }
             Modal::Help | Modal::History(_) => {}
         }

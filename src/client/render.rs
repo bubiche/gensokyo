@@ -78,6 +78,8 @@ pub struct Model {
     pub cloud: Option<CloudWatch>,
     /// Keeping the Mac awake, once the daemon has said.
     pub awake: Option<Awake>,
+    /// The last answer of the cloud session on screen: its id, its turns then, and the text.
+    pub answer: Option<(String, u64, String)>,
 }
 
 /// Whether the daemon keeps the Mac from idle-sleeping while work runs, and whether it holds it
@@ -166,6 +168,9 @@ pub enum Button {
     /// The departed screen's recall and close, for the resident on it.
     RecallFocused,
     CloseFocused,
+    /// The cloud session on screen, in the browser, and said something to.
+    OpenFocused,
+    SayFocused,
     /// A modal's confirm and cancel.
     Yes,
     No,
@@ -283,6 +288,7 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
                 [("[ recall r ]", Button::RecallFocused), ("[ close x ]", Button::CloseFocused)];
             flow_centered(buf, g, y + 1, &row, &mut hits);
         }
+        Some(r) if r.departed.is_none() && r.cloud.is_some() => cloud_pane(m, r, g, buf, &mut hits),
         Some(_) => {
             if let Some(fr) = &m.screen {
                 grid(fr, g, buf);
@@ -307,6 +313,59 @@ pub fn render(m: &Model, area: Rect, buf: &mut Buffer) -> HitMap {
         modal(m, md, g, buf, &mut hits);
     }
     hits
+}
+
+/// A cloud session has no screen here: what is known of it, its last answer, and what can be
+/// done with it.
+fn cloud_pane(m: &Model, r: &Resident, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
+    let Some(c) = &r.cloud else { return };
+    let w = g.width.saturating_sub(2) as usize;
+    let state = r.detail.as_deref().unwrap_or("starting");
+    let turns = match r.turns {
+        1 => " · 1 turn".to_string(),
+        n if n > 1 => format!(" · {n} turns"),
+        _ => String::new(),
+    };
+    let mut rows = vec![
+        (format!("☁ on claude.ai · {state}{turns}"), Style::new()),
+        (c.url.clone(), BUTTON),
+        (format!("{} · {} → {}", c.repo, c.base, c.branch.as_deref().unwrap_or("?")), Style::new()),
+    ];
+    if let Some(e) = &c.env {
+        rows.push((format!("environment {e}"), DIM));
+    }
+    rows.push((String::new(), Style::new()));
+    let said = m.answer.as_ref().filter(|a| a.0 == r.id).map(|a| a.2.as_str());
+    // The buttons and a hint below, whatever is cut.
+    let room = (g.height as usize).saturating_sub(2);
+    let left = room.saturating_sub(rows.len() + 1).max(1);
+    for l in wrap(said.unwrap_or("no answer yet"), w, left) {
+        rows.push((l, if said.is_some() { Style::new() } else { DIM }));
+    }
+    rows.push((String::new(), Style::new()));
+    rows.truncate(room);
+    let x = g.x + 1;
+    for (y, (l, st)) in (g.y..).zip(&rows) {
+        buf.set_stringn(x, y, l, w, *st);
+    }
+    let y = g.y + rows.len() as u16;
+    let row = [
+        ("[open ⏎]", Button::OpenFocused),
+        ("[say s]", Button::SayFocused),
+        ("[close x]", Button::CloseFocused),
+    ];
+    let width = g.width.saturating_sub(2);
+    flow(
+        buf,
+        Rect { x, y, width, height: g.bottom().saturating_sub(y).min(1) },
+        &row,
+        BUTTON,
+        hits,
+    );
+    if y + 1 < g.bottom() {
+        let hint = format!("gensokyo cloud log {0} · new --teleport {0} takes it over", r.name);
+        buf.set_stringn(x, y + 1, &hint, w, DIM);
+    }
 }
 
 fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {

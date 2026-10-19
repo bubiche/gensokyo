@@ -459,7 +459,7 @@ fn new(n: New) -> Result<(), String> {
         }
         Reply::Summoned { resident: r, .. } => {
             match &r.cloud {
-                Some(link) => println!("started {} in the cloud: {link}", r.name),
+                Some(c) => println!("started {} in the cloud: {}", r.name, c.url),
                 None => {
                     let slot = r.slot.map_or(String::new(), |s| format!(" (slot {s})"));
                     println!("summoned {}{slot} in {}", r.name, r.cwd);

@@ -20,6 +20,7 @@ expression: modal_box(&m).backend()
 "│ Search: / back, ? on, then n more the same way, N the other. │"
 "│ Drag to copy, past an edge to scroll; double-click a word.   │"
 "│ y copies the last answer of the resident on screen.          │"
+"│ A cloud session: ⏎ opens it, s says something to it.         │"
 "│ ● busy  ✦ needs you  ✧ asked you  ○ resting  · departed      │"
 "│ ⇡ behind the installed claude (u renews)  ↻ renewing         │"
 "│ [close esc]                                                  │"

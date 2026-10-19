@@ -281,6 +281,9 @@ pub struct App {
     pressed: Option<(Instant, (u16, u16))>,
     /// The requests whose `done` carries text to copy, and what each text is.
     copying: Vec<(u64, String)>,
+    /// Reads under way of a cloud session's last answer: for whom, at which turn. One for a
+    /// session no longer on screen is dropped when it comes.
+    reading: Vec<(u64, String, u64)>,
     /// The grid size last sent.
     pub(super) size: (u16, u16),
     /// Everyone, departed included, from the last `list --all`.
@@ -354,6 +357,7 @@ impl App {
             edge: None,
             pressed: None,
             copying: Vec::new(),
+            reading: Vec::new(),
             size: (0, 0),
             all: Vec::new(),
             lists: HashMap::new(),
@@ -497,6 +501,7 @@ impl App {
             None => self.send(Request::Unview),
         };
         self.modes();
+        self.read_answer();
     }
 
     /// The host follows the resident on screen: its kitty flags, and 1003 only if it asked.
@@ -690,6 +695,15 @@ impl App {
                     false => self.focus(Some(resident.id)),
                 }
             }
+            Reply::Done { id, message: text } | Reply::Error { id, error: text }
+                if self.reading.iter().any(|r| r.0 == id) =>
+            {
+                let i = self.reading.iter().position(|r| r.0 == id).expect("matched");
+                let (_, who, turns) = self.reading.remove(i);
+                if self.m.focused.as_ref() == Some(&who) {
+                    self.m.answer = Some((who, turns, text));
+                }
+            }
             Reply::Done { id, message } => match self.copying.iter().position(|c| c.0 == id) {
                 Some(i) => {
                     let (_, what) = self.copying.remove(i);
@@ -766,6 +780,53 @@ impl App {
             self.modes();
         } else {
             self.back(was);
+        }
+        self.read_answer();
+    }
+
+    /// The cloud session on screen: its last answer, read again once it has a newer one.
+    fn read_answer(&mut self) {
+        let here = |r: &&Resident| r.cloud.is_some() && r.departed.is_none() && r.turns > 0;
+        let Some(r) = self.focused().filter(here) else { return };
+        let (who, turns) = (r.id.clone(), r.turns);
+        let had = |a: Option<(&String, u64)>| a == Some((&who, turns));
+        if had(self.m.answer.as_ref().map(|a| (&a.0, a.1)))
+            || self.reading.iter().any(|r| had(Some((&r.1, r.2))))
+        {
+            return;
+        }
+        let id = self.send(Request::Read { who: who.clone(), screen: false, bare: true });
+        self.reading.push((id, who, turns));
+    }
+
+    /// The cloud session on screen: Enter opens it in the browser, `s` says something to it.
+    /// Whether the key was its.
+    fn cloud_key(&mut self, c: &Chunk) -> bool {
+        if !self.focused().is_some_and(|r| r.departed.is_none() && r.cloud.is_some()) {
+            return false;
+        }
+        match super::modal::Key::of(c) {
+            super::modal::Key::Enter => self.open_focused(),
+            super::modal::Key::Text('s') => self.say_focused(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn say_focused(&mut self) {
+        if let Some(r) = self.focused().filter(|r| r.departed.is_none() && r.cloud.is_some()) {
+            let (id, name) = (r.id.clone(), r.name.clone());
+            self.m.modal = Some(Modal::Say { id, name, text: String::new() });
+        }
+    }
+
+    fn open_focused(&mut self) {
+        let Some(r) = self.focused() else { return };
+        let Some(c) = &r.cloud else { return };
+        let name = r.name.clone();
+        match crate::cloud::browse(&c.url) {
+            Ok(()) => self.say(Say::Info, format!("opened {name} in the browser")),
+            Err(e) => self.say(Say::Error, e),
         }
     }
 
@@ -854,6 +915,9 @@ impl App {
                     let say = format!("{} has left; what was typed went nowhere", r.name);
                     self.say(Say::Info, say);
                 }
+                return;
+            }
+            if self.cloud_key(&c) {
                 return;
             }
             // On a departed screen `r` is its own `[recall r]`, and `Ctrl-] r` the whole list.
@@ -1153,6 +1217,8 @@ impl App {
                 Button::Awake => self.chord(Chord::Awake),
                 Button::RecallFocused => self.recall_focused(),
                 Button::CloseFocused => self.chord(Chord::Close),
+                Button::OpenFocused => self.open_focused(),
+                Button::SayFocused => self.say_focused(),
                 Button::Renew => self.chord(Chord::Renew),
                 Button::Yes => self.confirm(),
                 Button::No => self.go_back(),
@@ -1234,7 +1300,7 @@ impl App {
             // A live one is asked first: its turn and its input line go with it. A departed
             // one just leaves the sidebar.
             Chord::Close => match self.focused() {
-                Some(r) if r.departed.is_none() => {
+                Some(r) if r.departed.is_none() && r.cloud.is_none() => {
                     self.m.modal = Some(Modal::Close { id: r.id.clone(), name: r.name.clone() });
                 }
                 Some(r) => {

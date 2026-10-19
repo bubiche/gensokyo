@@ -102,6 +102,13 @@ pub struct Cloud {
     pub base: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<String>,
+    /// The branch it pushed its work to, once found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// When the newest turn counted ended, epoch µs as its log says: a daemon started again
+    /// counts none twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<i64>,
 }
 
 pub struct Store {

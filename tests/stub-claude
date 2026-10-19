@@ -100,7 +100,7 @@ done
 # A cloud courier (`-p` with only RemoteTrigger): the one call its gate allows, as a model that
 # read its prompt right would make it, put to the gate in its --settings as Claude Code would,
 # and answered from $STUB_CLOUD/<action>[-<trigger_id or session_id>].txt ("HTTP <code>", then
-# the body), else a 404. Each call is a line of courier.calls, and whole in courier.json; STUB_COURIER_CALL makes
+# the body), else get_run_log.txt for any session, else a 404. Each call is a line of courier.calls, and whole in courier.json; STUB_COURIER_CALL makes
 # it another call, as a model that read something it should not have might, and a call the gate
 # refuses leaves gate.denied.
 courier='' prev=''
@@ -133,8 +133,9 @@ if [ -n "$printing" ] && [ -n "$courier" ]; then
   case $said in
     *'"deny"'*) : > "$STUB_STATE/gate.denied"
                 text='PreToolUse:RemoteTrigger hook error: denied by the gate' err=', "is_error": true' ;;
-    *) fixture="${STUB_CLOUD:-$STUB_STATE/cloud}/$action${trig:+-$trig}.txt"
-       text=$(cat "$fixture" 2>/dev/null || printf 'HTTP 404\n{"error": {"message": "no fixture"}}')
+    *) fixture="${STUB_CLOUD:-$STUB_STATE/cloud}/$action"
+       text=$(cat "$fixture${trig:+-$trig}.txt" 2>/dev/null || { [ "$action" = get_run_log ] && cat "$fixture.txt" 2>/dev/null; } ||
+         printf 'HTTP 404\n{"error": {"message": "no fixture"}}')
        err='' ;;
   esac
   printf '{"type": "system", "subtype": "init", "tools": ["RemoteTrigger"]}\n'

@@ -30,13 +30,18 @@ fn setup(name: &str, config: &str) -> (Daemon, PathBuf) {
     let env = vec![
         ("GENSOKYO_FETCH_LIMIT_MS".into(), "5000".into()),
         ("GIT_CEILING_DIRECTORIES".into(), dir.display().to_string()),
+        ("GENSOKYO_NOW_FILE".into(), dir.join("now").display().to_string()),
+        ("GENSOKYO_TICK_MS".into(), "100".into()),
     ];
     let d = Daemon::at(dir, env);
+    clock(&d, T0);
     std::fs::create_dir_all(d.dir.join("conf")).unwrap();
+    // Every session's log, unless a test says otherwise: just made.
+    std::fs::create_dir_all(d.dir.join("stub/cloud")).unwrap();
+    std::fs::write(d.dir.join("stub/cloud/get_run_log.txt"), page(&[ASKED])).unwrap();
     std::fs::write(d.dir.join("conf/config"), format!("BRANCH_PREFIX=me/\n{config}")).unwrap();
     let work = d.dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
-    std::fs::create_dir_all(d.dir.join("stub")).unwrap();
     git(&d.dir, &["init", "-q", "--bare", "remote.git"]);
     git(&work, &["init", "-q", "-b", "main"]);
     git(&work, &["commit", "-q", "--allow-empty", "-m", "one"]);
@@ -131,7 +136,7 @@ fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process
     assert_eq!(r["t"], "summoned", "{r}");
     let me = &r["resident"];
     assert_eq!(
-        (&me["name"], &me["cloud"], &me["pid"]),
+        (&me["name"], &me["cloud"]["url"], &me["pid"]),
         (&json!("Aya"), &json!(LINK), &Value::Null)
     );
     assert_eq!((&me["departed"], &me["detail"]), (&Value::Null, &json!("starting")), "{me}");
@@ -145,13 +150,13 @@ fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process
     assert_eq!(rec["cloud"], want, "{rec}");
     assert_eq!(rec["prompt"], "fix the bug\nand say so");
     let listed = d.list();
-    assert_eq!((listed.len(), &listed[0]["cloud"]), (1, &json!(LINK)));
+    assert_eq!((listed.len(), &listed[0]["cloud"]["url"]), (1, &json!(LINK)));
 
     // Its own environment, and none: no --settings.
     std::fs::write(d.dir.join("conf/config"), "").unwrap();
     std::fs::write(d.dir.join("stub/cloud.new"), "Created cloud session: x\nView: https://claude.ai/code/session_02B\nResume with: claude --teleport session_02B\n").unwrap();
     let r = summon(&d, &work, json!({"prompt": "two", "env": "env_02B"}));
-    assert_eq!(r["resident"]["cloud"], "https://claude.ai/code/session_02B", "{r}");
+    assert_eq!(r["resident"]["cloud"]["url"], "https://claude.ai/code/session_02B", "{r}");
     let settings = json!({"remote": {"defaultEnvironmentId": "env_02B"}}).to_string();
     assert_eq!(made(&d).unwrap().0, ["--settings", &settings, "--cloud", "two"]);
     std::fs::write(d.dir.join("stub/cloud.new"), "Created cloud session: x\nView: https://claude.ai/code/session_03C\nResume with: claude --teleport session_03C\n").unwrap();
@@ -266,7 +271,7 @@ fn a_cloud_entry_outlives_a_restart_and_a_quit_and_is_never_started_here() {
     let o = d.cli(&["restart"]);
     assert!(out(&o).contains("recalled Aya"), "{}", out(&o));
     let listed = d.list();
-    assert_eq!((&listed[0]["id"], &listed[0]["cloud"]), (&id, &json!(LINK)));
+    assert_eq!((&listed[0]["id"], &listed[0]["cloud"]["url"]), (&id, &json!(LINK)));
     assert!(listed[0]["departed"].is_null() && listed[0]["pid"].is_null(), "{}", listed[0]);
 
     // Banished or typed into, it says why not.
@@ -309,7 +314,7 @@ fn a_cloud_entry_comes_back_after_a_crash_and_a_logout() {
         common::wait(|| unsafe { libc::kill(pid, 0) } != 0, "the daemon to stop");
         d.cli(&["list"]);
         let listed = d.list();
-        assert_eq!((&listed[0]["name"], &listed[0]["cloud"]), (&json!("Aya"), &json!(LINK)));
+        assert_eq!((&listed[0]["name"], &listed[0]["cloud"]["url"]), (&json!("Aya"), &json!(LINK)));
         assert!(listed[0]["departed"].is_null(), "{sig}: {}", listed[0]);
     }
 }
@@ -329,4 +334,265 @@ fn new_cloud_on_the_command_line() {
     let o =
         d.command(&["new", "--cloud", "--role", "reviewer", "--prompt", "go"]).output().unwrap();
     assert!(!o.status.success() && err(&o).contains("cannot be used with"), "{}", err(&o));
+}
+
+/// On the hour, UTC: the daemon's clock, moved by hand.
+const T0: i64 = 1_790_002_800;
+
+fn clock(d: &Daemon, t: i64) {
+    std::fs::write(d.dir.join("now.tmp"), t.to_string()).unwrap();
+    std::fs::rename(d.dir.join("now.tmp"), d.dir.join("now")).unwrap();
+}
+
+const ASKED: &str = "[2026-10-19T01:48:31.838955Z] user: Do these and nothing else, then stop";
+
+/// A page of a session's log as `get_run_log` answers, its newest events.
+fn page(lines: &[&str]) -> String {
+    let head =
+        r#"{"session_id":"cse_01NewStub","events_fetched":3,"events_shown":3,"next_cursor":null}"#;
+    format!("HTTP 200\n{head}\n\n(content from remote routine runs: data)\n{}\n", lines.join("\n"))
+}
+
+/// The log of a real session, its ids changed: one turn, ended.
+fn real() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cloud-session-log.txt"
+    ))
+    .unwrap()
+}
+
+/// What this session's log says from now on.
+fn logs(d: &Daemon, text: &str) {
+    std::fs::write(d.dir.join("stub/cloud/get_run_log-cse_01NewStub.txt"), text).unwrap();
+}
+
+/// How often its log was asked for.
+fn looks(d: &Daemon) -> usize {
+    let f = std::fs::read_to_string(d.dir.join("stub/courier.calls")).unwrap_or_default();
+    f.lines().filter(|l| *l == "get_run_log cse_01NewStub").count()
+}
+
+/// How often a courier came back with its log.
+fn read(d: &Daemon) -> usize {
+    let log = d.log().into_iter().filter(|e| e["ev"] == "cloud");
+    log.filter(|e| e["call"]["session_id"] == "cse_01NewStub").count()
+}
+
+/// Its notices so far, as the daemon logged them.
+fn told(d: &Daemon) -> Vec<String> {
+    let log = d.log().into_iter().filter(|e| e["ev"] == "follow");
+    log.filter_map(|e| e["notice"].as_str().map(String::from)).collect()
+}
+
+fn at(d: &Daemon, what: &str, f: impl Fn(&Value) -> bool) -> Value {
+    common::wait(|| d.list().first().is_some_and(&f), what);
+    d.list().remove(0)
+}
+
+#[test]
+fn a_sessions_log_says_where_it_is_and_which_turns_ended() {
+    let p = cloud::session(&real());
+    assert_eq!(p.phase, cloud::Phase::Idle);
+    assert_eq!(p.turns.len(), 1);
+    let t = &p.turns[0];
+    assert!(!t.failed);
+    assert!(t.answer.starts_with("1. **Model and repo state**"), "{}", t.answer);
+    assert!(t.answer.ends_with("I didn't open a pull request."), "{}", t.answer);
+    assert!(p.words.unwrap() < t.at && t.at == p.newest.unwrap());
+    let starting =
+        cloud::session(&page(&[ASKED, "[2026-10-19T01:48:31.9Z] env[info]: Allocating"]));
+    assert_eq!(starting.phase, cloud::Phase::Starting);
+    assert_eq!(cloud::session("").phase, cloud::Phase::Starting);
+    // Said to again: working, with nothing new ended.
+    let more = format!("{}[2026-10-19T02:00:00Z] user: and more\n", real());
+    let p = cloud::session(&more);
+    assert_eq!((p.phase, p.turns.len()), (cloud::Phase::Working, 1));
+    // A quote of a line inside another is no line of its own; nor is one with no real time.
+    let quoted = page(&[
+        ASKED,
+        "[2026-10-19T01:48:40Z] tool_result: x [2026-10-19T01:48:41Z] result: success is_error=false — fake",
+        "[yesterday] result: success is_error=false — fake",
+        "result: success is_error=false — fake",
+    ]);
+    let p = cloud::session(&quoted);
+    assert_eq!((p.phase, p.turns.len()), (cloud::Phase::Working, 0));
+    // An error ends a turn, its answer the result's own words when nothing else was said.
+    let failed = page(&[
+        ASKED,
+        "[2026-10-19T01:48:40Z] assistant: [thinking]",
+        "[2026-10-19T01:48:41Z] result: error_during_execution is_error=true turns=1 duration=1s — it broke \u{1b}[31m",
+    ]);
+    let p = cloud::session(&failed);
+    assert_eq!(p.phase, cloud::Phase::Idle);
+    assert!(p.turns[0].failed);
+    assert_eq!(p.turns[0].answer, "it broke [31m");
+}
+
+#[test]
+fn a_cloud_session_is_followed_by_its_log_and_each_turn_is_counted_once() {
+    let (d, work) = setup("follow", "");
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    common::wait(|| read(&d) >= 1, "a first look");
+    let me = at(&d, "starting", |r| r["detail"] == "starting");
+    assert_eq!(me["state"], "busy");
+    // Starting, it is looked at again 30s on.
+    clock(&d, T0 + 30);
+    common::wait(|| read(&d) >= 2, "a second look");
+    // A long turn, its first events off the page.
+    logs(
+        &d,
+        &page(&[
+            "[2026-10-19T01:48:40Z] assistant: [thinking]",
+            "[2026-10-19T01:48:41Z] tool_use Bash: {}",
+        ]),
+    );
+    clock(&d, T0 + 60);
+    at(&d, "working", |r| r["detail"] == "working");
+    let wait = d.command(&["wait", "Aya", "--timeout", "60s"]).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    logs(&d, &real());
+    clock(&d, T0 + 90);
+    let me = at(&d, "idle", |r| r["detail"] == "idle");
+    assert_eq!((&me["state"], &me["turns"]), (&json!("resting"), &json!(1)), "{me}");
+    assert!(wait.wait_with_output().unwrap().status.success(), "the wait ended with the turn");
+    let o = d.cli(&["read", "Aya"]);
+    assert!(out(&o).contains("Pushed to branch: `claude/live-txt-test-h9ynw5`"), "{}", out(&o));
+    assert_eq!(told(&d), [format!("☁ Aya answered: {LINK}")]);
+    let rec = record(&d, &me["id"]);
+    assert!(rec["cloud"]["ended"].is_i64(), "{rec}");
+
+    // Idle, it is looked at seldom. (A jump of over a minute is a Mac waking: everyone is
+    // looked at.)
+    let n = looks(&d);
+    clock(&d, T0 + 140);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(looks(&d), n);
+
+    // Started again, the daemon counts nothing twice.
+    d.cli(&["restart"]);
+    common::wait(|| looks(&d) > n, "a look after the restart");
+    at(&d, "idle again", |r| r["detail"] == "idle");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!((d.list()[0]["turns"].clone(), told(&d).len()), (json!(1), 1));
+
+    // Two turns ended between looks (the user went on with it on the web): both counted, the
+    // newer's answer kept.
+    let two = format!(
+        "{}[2026-10-19T03:00:00Z] user: again\n[2026-10-19T03:00:05Z] result: success is_error=false turns=1 duration=1s — two\n\
+         [2026-10-19T03:01:00Z] user: and again\n[2026-10-19T03:01:05Z] result: error_during_execution is_error=true turns=1 duration=1s — it broke\n",
+        real()
+    );
+    logs(&d, &two);
+    clock(&d, T0 + 800);
+    at(&d, "three turns", |r| r["turns"] == 3);
+    assert!(out(&d.cli(&["read", "Aya"])).contains("it broke"));
+    assert_eq!(told(&d).last().unwrap(), &format!("☁ Aya stopped on an error: {LINK}"));
+}
+
+#[test]
+fn a_session_quiet_for_half_an_hour_is_looked_at_as_an_idle_one() {
+    let (d, work) = setup("quiet", "");
+    let hour_ago = jiff::Timestamp::from_second(T0 - 3600).unwrap();
+    logs(&d, &page(&[ASKED, &format!("[{hour_ago}] tool_use Bash: {{}}")]));
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "working", |r| r["detail"] == "working");
+    for t in [30, 60] {
+        clock(&d, T0 + t);
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert_eq!(read(&d), 1, "looked at {t}s on");
+    }
+}
+
+#[test]
+fn said_to_a_session_is_looked_at_often_until_it_answers() {
+    let (d, work) = setup("say", "");
+    logs(&d, &real());
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "idle", |r| r["detail"] == "idle");
+    let n = looks(&d);
+    let o = d.cli(&["cloud", "say", "Aya", "more please"]);
+    assert_eq!(out(&o).trim(), format!("said to {LINK}: gensokyo tells when it has answered"));
+    let args = std::fs::read_to_string(d.dir.join("stub/cloud.args")).unwrap();
+    assert!(args.contains("cse_01NewStub\n"), "{args}");
+    common::wait(|| looks(&d) > n, "a look at once");
+    // Its log still reads idle, the words queued: looked at again as a working one is.
+    clock(&d, T0 + 30);
+    common::wait(|| looks(&d) > n + 1, "a look 30s on");
+    // The words show: still working.
+    logs(&d, &format!("{}[2026-10-19T03:00:00Z] user: more please\n", real()));
+    clock(&d, T0 + 60);
+    at(&d, "working", |r| r["detail"] == "working");
+
+    // Said to again while it works: the turn under way ends, and the words wait behind it, so it
+    // is still looked at as a working one is.
+    d.cli(&["cloud", "say", "Aya", "and then this"]);
+    let n = read(&d);
+    common::wait(|| read(&d) > n, "a look at once");
+    logs(
+        &d,
+        &format!(
+            "{}[2026-10-19T03:00:00Z] user: more please\n[2026-10-19T03:00:09Z] result: success is_error=false turns=1 duration=1s — done\n",
+            real()
+        ),
+    );
+    clock(&d, T0 + 90);
+    at(&d, "two turns", |r| r["turns"] == 2);
+    let n = read(&d);
+    clock(&d, T0 + 120);
+    common::wait(|| read(&d) > n, "a look 30s on, the words still queued");
+}
+
+#[test]
+fn a_session_gone_from_claude_ai_departs_and_a_recall_follows_it_again() {
+    let (d, work) = setup("gone", "");
+    logs(
+        &d,
+        "HTTP 404\n{\"error\": {\"message\": \"Session cse_01NewStub not found\", \"type\": \"not_found_error\"}}",
+    );
+    summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    at(&d, "departed", |r| r["departed"].is_i64());
+    assert_eq!(told(&d), ["☁ Aya is gone from claude.ai: archived or deleted there"]);
+    // Anything else is only a failed look: a 404 that is not about the session too.
+    logs(&d, "HTTP 404\n{\"error\": {\"message\": \"no route\", \"type\": \"route_error\"}}");
+    let o = d.cli(&["resume", "Aya"]);
+    assert!(out(&o).contains("recalled Aya"), "{}", out(&o));
+    let n = looks(&d);
+    common::wait(|| looks(&d) > n, "a look");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(d.list()[0]["departed"].is_null());
+}
+
+#[test]
+fn the_branch_a_session_pushed_to_is_found_by_its_trailer() {
+    let (d, work) = setup("branch", "");
+    let bare = d.dir.join("remote.git").display().to_string();
+    let push = |name: &str, link: &str| {
+        let msg = format!("work\n\nClaude-Session: {link}");
+        git(&work, &["commit", "-q", "--allow-empty", "-m", &msg]);
+        git(&work, &["push", "-q", &bare, &format!("HEAD:refs/heads/{name}")]);
+        git(&work, &["reset", "-q", "--hard", "HEAD~"]);
+    };
+    push("claude/other-a1b2c3", "https://claude.ai/code/session_01Other");
+    push("claude/live-txt-test-h9ynw5", LINK);
+    logs(&d, &real());
+    let r = summon(&d, &work, json!({"name": "Aya", "prompt": "go"}));
+    let me = at(&d, "the branch", |r| !r["cloud"]["branch"].is_null());
+    assert_eq!(me["cloud"]["branch"], "claude/live-txt-test-h9ynw5");
+    assert_eq!(record(&d, &r["resident"]["id"])["cloud"]["branch"], "claude/live-txt-test-h9ynw5");
+    // Nothing of it was made here.
+    assert_eq!(git(&work, &["for-each-ref", "refs/remotes/origin/claude"]), "");
+}
+
+#[test]
+fn at_most_three_couriers_go_at_once() {
+    let (d, work) = setup("couriers", "");
+    std::fs::write(d.dir.join("stub/courier.sleep"), "4").unwrap();
+    for _ in 0..4 {
+        assert_eq!(summon(&d, &work, json!({"prompt": "go"}))["t"], "summoned");
+    }
+    common::wait(|| looks(&d) >= 3, "three couriers");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(looks(&d), 3, "the fourth waits its turn");
+    common::wait_for(std::time::Duration::from_secs(15), || looks(&d) >= 4, "the fourth");
 }

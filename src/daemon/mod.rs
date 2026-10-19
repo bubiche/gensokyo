@@ -6,6 +6,7 @@ mod branch;
 pub mod cards;
 mod cloud;
 mod crash;
+mod follow;
 mod headless;
 mod ingest;
 mod keep;

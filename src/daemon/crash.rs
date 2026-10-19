@@ -114,7 +114,7 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
             all.join(", ")
         )
     } else {
-        let (mut back, mut not) = (Vec::new(), Vec::new());
+        let (mut back, mut not, mut cloud) = (Vec::new(), Vec::new(), Vec::new());
         for r in &left.records {
             // The session a spooled hook may have moved it on to since.
             let gone = shrine.borrow().store.load_departed_id(&r.id);
@@ -128,16 +128,23 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
             };
             log(json!({"ev": "crash", "id": r.id, "name": r.name, "error": why.as_ref().err()}));
             match why {
+                Ok(()) if r.cloud.is_some() => cloud.push(r.name.clone()),
                 Ok(()) => back.push(r.name.clone()),
                 Err(e) => not.push(format!("{} ({e})", r.name)),
             }
         }
-        let mut t = "the daemon crashed, cutting its residents' turns off".to_string();
+        let mut t = match back.is_empty() && not.is_empty() {
+            true => "the daemon crashed".to_string(),
+            false => "the daemon crashed, cutting its residents' turns off".to_string(),
+        };
         if !back.is_empty() {
             t += &format!("; back in their conversations: {}", back.join(", "));
         }
         if !not.is_empty() {
             t += &format!("; left departed: {}", not.join(", "));
+        }
+        if !cloud.is_empty() {
+            t += &format!("; followed again on claude.ai: {}", cloud.join(", "));
         }
         t
     };

@@ -413,6 +413,89 @@ pub fn run_log(body: &str, id: &str) -> String {
     out.join("\n")
 }
 
+/// Where a session is, by its log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Phase {
+    /// Nothing of Claude Code's on the page yet: a sandbox being made.
+    #[default]
+    Starting,
+    Working,
+    /// Its newest turn has ended, and nothing was said to it since.
+    Idle,
+}
+
+impl Phase {
+    pub fn word(self) -> &'static str {
+        match self {
+            Phase::Starting => "starting",
+            Phase::Working => "working",
+            Phase::Idle => "idle",
+        }
+    }
+}
+
+/// A turn that ended: when (epoch µs), whether on an error, and its answer as the log has it,
+/// cut there (`… [+N chars]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Turn {
+    pub at: i64,
+    pub failed: bool,
+    pub answer: String,
+}
+
+/// What a page of a session's log (`get_run_log`, its newest events) says: where it is, the
+/// turns that ended on it, oldest first, and when (epoch µs) the newest words to it came and the
+/// newest event of any kind. Only a line that starts with a time and a kind counts: the log puts
+/// each event on one line, so a quote of one inside another's text cannot begin a line.
+#[derive(Debug, Default)]
+pub struct Page {
+    pub phase: Phase,
+    pub turns: Vec<Turn>,
+    pub words: Option<i64>,
+    pub newest: Option<i64>,
+}
+
+pub fn session(body: &str) -> Page {
+    let (mut p, mut said) = (Page::default(), None);
+    for l in lines(body.split_once('\n').map_or("", |(_, rest)| rest)) {
+        let Some((at, rest)) = l.strip_prefix('[').and_then(|l| l.split_once("] ")) else {
+            continue;
+        };
+        let Ok(at) = at.parse::<jiff::Timestamp>() else { continue };
+        let at = at.as_microsecond();
+        p.newest = Some(at);
+        let (kind, text) = rest.split_once(':').unwrap_or((rest, ""));
+        let text = text.trim();
+        match kind.split(' ').next().unwrap_or("") {
+            "user" => {
+                (p.words, said) = (Some(at), None);
+                if p.phase == Phase::Idle {
+                    p.phase = Phase::Working;
+                }
+            }
+            "init" | "tool_use" | "tool_result" => p.phase = Phase::Working,
+            "assistant" => {
+                p.phase = Phase::Working;
+                if text != "[thinking]" {
+                    said = Some(text.to_string());
+                }
+            }
+            "result" => {
+                let (how, end) = text.split_once(" — ").unwrap_or((text, ""));
+                let answer = said.take().unwrap_or_else(|| end.to_string());
+                let failed = how.contains("is_error=true");
+                p.turns.push(Turn { at, failed, answer: plain(&answer, ANSWER_MOST) });
+                p.phase = Phase::Idle;
+            }
+            _ => {}
+        }
+    }
+    p
+}
+
+/// The most of a session's answer kept: the log cuts one at about 2000.
+const ANSWER_MOST: usize = 2400;
+
 /// The routines in a `list` body, and whether there are more than it holds. One whose id is not
 /// an id is left out.
 pub fn routines(body: &str) -> Result<(Vec<Routine>, bool), String> {

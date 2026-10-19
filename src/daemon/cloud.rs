@@ -360,8 +360,12 @@ fn routine_id(sh: &Shrine, who: &str) -> Result<String, String> {
     named(sh, who).map(|r| r.id.clone())
 }
 
-/// A run's id: given, by its link, or as a routine's newest run.
+/// A run's id: a cloud session's in the sidebar, given, by its link, or as a routine's newest
+/// run.
 pub(super) fn run_of(sh: &Shrine, who: &str) -> Result<String, String> {
+    if let Some(c) = super::shrine::find(sh, who).and_then(|i| sh.entries[i].rec.cloud.as_ref()) {
+        return Ok(c.session.clone());
+    }
     cloud::run_id(who).map_or_else(|| newest(sh, who), Ok)
 }
 
@@ -542,10 +546,17 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
     log(json!({"ev": "cloud", "said": id, "exit": code, "ok": r.is_ok()}));
     r.map_err(|e| unheard(&stdout, &stderr, e))?;
     let mut sh = shrine.borrow_mut();
-    let watched = on() && sh.cloud.seen.as_ref().is_some_and(|s| s.runs.contains_key(&id));
+    let mut watched = on() && sh.cloud.seen.as_ref().is_some_and(|s| s.runs.contains_key(&id));
     if watched {
         sh.cloud.said.insert(id.clone(), at);
         sh.cloud.again = true;
+    }
+    let ours = |e: &&mut super::shrine::Entry| {
+        super::shrine::cloud_here(e) && e.rec.cloud.as_ref().is_some_and(|c| c.session == id)
+    };
+    if let Some(e) = sh.entries.iter_mut().find(ours) {
+        e.follow.asked(at);
+        watched = true;
     }
     drop(sh);
     let then = if watched { "gensokyo tells when it has answered" } else { "it answers there" };
@@ -583,7 +594,7 @@ pub(super) async fn start(
     let (session, url) = made.map_err(maybe)?;
     // The task is kept as its prompt.
     args.pop();
-    let cloud = Cloud { session, url, repo, base, env };
+    let cloud = Cloud { session, url, repo, base, env, branch: None, ended: None };
     let cwd = dir.to_string_lossy().into_owned();
     let r = super::shrine::arrive(shrine, s.name, cwd, task, args, cloud)?;
     Ok((r, note))
@@ -604,8 +615,17 @@ fn landed(shrine: &Shared, r: &Routine) {
     super::rituals::repush(shrine);
 }
 
-/// One courier, for one call: the API's reply to it, or why there is none.
+/// One courier, for one call: the API's reply to it, or why there is none. Counted while it is
+/// out, so that following sessions leaves room for it.
 async fn ask(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
+    shrine.borrow_mut().couriers += 1;
+    let r = courier(shrine, call).await;
+    shrine.borrow_mut().couriers -= 1;
+    r
+}
+
+/// A courier, its place among those out already counted.
+pub(super) async fn courier(shrine: &Shared, call: Value) -> Result<(u16, String), String> {
     let exe = shrine.borrow().exe.to_string_lossy().into_owned();
     std::fs::create_dir_all(dir()).map_err(|e| format!("{}: {e}", dir().display()))?;
     let ticket = dir().join(format!("ticket-{}", cloud::uuid4().map_err(|e| e.to_string())?));

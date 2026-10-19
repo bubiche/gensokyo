@@ -3,7 +3,7 @@
 
 use super::aware::Pending;
 use super::log::log;
-use super::shrine::{Shared, Shrine, find, touch};
+use super::shrine::{Shared, Shrine, cloud_here, find, touch};
 use super::store::{self, Record, Store};
 use crate::proto::{Ended, Report, State, Until, Wait};
 use crate::tele;
@@ -172,7 +172,8 @@ fn news(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> bool {
 }
 
 fn gone(sh: &Shrine, id: &str) -> bool {
-    sh.entries.iter().find(|e| e.rec.id == id).is_none_or(|e| e.handle.is_none())
+    let here = |e: &super::shrine::Entry| e.handle.is_some() || cloud_here(e);
+    sh.entries.iter().find(|e| e.rec.id == id).is_none_or(|e| !here(e))
 }
 
 fn report(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> Report {
@@ -181,6 +182,7 @@ fn report(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> Report {
     let Some(rec) = rec else { return Report { id: id.into(), ..Report::default() } };
     let state = match e {
         Some(e) if e.handle.is_some() => e.aware.state(),
+        Some(e) if cloud_here(e) => super::shrine::cloud_state(e),
         _ => State::Departed,
     };
     let a = answer(&sh.store, id);
@@ -226,7 +228,7 @@ fn collect(sh: &mut Shrine, lead: &str, id: &str, until: Option<Until>) {
     if e.rec.owner.as_deref() != Some(lead) {
         return;
     }
-    let gone = e.handle.is_none();
+    let gone = e.handle.is_none() && !cloud_here(e);
     let saved = tell(&mut e.rec, gone);
     let quieted = turns && (std::mem::take(&mut e.held) | e.aware.seen());
     if saved {

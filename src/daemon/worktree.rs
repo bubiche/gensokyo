@@ -286,6 +286,50 @@ pub(super) async fn pushed(dir: &Path) -> Result<String, String> {
     }
 }
 
+/// The branch on origin a cloud session pushed its work to: a `claude/…` one whose newest commit
+/// names the session's `link` (Claude Code's `Claude-Session:` trailer). Tips in `checked` were
+/// looked at already: only the others are fetched, from where pushes go, into no ref here. What
+/// was found, and the tips looked at now.
+pub(super) async fn claude_branch(
+    dir: &Path,
+    link: &str,
+    checked: &[String],
+) -> Result<(Option<String>, Vec<String>), String> {
+    let url = git(dir, &["remote", "get-url", "--push", "origin"], LOCAL).await?;
+    let ls = ["ls-remote", "--end-of-options", &url, "refs/heads/claude/*"];
+    let heads = git(dir, &ls, net()).await?;
+    let heads: Vec<(&str, &str)> = heads
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter_map(|(h, r)| Some((h, r.strip_prefix("refs/heads/")?)))
+        .filter(|(h, r)| h.bytes().all(|b| b.is_ascii_hexdigit()) && plain_ref(r))
+        .filter(|(h, _)| !checked.iter().any(|c| c == h))
+        .collect();
+    if heads.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let refs: Vec<String> = heads.iter().map(|(_, r)| format!("refs/heads/{r}")).collect();
+    let mut fetch =
+        vec!["fetch", "-q", "--no-tags", "--no-write-fetch-head", "--end-of-options", &url];
+    fetch.extend(refs.iter().map(String::as_str));
+    git(dir, &fetch, net()).await?;
+    let fmt = "--format=%H%x00%(trailers:key=Claude-Session,valueonly)%x01";
+    let mut log = vec!["log", "--no-walk=unsorted", fmt, "--end-of-options"];
+    log.extend(heads.iter().map(|(h, _)| *h));
+    let named = git(dir, &log, LOCAL).await?;
+    let mine = named.split('\x01').filter_map(|c| c.trim().split_once('\0'));
+    let mine: Vec<&str> =
+        mine.filter(|(_, t)| t.lines().any(|l| l.trim() == link)).map(|(h, _)| h).collect();
+    let found = heads.iter().find(|(h, _)| mine.contains(h)).map(|(_, r)| r.to_string());
+    Ok((found, heads.iter().map(|(h, _)| h.to_string()).collect()))
+}
+
+/// A branch's name with nothing in it a terminal or a shell would act on.
+fn plain_ref(r: &str) -> bool {
+    let ok = |b: u8| b.is_ascii_alphanumeric() || b"._/-".contains(&b);
+    r.len() <= 200 && !r.starts_with('-') && !r.contains("..") && r.bytes().all(ok)
+}
+
 /// The branch `dir` is on.
 async fn on(dir: &Path) -> Result<String, String> {
     let b = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"], LOCAL).await;

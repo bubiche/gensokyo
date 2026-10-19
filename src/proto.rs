@@ -732,9 +732,23 @@ pub struct Resident {
     pub renewing: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "pairs")]
     pub tags: Tags,
-    /// A cloud session's link: it runs on claude.ai, with no process here.
+    /// A cloud session: it runs on claude.ai, with no process here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud: Option<String>,
+    pub cloud: Option<CloudSession>,
+}
+
+/// A cloud session in the sidebar.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CloudSession {
+    pub url: String,
+    /// The GitHub repository, `owner/name`.
+    pub repo: String,
+    /// The pushed branch it started from, and the one it pushed its work to, once found.
+    pub base: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
 }
 
 /// A resident's tags, `key` and `value`, in the order each key was first set.

@@ -89,8 +89,10 @@ gensokyo cloud pause NAME        # fires no more until the user resumes it
   (`gensokyo new --teleport NAME`).
 - **A run's log is the user's** (`gensokyo cloud log NAME`). It quotes whatever the run read,
   and that stays out of residents unless the user takes the run over.
-- **A one-off task in the cloud** is a cloud session, not a routine: the user starts one with
-  `gensokyo new --cloud --prompt "<task>"` from a pushed branch of a GitHub repository. Suggest
-  the command; do not start one.
+- **A one-off task in the cloud** is a cloud session, not a routine. The user starts one with
+  `gensokyo new --cloud --prompt "<task>"` from a pushed branch of a GitHub repository. You
+  start one only as a helper of yours, under the `gensokyo-lead` skill, and follow up only on
+  those. It gets every connector the account has, so its task says to use them only when it
+  needs them.
 - **There is no edit and no delete.** Both are on the web, at claude.ai/code/routines. To
   change a prompt, make a new routine and have the user delete the old one there.

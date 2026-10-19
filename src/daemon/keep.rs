@@ -153,8 +153,12 @@ fn live(sh: &shrine::Shrine, id: &str) -> bool {
     sh.entries.iter().any(|e| e.rec.id == id && e.handle.is_some())
 }
 
+/// A cloud helper is idle once its turn has ended, there.
 fn idle(e: &shrine::Entry) -> bool {
-    e.handle.is_none() || e.aware.idle()
+    match shrine::cloud_here(e) {
+        true => shrine::cloud_state(e) != crate::proto::State::Busy,
+        false => e.handle.is_none() || e.aware.idle(),
+    }
 }
 
 /// Still a helper left behind `ORPHAN` ago, idle, and on nobody's focused screen. Asked again
@@ -179,8 +183,13 @@ async fn orphan(shrine: &Shared, id: &str) {
         }
         return;
     }
-    let who = shrine.borrow().entries.iter().find(|e| e.rec.id == id).map(|e| e.rec.name.clone());
+    let rec = shrine.borrow().entries.iter().find(|e| e.rec.id == id).map(|e| e.rec.clone());
     if retire(shrine, id).await {
-        log(json!({"ev": "orphan", "id": id, "closed": who}));
+        log(json!({"ev": "orphan", "id": id, "closed": rec.as_ref().map(|r| &r.name)}));
+        // Started by its lead, not the user: where it goes on.
+        if let Some((name, c)) = rec.and_then(|r| Some((r.name, r.cloud?))) {
+            let text = format!("☁ {name} closed, its lead gone: the session goes on at {}", c.url);
+            shrine.borrow_mut().notice(&text);
+        }
     }
 }

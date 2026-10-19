@@ -129,6 +129,7 @@ async fn serve(store: Store) -> std::process::ExitCode {
         awake: super::awake::Awake::from_config(),
         cloud: Default::default(),
         couriers: 0,
+        starting: Vec::new(),
     }));
     log(
         json!({"ev": "started", "pid": std::process::id(), "socket": path, "ppid": unsafe { libc::getppid() }}),
@@ -380,7 +381,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                         let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                         tokio::task::spawn_local(async move {
                             let r = match s.cloud {
-                                true => super::cloud::start(&shrine, s).await,
+                                true => super::cloud::start(&shrine, s, caller.as_deref()).await,
                                 false => {
                                     super::shrine::summon_in(&shrine, s, caller.as_deref()).await
                                 }
@@ -458,7 +459,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                             super::cloud::act(&shrine, &who, act).await
                         }
                         Request::CloudSay { who, text } => {
-                            super::cloud::say(&shrine, &who, &text).await
+                            super::cloud::say(&shrine, &who, &text, caller.as_deref()).await
                         }
                         _ => unreachable!("matched above"),
                     };
@@ -693,10 +694,6 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
                  cloud show); tell them it is ready"
             ))
         }
-        Request::CloudSay { who, .. } => Some(format!(
-            "the user says what a cloud run is told next (gensokyo cloud say); tell them what you \
-             would say to {who}"
-        )),
         Request::CloudLog { .. } => Some(
             "a cloud run's log quotes whatever the run read, and that stays out of residents; \
              the user reads it (gensokyo cloud log)"
@@ -714,6 +711,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         Request::Tag { who, set, clear } if *clear || !set.is_empty() => {
             super::tags::may(&shrine.borrow(), caller, who).err()
         }
+        // `cloud say` is weighed where the session is found: only to a cloud helper of its own.
         _ => None,
     }
 }

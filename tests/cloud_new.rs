@@ -26,13 +26,18 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// A daemon, and a repo `work` on main, pushed, whose origin reads as GitHub's
 /// `git@github.com:o/r.git` and is the bare `remote.git` beside it.
 fn setup(name: &str, config: &str) -> (Daemon, PathBuf) {
+    setup_with(name, config, &[])
+}
+
+fn setup_with(name: &str, config: &str, extra: &[(&str, &str)]) -> (Daemon, PathBuf) {
     let dir = fresh(&format!("cn-{name}"));
-    let env = vec![
+    let mut env = vec![
         ("GENSOKYO_FETCH_LIMIT_MS".into(), "5000".into()),
         ("GIT_CEILING_DIRECTORIES".into(), dir.display().to_string()),
         ("GENSOKYO_NOW_FILE".into(), dir.join("now").display().to_string()),
         ("GENSOKYO_TICK_MS".into(), "100".into()),
     ];
+    env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     let d = Daemon::at(dir, env);
     clock(&d, T0);
     std::fs::create_dir_all(d.dir.join("conf")).unwrap();
@@ -247,14 +252,97 @@ fn what_claude_says_instead_of_a_session_is_told_with_any_link_it_gave() {
 }
 
 #[test]
-fn only_the_user_starts_a_cloud_session() {
-    let (d, work) = setup("lead", "");
-    let r = d.req_as(
-        "11111111-2222-3333-4444-555555555555",
-        json!({"t": "summon", "id": 7, "cwd": work, "cloud": true, "prompt": "go"}),
-    );
-    assert!(r["error"].as_str().unwrap().contains("the user starts cloud sessions"), "{r}");
+fn a_lead_starts_cloud_helpers_counted_with_its_others_and_a_helper_starts_none() {
+    let (d, work) = setup_with("lead", "HELPERS=2\n", &[("STUB_HOOKS", "1")]);
+    let cloud = |id: &str, extra: Value| {
+        let mut req = json!({"t": "summon", "id": 7, "cwd": work, "cloud": true, "prompt": "go"});
+        req.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        d.req_as(id, req)
+    };
+    let r = cloud("11111111-2222-3333-4444-555555555555", json!({}));
+    assert!(r["error"].as_str().unwrap().contains("names no resident here"), "{r}");
     assert!(made(&d).is_none());
+
+    // From inside its lead, briefed on stdin: its helper.
+    let lead = local(&d, &work, "Reimu", None);
+    // As its skill says, from wherever it is: the repo named, in a worktree of its own.
+    let mut c = d.command(&[
+        "new",
+        &work.display().to_string(),
+        "--cloud",
+        "--worktree",
+        "fix",
+        "--json",
+        "--name",
+        "Aya",
+        "--prompt-file",
+        "-",
+    ]);
+    c.env("GENSOKYO_SOCKET", d.socket()).env("GENSOKYO_RESIDENT", lead["id"].as_str().unwrap());
+    c.current_dir(&d.dir).stdin(std::process::Stdio::piped());
+    c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut c = c.spawn().unwrap();
+    std::io::Write::write_all(&mut c.stdin.take().unwrap(), b"brief\n").unwrap();
+    let o = c.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    let aya: Value = serde_json::from_str(&out(&o)).unwrap();
+    git(&d.dir.join("remote.git"), &["rev-parse", "--verify", "refs/heads/me/fix"]);
+    assert!(aya["cwd"].as_str().unwrap().ends_with(".claude/worktrees/fix"), "{aya}");
+    assert_eq!((&aya["owner"], &aya["cloud"]["url"]), (&lead["id"], &json!(LINK)));
+    assert_eq!(record(&d, &aya["id"])["owner"], lead["id"]);
+    assert_eq!(made(&d).unwrap().0.last().unwrap(), "brief");
+    // Its count is of both kinds, and a helper starts none.
+    let patchouli = local(&d, &work, "Patchouli", Some(&lead));
+    let r = cloud(patchouli["id"].as_str().unwrap(), json!({}));
+    assert!(r["error"].as_str().unwrap().contains("a helper does not summon"), "{r}");
+    let me = lead["id"].as_str().unwrap();
+    let r = cloud(me, json!({}));
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("you have 2 helpers here")), "{r}");
+    let r = d.req_as(me, json!({"t": "summon", "id": 7, "cwd": work, "name": "Sanae"}));
+    assert!(r["error"].as_str().unwrap().contains("you have 2 helpers here"), "{r}");
+    let r = cloud(me, json!({"role": "reviewer"}));
+    assert!(r["error"].as_str().unwrap().contains("takes no role"), "{r}");
+    // A lead in a narrower mode than its cloud helper would work in starts none.
+    let r =
+        d.req(json!({"t": "summon", "id": 7, "cwd": work, "name": "Youmu", "mode": "acceptEdits"}));
+    let r = cloud(r["resident"]["id"].as_str().unwrap(), json!({}));
+    assert!(r["error"].as_str().unwrap().contains("wider than your mode (acceptEdits)"), "{r}");
+    // Closed, it leaves room, and its lead hears where the session goes on.
+    let o = inside(&d, &lead, &["close", "Aya"]);
+    assert!(out(&o).contains(&format!("the session goes on at {LINK}")), "{}", out(&o));
+    local(&d, &work, "Sanae", Some(&lead));
+}
+
+/// A resident summoned here: the user's, in auto mode, or `lead`'s helper.
+fn local(d: &Daemon, cwd: &Path, name: &str, lead: Option<&Value>) -> Value {
+    let mut req = json!({"t": "summon", "id": 7, "cwd": cwd, "name": name});
+    if lead.is_none() {
+        req["mode"] = json!("auto");
+    }
+    let r = match lead {
+        Some(l) => d.req_as(l["id"].as_str().unwrap(), req),
+        None => d.req(req),
+    };
+    assert_eq!(r["t"], "summoned", "{r}");
+    d.stub(&r["resident"]["id"], "ready");
+    r["resident"].clone()
+}
+
+/// `gensokyo <args>` from inside resident `me`, in its repo, `brief` on stdin.
+fn inside(d: &Daemon, me: &Value, args: &[&str]) -> std::process::Output {
+    fed(d, me, args, b"brief\n")
+}
+
+fn fed(d: &Daemon, me: &Value, args: &[&str], input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    let mut c = d.command(args);
+    c.env("GENSOKYO_SOCKET", d.socket()).env("GENSOKYO_RESIDENT", me["id"].as_str().unwrap());
+    c.current_dir(d.dir.join("work"));
+    c.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+    c.stderr(std::process::Stdio::piped());
+    let mut c = c.spawn().unwrap();
+    c.stdin.take().unwrap().write_all(input).unwrap();
+    c.wait_with_output().unwrap()
 }
 
 #[test]
@@ -595,4 +683,197 @@ fn at_most_three_couriers_go_at_once() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert_eq!(looks(&d), 3, "the fourth waits its turn");
     common::wait_for(std::time::Duration::from_secs(15), || looks(&d) >= 4, "the fourth");
+}
+
+/// `gensokyo wait <args>` from inside `lead`, once the daemon holds it.
+fn waiting(d: &Daemon, lead: &Value, args: &[&str]) -> std::process::Child {
+    let held = || d.log().iter().filter(|l| l["ev"] == "wait" && l["ids"].is_array()).count();
+    let n = held();
+    let mut c = d.command(&[&["wait"], args].concat());
+    c.env("GENSOKYO_SOCKET", d.socket()).env("GENSOKYO_RESIDENT", lead["id"].as_str().unwrap());
+    c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let c = c.spawn().unwrap();
+    common::wait(|| held() > n, "the wait held");
+    c
+}
+
+/// A page of its log with `n` turns ended, the last one's answer cut by the log.
+fn turns(n: usize) -> String {
+    let mut lines = vec![ASKED.to_string()];
+    for t in 1..=n {
+        lines.push(format!("[2026-10-19T0{t}:49:00Z] user: turn {t}"));
+        lines.push(format!("[2026-10-19T0{t}:49:05Z] assistant: Report {t}, long … [+512 chars]"));
+        lines.push(format!(
+            "[2026-10-19T0{t}:49:06Z] result: success is_error=false turns=1 duration=1s — Report {t}"
+        ));
+    }
+    page(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+#[test]
+fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_not_collect_it() {
+    let (d, work) = setup_with("helper", "", &[("STUB_HOOKS", "1")]);
+    let lead = local(&d, &work, "Reimu", None);
+    let o = inside(&d, &lead, &["new", "--cloud", "--name", "Aya", "--prompt-file", "-"]);
+    assert!(o.status.success(), "{}", err(&o));
+    common::wait(|| read(&d) >= 1, "a first look");
+    let bg = waiting(&d, &lead, &["Aya", "--timeout", "60s"]);
+    logs(&d, &turns(1));
+    clock(&d, T0 + 30);
+    let o = bg.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    let l: Value = serde_json::from_str(out(&o).lines().next().unwrap()).unwrap();
+    assert_eq!((&l["news"], &l["state"]), (&json!(true), &json!("resting")), "{l}");
+    assert_eq!(l["answer"], "Report 1, long … [+512 chars]");
+    // Its lead collected it: nothing rang.
+    assert!(told(&d).is_empty(), "{:?}", told(&d));
+    // The answer as the log cut it, and where the whole of it is.
+    let o = inside(&d, &lead, &["read", "Aya"]);
+    assert!(out(&o).contains("Report 1, long … [+512 chars]"), "{}", out(&o));
+    assert!(
+        out(&o).contains(&format!("[end of Aya's report; all of it at {LINK}]")),
+        "{}",
+        out(&o)
+    );
+    let o = inside(&d, &lead, &["read", "Aya", "--screen"]);
+    assert!(err(&o).contains(&format!("Aya works on claude.ai, with no screen here: {LINK}")));
+
+    // Its lead says more: looked at at once, and its next turn counted.
+    let n = looks(&d);
+    let o = inside(&d, &lead, &["cloud", "say", "Aya", "more"]);
+    assert!(out(&o).contains("gensokyo tells when it has answered"), "{}", err(&o));
+    common::wait(|| looks(&d) > n, "a look at once");
+    // Nobody waits on it, and its lead rests: the user hears.
+    logs(&d, &turns(2));
+    clock(&d, T0 + 60);
+    common::wait(|| told(&d).len() == 1, "the user told");
+    assert_eq!(told(&d), [format!("☁ Aya answered: {LINK}")]);
+    // Its lead busy: held, and rung once the lead's turn ends without it.
+    let status = |s: &str| {
+        let f = d.dir.join(format!("stub/{}.status", lead["id"].as_str().unwrap()));
+        std::fs::write(f, s).unwrap()
+    };
+    status("busy");
+    at_one(&d, "Reimu", |r| r["state"] == "busy");
+    logs(&d, &turns(3));
+    // Idle, it is looked at seldom: a jump of over a minute (a Mac waking) looks at once.
+    clock(&d, T0 + 200);
+    at_one(&d, "Aya", |r| r["turns"] == 3);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(told(&d).len(), 1, "held");
+    status("idle");
+    // Input has no reply: the list after it says it was taken.
+    let (mut w, mut lines) = d.connect();
+    let input = json!({"t": "input", "id": 2, "who": "Reimu", "bytes": b"carry on\r"});
+    std::io::Write::write_all(
+        &mut w,
+        format!("{input}\n{}\n", json!({"t": "list", "id": 1})).as_bytes(),
+    )
+    .unwrap();
+    common::next(&mut lines);
+    common::wait(|| told(&d).len() == 2, "rung when its lead rests");
+
+    // Waited on with another that has no news: held, and rung when the wait times out.
+    local(&d, &work, "Patchouli", Some(&lead));
+    let bg = waiting(&d, &lead, &["Aya", "Patchouli", "--timeout", "3s"]);
+    logs(&d, &turns(4));
+    clock(&d, T0 + 300);
+    at_one(&d, "Aya", |r| r["turns"] == 4);
+    assert_eq!(told(&d).len(), 2, "held while the wait holds");
+    assert_eq!(bg.wait_with_output().unwrap().status.code(), Some(3), "timed out");
+    common::wait(|| told(&d).len() == 3, "rung once the wait ended without it");
+}
+
+/// Resident `name`'s line in `list`, once `f` holds for it.
+fn at_one(d: &Daemon, name: &str, f: impl Fn(&Value) -> bool) -> Value {
+    let one = || d.list().into_iter().find(|r| r["name"] == name);
+    common::wait(|| one().is_some_and(|r| f(&r)), name);
+    one().unwrap()
+}
+
+#[test]
+fn a_lead_says_more_only_to_a_cloud_helper_of_its_own_that_is_still_here() {
+    let (d, work) = setup_with("say-lead", "", &[("STUB_HOOKS", "1")]);
+    let reimu = local(&d, &work, "Reimu", None);
+    let sanae = local(&d, &work, "Sanae", None);
+    let o = inside(&d, &reimu, &["new", "--cloud", "--name", "Aya", "--prompt-file", "-"]);
+    assert!(o.status.success(), "{}", err(&o));
+    local(&d, &work, "Patchouli", Some(&reimu));
+    let said = || std::fs::read_to_string(d.dir.join("stub/cloud.args")).is_ok();
+    let say = |me: &Value, who: &str| err(&inside(&d, me, &["cloud", "say", who, "more"]));
+    assert!(say(&sanae, "Aya").contains("Aya is not one of your helpers"));
+    assert!(say(&reimu, "Patchouli").contains("Patchouli works here, not on claude.ai"));
+    // Not a session of its own: a routine's run by name or id, a session's link.
+    for who in ["morning", "cse_01NewStub", LINK] {
+        let e = say(&reimu, who);
+        assert!(e.contains("the user says what a cloud run is told next"), "{who}: {e}");
+    }
+    assert!(!said(), "nothing reached claude");
+    // Its log stays the user's, its own helper's too.
+    let o = inside(&d, &reimu, &["cloud", "log", "Aya"]);
+    assert!(!o.status.success() && err(&o).contains("stays out of residents"), "{}", err(&o));
+    // Closed, it is followed no more, so it hears nothing either.
+    inside(&d, &reimu, &["close", "Aya"]);
+    assert!(say(&reimu, "Aya").contains("Aya is closed: gensokyo recall Aya follows it again"));
+    assert!(!said());
+}
+
+/// What `lead` is told of its helpers after a compact.
+fn briefed(d: &Daemon, lead: &Value) -> String {
+    let hook =
+        json!({"hook_event_name": "SessionStart", "session_id": lead["id"], "source": "compact"});
+    let o = fed(d, lead, &["_hook"], hook.to_string().as_bytes());
+    let v: Value = serde_json::from_str(&out(&o)).unwrap_or_default();
+    v["hookSpecificOutput"]["additionalContext"].as_str().unwrap_or_default().to_string()
+}
+
+#[test]
+fn a_lead_hears_of_its_cloud_helpers_after_a_compact_and_one_left_behind_closes_once_idle() {
+    let (d, work) = setup_with("orphan", "", &[("STUB_HOOKS", "1")]);
+    let lead = local(&d, &work, "Reimu", None);
+    let o = inside(&d, &lead, &["new", "--cloud", "--name", "Aya", "--prompt-file", "-"]);
+    assert!(o.status.success(), "{}", err(&o));
+    common::wait(|| read(&d) >= 1, "a first look");
+    let told = briefed(&d, &lead);
+    assert!(told.contains(&format!("- Aya: working on claude.ai, {LINK}")), "{told}");
+    logs(&d, &turns(1));
+    clock(&d, T0 + 30);
+    at_one(&d, "Aya", |r| r["turns"] == 1);
+    let told = briefed(&d, &lead);
+    assert!(told.contains("- Aya: resting on claude.ai"), "{told}");
+    assert!(told.contains("a turn you have not read: `gensokyo read Aya`"), "{told}");
+
+    // Its lead gone, it works on: still followed two hours on.
+    logs(&d, &format!("{}[2026-10-19T02:00:00Z] user: more\n", turns(1)));
+    // Idle, it is looked at seldom: a jump of over a minute looks at once.
+    clock(&d, T0 + 100);
+    at_one(&d, "Aya", |r| r["detail"] == "working");
+    d.cli(&["close", "Reimu"]);
+    at_one(&d, "Reimu", |r| r["state"] == "departed");
+    let settle = || std::thread::sleep(std::time::Duration::from_millis(600));
+    settle();
+    clock(&d, T0 + 2 * 3600 + 120);
+    settle();
+    assert!(at_one(&d, "Aya", |_| true)["departed"].is_null(), "working, so kept");
+    // Its turn over, two idle hours later it is closed: in recall, still its lead's.
+    logs(&d, &turns(2));
+    clock(&d, T0 + 2 * 3600 + 200);
+    at_one(&d, "Aya", |r| r["detail"] == "idle");
+    // Seen idle by a tick before the clock moves on: the two hours count from there.
+    settle();
+    clock(&d, T0 + 4 * 3600 + 200);
+    common::wait(|| d.list().iter().all(|r| r["name"] != "Aya"), "closed");
+    // The user hears where it goes on: they never started it.
+    let (mut w, mut lines) = d.connect();
+    std::io::Write::write_all(&mut w, format!("{}\n", json!({"t": "watch"})).as_bytes()).unwrap();
+    let kept = loop {
+        let v = common::next(&mut lines);
+        if v["t"] == "notices" {
+            break v["notices"].to_string();
+        }
+    };
+    assert!(kept.contains(&format!("☁ Aya closed, its lead gone: the session goes on at {LINK}")));
+    let all = d.req(json!({"t": "list", "id": 1, "all": true}))["residents"].clone();
+    let aya = all.as_array().unwrap().iter().find(|r| r["name"] == "Aya").cloned().unwrap();
+    assert_eq!(aya["owner"], lead["id"]);
 }

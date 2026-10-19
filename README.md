@@ -482,7 +482,7 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
 - **In the shrine.** In the summon dialog, the role list's last entry is "a cloud session": what
   you type is its task. `close` takes it out of the sidebar; the session goes on at claude.ai
   (archive it there). A restart, a logout or a crash bring it back; quit leaves it departed,
-  and `resume` brings it back. Only you start one.
+  and `resume` brings it back.
 - **Followed.** The daemon reads the session's log with a courier: every 30 s while it starts or
   works (every minute after five), every 10 minutes once idle or quiet for half an hour, hourly
   after a day. The sidebar
@@ -495,6 +495,10 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
   last answer. Enter opens it in the browser, `s` says something to it, `x` closes it.
 - **By name.** `gensokyo cloud say NAME "…"` is its next turn, `gensokyo cloud log NAME` a page
   of its log, `gensokyo new --teleport NAME` takes it over here.
+- **As a helper.** A lead in `auto` or `bypassPermissions` mode (a cloud session runs its tools
+  unasked) may start one as its helper, counted with its others. It waits on it, reads it (with
+  its link) and says more to it with `cloud say`, as for any helper; it can say nothing to anyone
+  else's session or a routine's run. Its log and taking it over stay yours.
 
 ## Cloud routines
 
@@ -569,12 +573,12 @@ when the directory is in a git repository; leaving it empty works right there. g
 removes a worktree: `git worktree remove` is yours. It does not use `claude --worktree`, whose
 `/exit` stops at a keep-or-remove question. A lead's skill gives each helper its own this way.
 
-A lead has at most 10 live helpers (`HELPERS=` in the config), and a helper can't summon, though
-it keeps Claude Code's own subagents. A helper's finished turn is quiet while its lead waits on
+A lead has at most 10 live helpers (`HELPERS=` in the config), its cloud sessions counted, and
+a helper can't summon, though it keeps Claude Code's own subagents. A helper's finished turn is quiet while its lead waits on
 it or is busy, since the lead will read it; it rings once the lead's turn ends without having
 done so. Its permission prompts and questions always ring: only you can answer them. A helper
-whose lead has left for good is closed after two hours idle; a lead recalled before then keeps
-it.
+whose lead has left for good is closed after two hours idle (a cloud session once its turn
+ends); a lead recalled before then keeps it.
 
 ## What residents are told
 

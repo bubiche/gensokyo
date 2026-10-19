@@ -117,6 +117,8 @@ pub(super) struct Shrine {
     pub(super) cloud: super::cloud::Watch,
     /// Couriers out now.
     pub(super) couriers: usize,
+    /// A lead's id for each cloud helper of its being started: counted as its until it arrives.
+    pub(super) starting: Vec<String>,
 }
 
 impl Shrine {
@@ -298,13 +300,12 @@ fn helpers_most() -> usize {
     crate::paths::config("HELPERS").and_then(|v| v.trim().parse().ok()).unwrap_or(10)
 }
 
-/// Whether resident `lead` may have one more live helper.
-fn room(sh: &Shrine, lead: &str) -> Result<(), String> {
-    let n = sh
-        .entries
-        .iter()
-        .filter(|e| e.handle.is_some() && e.rec.owner.as_deref() == Some(lead))
-        .count();
+/// Whether resident `lead` may have one more live helper: its cloud sessions count, those still
+/// being started too.
+pub(super) fn room(sh: &Shrine, lead: &str) -> Result<(), String> {
+    let live = |e: &&Entry| e.handle.is_some() || cloud_here(e);
+    let mine = sh.entries.iter().filter(live).filter(|e| e.rec.owner.as_deref() == Some(lead));
+    let n = mine.count() + sh.starting.iter().filter(|l| *l == lead).count();
     let most = helpers_most();
     match n < most {
         true => Ok(()),
@@ -424,9 +425,8 @@ pub(super) fn may_summon(
         }
     }
     if s.cloud {
-        return may_cloud(s, caller);
-    }
-    if caller.is_some() && s.teleport.is_some() {
+        may_cloud(s)?;
+    } else if caller.is_some() && s.teleport.is_some() {
         return Err("a cloud run's conversation quotes whatever the run read, and that stays out \
                     of residents' reach: the user takes a run over (gensokyo new --teleport)"
             .into());
@@ -445,6 +445,13 @@ pub(super) fn may_summon(
         }
         room(&sh, c)?;
         let lead = mode_of(me);
+        // On claude.ai it runs its tools and connectors with nobody asked.
+        if s.cloud && !mode_within("auto", &lead) {
+            return Err(format!(
+                "a cloud helper runs its tools unasked, which is wider than your mode ({lead}): \
+                 the user can start the session (gensokyo new --cloud)"
+            ));
+        }
         if let Some(m) = s.mode.as_deref().filter(|m| !mode_within(m, &lead)) {
             return Err(format!(
                 "a helper works in your mode ({lead}) or a narrower one, so not {m}; the user \
@@ -475,12 +482,9 @@ pub(super) fn may_summon(
     Ok(())
 }
 
-/// Whether this cloud session would be refused before git or claude is asked: it is the user's,
-/// its task is its prompt, and claude.ai sets up the rest.
-fn may_cloud(s: &Summon, caller: Option<&str>) -> Result<(), String> {
-    if caller.is_some() {
-        return Err("the user starts cloud sessions: each is a session on claude.ai".into());
-    }
+/// Whether this cloud session would be refused before git or claude is asked: its task is its
+/// prompt, and claude.ai sets up the rest.
+fn may_cloud(s: &Summon) -> Result<(), String> {
     let task = s.prompt.as_deref().unwrap_or_default().trim();
     if task.is_empty() {
         return Err("a cloud session needs a prompt: its task".into());
@@ -614,7 +618,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
 }
 
 /// A cloud session `claude --cloud` made, in the shrine: an entry with no process, its prompt
-/// the task it was given.
+/// the task it was given, and its lead's helper when a lead started it.
 pub(super) fn arrive(
     shrine: &Shared,
     name: Option<String>,
@@ -622,6 +626,7 @@ pub(super) fn arrive(
     prompt: String,
     argv: Vec<String>,
     cloud: store::Cloud,
+    owner: Option<String>,
 ) -> Result<proto::Resident, String> {
     let mut sh = shrine.borrow_mut();
     if sh.quitting {
@@ -648,7 +653,7 @@ pub(super) fn arrive(
         role: None,
         system_prompt: None,
         teleport: None,
-        owner: None,
+        owner,
         quiet: false,
         turns: 0,
         needs: 0,

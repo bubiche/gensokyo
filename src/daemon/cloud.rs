@@ -369,6 +369,29 @@ pub(super) fn run_of(sh: &Shrine, who: &str) -> Result<String, String> {
     cloud::run_id(who).map_or_else(|| newest(sh, who), Ok)
 }
 
+/// The session of `lead`'s cloud helper `who`, here: never a routine's run, whatever its name.
+fn helper_run(sh: &Shrine, lead: &str, who: &str) -> Result<String, String> {
+    let r = super::lead::record(sh, who)
+        .filter(|r| r.cloud.is_some() || r.owner.as_deref() == Some(lead));
+    let r = r.ok_or_else(|| {
+        format!(
+            "the user says what a cloud run is told next (gensokyo cloud say); tell them what you \
+             would say to {who}"
+        )
+    })?;
+    if r.owner.as_deref() != Some(lead) {
+        return Err(format!("{} is not one of your helpers; only the user can do that", r.name));
+    }
+    if r.cloud.is_none() {
+        return Err(format!("{} works here, not on claude.ai: SendMessage reaches it", r.name));
+    }
+    let here = sh.entries.iter().any(|e| e.rec.id == r.id && super::shrine::cloud_here(e));
+    match (here, r.cloud) {
+        (true, Some(c)) => Ok(c.session),
+        _ => Err(format!("{} is closed: gensokyo recall {} follows it again", r.name, r.name)),
+    }
+}
+
 /// The newest run the watch has seen of a routine, by name or id.
 fn newest(sh: &Shrine, who: &str) -> Result<String, String> {
     if !on() {
@@ -532,13 +555,21 @@ pub(super) async fn act(shrine: &Shared, who: &str, act: CloudAct) -> Result<Str
     })
 }
 
-/// `cloud_say`: the user's words, the next turn of a run. The watch looks at that run again at
-/// once, and tells when the turn ends.
-pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String, String> {
+/// `cloud_say`: the user's words, the next turn of a run, or a lead's (`caller`) to a cloud
+/// helper of its own. The watch looks at that run again at once, and tells when the turn ends.
+pub(super) async fn say(
+    shrine: &Shared,
+    who: &str,
+    text: &str,
+    caller: Option<&str>,
+) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("nothing to say".into());
     }
-    let id = run_of(&shrine.borrow(), who)?;
+    let id = match caller {
+        Some(c) => helper_run(&shrine.borrow(), c, who)?,
+        None => run_of(&shrine.borrow(), who)?,
+    };
     // Before the words are queued: the run's events come after this.
     let at = super::rituals::now();
     let (stdout, code, stderr) = claude_p(shrine, cloud::say_args(&id, text)).await?;
@@ -565,9 +596,32 @@ pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String
 
 /// `new --cloud`: a session on claude.ai from the pushed branch of a GitHub repository, its
 /// worktree made and pushed first when one is asked for. Its entry, and how the worktree came.
+/// A lead's (`caller`) is its helper, counted from the start: two at once may both have passed
+/// the summon's count, and neither should push a branch it may not use.
 pub(super) async fn start(
     shrine: &Shared,
+    s: Summon,
+    caller: Option<&str>,
+) -> Result<(proto::Resident, Option<String>), String> {
+    if let Some(lead) = caller {
+        let mut sh = shrine.borrow_mut();
+        super::shrine::room(&sh, lead)?;
+        sh.starting.push(lead.into());
+    }
+    let r = make(shrine, s, caller).await;
+    if let Some(lead) = caller {
+        let mut sh = shrine.borrow_mut();
+        if let Some(i) = sh.starting.iter().position(|l| l == lead) {
+            sh.starting.remove(i);
+        }
+    }
+    r
+}
+
+async fn make(
+    shrine: &Shared,
     mut s: Summon,
+    caller: Option<&str>,
 ) -> Result<(proto::Resident, Option<String>), String> {
     let repo = super::worktree::github(Path::new(&s.cwd)).await?;
     let env = s.env.take().or_else(|| paths::config("CLOUD_ENV")).filter(|e| !e.trim().is_empty());
@@ -596,7 +650,8 @@ pub(super) async fn start(
     args.pop();
     let cloud = Cloud { session, url, repo, base, env, branch: None, ended: None };
     let cwd = dir.to_string_lossy().into_owned();
-    let r = super::shrine::arrive(shrine, s.name, cwd, task, args, cloud)?;
+    let owner = caller.map(String::from);
+    let r = super::shrine::arrive(shrine, s.name, cwd, task, args, cloud, owner)?;
     Ok((r, note))
 }
 

@@ -156,14 +156,24 @@ fn seen(shrine: &Shared, sh: &mut Shrine, i: usize, body: &str, now: i64) {
     if seek {
         find_branch(shrine, e);
     }
-    let r = e.rec.clone();
+    let (r, failed) = (e.rec.clone(), last.failed);
     super::lead::keep_answer(&sh.store, &r, ended, Some(&last.answer));
     let _ = sh.store.save(&r);
-    let url = &r.cloud.as_ref().map_or("", |c| c.url.as_str());
-    let how = if last.failed { "stopped on an error" } else { "answered" };
-    log(json!({"ev": "follow", "id": r.id, "turns": r.turns, "failed": last.failed}));
-    tell(sh, &format!("☁ {} {how}: {url}", r.name));
+    log(json!({"ev": "follow", "id": r.id, "turns": r.turns, "failed": failed}));
+    // A helper's, held while its lead will collect it.
+    if !super::lead::hush(sh, i) {
+        answered(sh, i, failed);
+    }
     touch(sh);
+}
+
+/// The user told its turn has ended, with its link.
+pub(super) fn answered(sh: &mut Shrine, i: usize, failed: bool) {
+    let r = &sh.entries[i].rec;
+    let url = r.cloud.as_ref().map_or("", |c| c.url.as_str());
+    let how = if failed { "stopped on an error" } else { "answered" };
+    let text = format!("☁ {} {how}: {url}", r.name);
+    tell(sh, &text);
 }
 
 /// Gone from claude.ai, archived or deleted there: departed here, and a recall follows it again.

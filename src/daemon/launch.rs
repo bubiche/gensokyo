@@ -140,6 +140,11 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
             a.extend([flag.into(), v.into()]);
         }
     }
+    // Reachable from claude.ai and the phone app under its own name; a resume keeps its link.
+    // Its value is optional to claude, so the name is always given.
+    if crate::paths::config("REMOTE_CONTROL").as_deref() == Some("on") {
+        a.extend(["--remote-control".into(), o.name.into()]);
+    }
     a.extend(o.extra.iter().map(OsString::from));
     if o.resume {
         a.extend(["--resume".into(), o.session.into()]);

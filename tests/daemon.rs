@@ -908,6 +908,31 @@ fn scrollback_is_the_residents_and_typing_brings_it_back_to_the_live_screen() {
 }
 
 #[test]
+fn remote_control_in_the_config_reaches_every_launch_under_the_residents_name() {
+    let d = Daemon::start("remote", &[]);
+    let remote = |id: &Value| {
+        let a = d.stub(id, "args");
+        a.split(' ').skip_while(|x| *x != "--remote-control").nth(1).map(str::to_string)
+    };
+    let r = d.summon(json!({"name": "Reimu", "prompt": "first"}));
+    assert_eq!(remote(&r["id"]), None);
+
+    std::fs::create_dir_all(d.dir.join("conf")).unwrap();
+    std::fs::write(d.dir.join("conf/config"), "REMOTE_CONTROL=on\n").unwrap();
+    let m = d.summon(json!({"name": "Marisa", "prompt": "first"}));
+    assert_eq!(remote(&m["id"]).as_deref(), Some("Marisa"));
+    assert!(d.stub(&m["id"], "args").trim_end().ends_with(" -- first"));
+
+    // Read at every launch, so a recall picks it up.
+    d.stub(&r["id"], "ready");
+    assert_eq!(d.req(json!({"t": "banish", "id": 3, "who": "Reimu"}))["t"], "done");
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", r["id"].as_str().unwrap()))).unwrap();
+    assert_eq!(d.req(json!({"t": "recall", "id": 4, "who": "Reimu"}))["t"], "summoned");
+    assert!(d.stub(&r["id"], "args").contains(" --resume "));
+    assert_eq!(remote(&r["id"]).as_deref(), Some("Reimu"));
+}
+
+#[test]
 fn recall_resumes_a_banished_resident_with_its_flags() {
     let d = Daemon::start("recall", &[]);
     let r = d.summon(json!({"name": "Youmu", "model": "haiku", "prompt": "first"}));

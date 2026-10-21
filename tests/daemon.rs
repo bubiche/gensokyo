@@ -914,11 +914,17 @@ fn remote_control_in_the_config_reaches_every_launch_under_the_residents_name() 
         let a = d.stub(id, "args");
         a.split(' ').skip_while(|x| *x != "--remote-control").nth(1).map(str::to_string)
     };
+    let doctor = || {
+        let out = common::out(&d.cli(&["doctor"]));
+        out.lines().find(|l| l.trim_start().starts_with("remote")).unwrap_or_default().to_string()
+    };
     let r = d.summon(json!({"name": "Reimu", "prompt": "first"}));
     assert_eq!(remote(&r["id"]), None);
+    assert!(doctor().contains("off"), "{}", doctor());
 
     std::fs::create_dir_all(d.dir.join("conf")).unwrap();
     std::fs::write(d.dir.join("conf/config"), "REMOTE_CONTROL=on\n").unwrap();
+    assert!(doctor().contains("on: every resident started from now"), "{}", doctor());
     let m = d.summon(json!({"name": "Marisa", "prompt": "first"}));
     assert_eq!(remote(&m["id"]).as_deref(), Some("Marisa"));
     assert!(d.stub(&m["id"], "args").trim_end().ends_with(" -- first"));

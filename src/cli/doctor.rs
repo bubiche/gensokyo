@@ -83,6 +83,16 @@ pub fn main() -> Result<(), String> {
         },
     );
     line("cloud", super::cloud::status());
+    line(
+        "remote",
+        if paths::config("REMOTE_CONTROL").as_deref() == Some("on") {
+            "on: every resident started from now can be typed into from claude.ai and the \
+             Claude app"
+                .into()
+        } else {
+            "off (REMOTE_CONTROL=on in the config turns on Remote Control for residents)".into()
+        },
+    );
     line("at login", login::status());
     // A daemon launchd starts has the agent's environment, not this shell's.
     if let login::Agent::Ours(_) = login::agent() {

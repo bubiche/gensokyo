@@ -224,11 +224,13 @@ config runs your own `statusLine` command instead, with the same input.
 **Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every resident starts with Claude
 Code's Remote Control, under its own name: the Claude app on your phone and claude.ai/code list
 it, and a prompt or an answer can be given there while it stays in the shrine. Once it has had a
-prompt, a recall, a renew or a comeback keeps its link. It is off by default, since whoever holds your claude.ai login can
-then type into every resident; it needs that login (not an API key), and the Mac awake and
-online. The setting is read at each launch, so `gensokyo renew Marisa` brings it to a resident
-already running. Headless ritual runs and cloud sessions don't take it. Claude Code's own
-`/remote-control` turns it on in one resident until that one starts again.
+prompt, a recall, a renew or a comeback keeps its link. It is off by default, since whoever
+holds your claude.ai login can then type into every resident; it needs that login (not an API
+key), and the Mac awake and online. The setting is read at each launch, so `gensokyo renew
+Marisa` brings it to a resident already running, and `doctor` says whether it is on. Headless
+ritual runs and cloud sessions don't take it. Claude Code's own `/remote-control` turns it on in
+one resident until that one starts again. On the web, a permission prompt's main button is
+"Always allow", which lasts the session; "Allow once" is under its arrow.
 
 ## Spell cards
 

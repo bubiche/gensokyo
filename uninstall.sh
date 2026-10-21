@@ -111,12 +111,12 @@ elif [ -d "$dir" ]; then
   say "  left alone  $(tilde "$dir") does not look like a gensokyo install (--dir names another)"
 fi
 
-# Your config and your rituals; the records, journals and run logs.
+# Your config and your rituals; the records, journals, run logs and ledgers.
 if [ "$keep" = 1 ]; then
   for p in "$config" "$state"; do deletable "$p" && say "  kept  $(tilde "$p") (--keep-data)"; done
 else
   deletable "$config" && gone "config and rituals" "$config"
-  deletable "$state" && gone "records, journal and run logs" "$state"
+  deletable "$state" && gone "records, journal, run logs and ledgers" "$state"
 fi
 
 # ---------------------------------------------------------------- what that came to

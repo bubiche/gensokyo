@@ -194,8 +194,11 @@ async fn summon_type_click_detach_reattach() {
     let s = c.wait("the stub on screen", |s| s.contains("stub-claude Reimu")).await;
     assert!(s.contains("1 ○ Reimu"), "{s}");
     let args = stub(&dir, "args");
-    assert!(args.contains("be brief --append-system-prompt-file "), "{args}");
-    assert!(args.contains("/share/roles/chief-of-staff.md "), "{args}");
+    assert!(
+        args.contains("\n\nYou are a chief of staff.") && !args.contains("ledger: project"),
+        "{args}"
+    );
+    assert!(args.contains("\n\nbe brief --"), "{args}");
     // Typing waits until the stub reads, and past the reattach nudge's two resizes: a SIGWINCH
     // in the middle of the stub's `read` would lose the line.
     c.wait("the stub reading", |_| ready(&dir) == 1).await;

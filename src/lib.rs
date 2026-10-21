@@ -8,6 +8,7 @@ pub mod cron;
 pub mod daemon;
 pub mod frontmatter;
 pub mod hooks;
+pub mod ledger;
 pub mod paths;
 pub mod proto;
 pub mod ritual;

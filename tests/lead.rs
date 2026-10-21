@@ -354,6 +354,47 @@ fn a_lead_hears_of_its_helpers_after_a_compact_or_clear_and_its_news_waits_still
 }
 
 #[test]
+fn a_lead_with_a_ledger_is_pointed_back_to_it_after_a_compact_or_clear() {
+    let d = daemon("ledger", &[]);
+    let roles = d.dir.join("conf/roles");
+    std::fs::create_dir_all(&roles).unwrap();
+    std::fs::write(roles.join("cos.md"), "---\nledger: project\n---\nKeep track.\n").unwrap();
+    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Reimu", "role": "cos"}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    let lead = r["resident"].clone();
+    d.stub(&lead["id"], "ready");
+    let args = d.stub(&lead["id"], "args");
+    let i = args.find("ledger is `").expect("a ledger") + "ledger is `".len();
+    let file = &args[i..i + args[i..].find('`').unwrap()];
+    let pointer = format!("Your ledger is `{file}`: read it before anything else.");
+
+    // No helpers yet: the ledger alone, and only when the conversation was taken.
+    for source in ["compact", "clear"] {
+        let told = context(&session_start(&d, &lead, source));
+        assert_eq!(told, pointer, "{source}");
+    }
+    assert_eq!(session_start(&d, &lead, "startup"), "");
+    assert_eq!(session_start(&d, &lead, "resume"), "");
+
+    // A helper in the same role keeps no ledger of its own: the project's is its lead's.
+    let mut c = spawn(&d, &lead, &["new", "--json", "--name", "Marisa", "--role", "cos"]);
+    c.stdin.take().unwrap().write_all(b"").unwrap();
+    let o = c.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    let marisa: Value = serde_json::from_str(&out(&o)).unwrap();
+    d.stub(&marisa["id"], "ready");
+    let args = d.stub(&marisa["id"], "args");
+    assert!(!args.contains("ledger is `") && !args.contains(&format!("Read(/{file})")), "{args}");
+    assert_eq!(session_start(&d, &marisa, "compact"), "");
+
+    // With helpers, the ledger first and then who is still out.
+    let told = context(&session_start(&d, &lead, "compact"));
+    let (first, rest) = told.split_once('\n').unwrap();
+    assert_eq!(first, pointer);
+    assert!(rest.contains("helpers you summoned") && rest.contains("- Marisa: "), "{told}");
+}
+
+#[test]
 fn helpers_are_capped_cannot_summon_and_belong_to_their_lead_alone() {
     let d = daemon("cap", &[]);
     std::fs::create_dir_all(d.dir.join("conf")).unwrap();

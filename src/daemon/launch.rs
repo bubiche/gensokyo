@@ -27,8 +27,10 @@ pub struct Options<'a> {
     pub extra: &'a [String],
     /// A helper's lead, by name.
     pub lead: Option<&'a str>,
-    /// The role's file, found.
-    pub role: Option<&'a Path>,
+    /// The role's words.
+    pub role: Option<&'a str>,
+    /// The project's ledger, for a role that keeps one.
+    pub ledger: Option<&'a Path>,
     /// The user's own words for the system prompt.
     pub system_prompt: Option<&'a str>,
     /// The cloud run it is taken over from: its conversation is copied when there is none to
@@ -86,7 +88,7 @@ pub fn has_conversation(session: &str) -> bool {
 /// Hooks, the status line and the socket allowlist: per session, so nothing in `~/.claude`
 /// changes. Claude Code merges this over the user's and the project's own settings; the
 /// statusLine key is replaced whole, so the user's `padding` is carried over.
-pub fn settings(p: &Paths, id: &str, cwd: &Path) -> String {
+pub fn settings(p: &Paths, id: &str, cwd: &Path, ledger: Option<&Path>) -> String {
     let exe = sh_quote(&p.exe.to_string_lossy());
     let cmd = json!({"type": "command", "command": format!("{exe} _hook")});
     let hook = json!([{"hooks": [cmd]}]);
@@ -104,7 +106,7 @@ pub fn settings(p: &Paths, id: &str, cwd: &Path) -> String {
         },
         "statusLine": status,
         "sandbox": {"network": {"allowUnixSockets": [p.socket]}},
-        "permissions": {"deny": config_rules()},
+        "permissions": {"deny": config_rules(), "allow": ledger_rules(ledger)},
     })
     .to_string()
 }
@@ -118,22 +120,26 @@ fn config_rules() -> Vec<String> {
     [Some(dir), real].into_iter().flatten().map(|d| format!("Edit(/{}/**)", d.display())).collect()
 }
 
+/// A ledger is outside the project, where reading asks and writing asks again; its own file is
+/// the resident's to keep without asking, and nothing else there.
+fn ledger_rules(ledger: Option<&Path>) -> Vec<String> {
+    let f = ledger.map(|f| f.display().to_string());
+    f.into_iter().flat_map(|f| [format!("Read(/{f})"), format!("Edit(/{f})")]).collect()
+}
+
 pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     let mut a: Vec<OsString> = vec!["--disallowed-tools".into()];
     // The variadic list ends at the next flag, so it goes first.
     a.extend(DISALLOWED.map(OsString::from));
-    a.extend(["--settings".into(), settings(p, o.id, cwd).into()]);
+    a.extend(["--settings".into(), settings(p, o.id, cwd, o.ledger).into()]);
     a.extend(["--plugin-dir".into(), p.share.join("plugin").into_os_string()]);
-    // Of two `--append-system-prompt`s claude keeps the last, so the user's words join ours;
-    // a `--append-system-prompt-file` is kept beside it, after it.
-    let mut system = system_paragraph(o.name, o.lead);
-    if let Some(s) = o.system_prompt {
+    // Of two `--append-system-prompt`s claude keeps the last, so the role's words and then the
+    // user's join ours.
+    let mut system = system_paragraph(o.name, o.lead, o.ledger);
+    for s in [o.role, o.system_prompt].into_iter().flatten() {
         system = format!("{system}\n\n{s}");
     }
     a.extend(["--append-system-prompt".into(), system.into()]);
-    if let Some(r) = o.role {
-        a.extend(["--append-system-prompt-file".into(), r.into()]);
-    }
     if o.teleport.is_some() {
         a.extend(["--system-prompt-snapshot".into(), "off".into()]);
     }
@@ -166,8 +172,8 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
 /// One paragraph appended to the system prompt. A resident's context is the user's budget, so it
 /// says only what no button can: its name, that the others can be written to (through the skill,
 /// which is not reached for unless named here), where a standing schedule goes, and how to lead
-/// helpers; a helper hears who its lead is instead.
-pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
+/// helpers; a helper hears who its lead is instead. A role that keeps a ledger hears where it is.
+pub fn system_paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -> String {
     let role = match lead {
         None => "To hand work to residents you summon, brief, wait on and close yourself \
                  (helpers), use the `gensokyo-lead` skill."
@@ -179,6 +185,15 @@ pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
              use subagents (the Agent tool) to split your own work."
         ),
     };
+    let ledger = ledger.map_or(String::new(), |f| {
+        format!(
+            " This project's ledger is `{}`: a file that outlasts this conversation, its \
+             compaction or `/clear`, and this session, for whoever holds your role here next. \
+             Read it before you start, keep it as your role says, and change it with the Edit \
+             tool, not the shell.",
+            f.display()
+        )
+    });
     format!(
         "You are running inside gensokyo, a cockpit that runs several Claude Code sessions \
          (residents) side by side on this machine; your resident name is {name}. The other \
@@ -189,7 +204,7 @@ pub fn system_paragraph(name: &str, lead: Option<&str>) -> String {
          `gensokyo-ritual` skill (or `gensokyo-cloud`, for a routine on claude.ai that runs while \
          this machine is off) and never the built-in `schedule` skill, CronCreate, RemoteTrigger \
          or scheduled tasks; both take times on this machine's own clock, so never convert a time \
-         you are given to UTC. {role}"
+         you are given to UTC. {role}{ledger}"
     )
 }
 

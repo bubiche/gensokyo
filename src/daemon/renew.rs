@@ -267,12 +267,13 @@ fn relaunch(shrine: &Shared, sh: &mut Shrine, i: usize, exit: Exit) {
         MODES.contains(&m.as_str()) && (m != "bypassPermissions" || launched.as_ref() == Some(m))
     });
     match come_back(shrine, sh, &rec, mode) {
-        Ok((program, argv, handle, resumed)) => {
+        Ok(super::shrine::Back { program, argv, handle, resumed, ledger }) => {
             let e = &mut sh.entries[i];
             log(json!({"ev": "renewed", "id": rec.id, "name": rec.name, "pid": handle.pid,
                        "resumed": resumed}));
             e.rec.pid = super::shrine::running_as(&handle);
             (e.rec.program, e.rec.argv, e.rec.launched) = (program, argv, super::store::now());
+            e.rec.ledger = ledger;
             e.aware = e.aware.renewed(resumed);
             e.handle = Some(handle);
             e.renew = None;

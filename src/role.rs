@@ -1,9 +1,10 @@
 //! Roles: a paragraph appended to a resident's system prompt, which `/clear` and compaction keep
-//! where a first prompt is gone. A role is a markdown file read as it stands. They ship in
+//! where a first prompt is gone. A role is a markdown file, its words what follows an optional
+//! `---` block whose one setting is `ledger: project` (the `ledger` module). They ship in
 //! `share/roles/`; the user's own in the config dir's `roles/` shadow those of the same file
 //! name. A role with a `/` in it is a file of the user's anywhere, by its full path.
 
-use crate::frontmatter::name_ok;
+use crate::frontmatter::{self, name_ok};
 use crate::paths;
 use std::path::{Path, PathBuf};
 
@@ -50,4 +51,32 @@ pub fn find(role: &str, share: Option<&Path>) -> Result<PathBuf, String> {
     };
     let there = names(share).join(", ");
     Err(format!("no role {role} (there are {there}; yours go in {mine}/{file})"))
+}
+
+/// A role's file, read.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Role {
+    /// What goes into the system prompt: the file under its `---` block.
+    pub words: String,
+    /// `ledger: project`.
+    pub ledger: bool,
+}
+
+/// The role in `file`, found by `find`: a setting it does not know refuses it, as a ledger
+/// quietly not kept would be found out only after a compaction.
+pub fn read(file: &Path) -> Result<Role, String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let front = frontmatter::read(&text, &["ledger"]);
+    let bad = |why: String| Err(format!("role {}: {why}", file.display()));
+    if !front.unknown.is_empty() {
+        return bad(format!("not a role setting: {}", front.unknown.join(", ")));
+    }
+    let mut role = Role { words: front.body, ledger: false };
+    for f in front.fields.iter().filter(|f| f.key == "ledger") {
+        match f.text().as_str() {
+            "project" => role.ledger = true,
+            v => return bad(format!("ledger: {v} (ledger: project, or no ledger line)")),
+        }
+    }
+    Ok(role)
 }

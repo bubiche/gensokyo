@@ -149,7 +149,7 @@ fn a_due_fire_starts_one_run_with_its_flags_and_its_notes() {
     );
     assert!(args.contains(&tools), "{args}");
     assert!(args.contains("--model haiku"), "{args}");
-    assert!(args.contains("/share/roles/reviewer.md --model"), "{args}");
+    assert!(args.contains("\n\nYou are a reviewer."), "{args}");
     let memory = notes.join("memory.md");
     assert!(args.trim_end().ends_with(&format!(
         "Your notes from previous runs are at `{}`. Read them first; update them before you finish.",
@@ -416,8 +416,8 @@ fn a_headless_run_logs_what_it_said_and_what_it_was_refused() {
     assert!(log.contains("stub -p ran in"), "{log}");
     let args = std::fs::read_to_string(d.dir.join("stub/print.args")).unwrap();
     assert!(
-        args.contains("--append-system-prompt-file /")
-            && args.contains("/share/roles/researcher.md --"),
+        args.contains("--append-system-prompt You are a researcher.")
+            && !args.contains("--append-system-prompt-file"),
         "{args}"
     );
     assert!(log.contains(

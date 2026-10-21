@@ -147,19 +147,20 @@ fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall
     };
     // A shipped role by name, and words of the user's after gensokyo's own.
     let r = d.summon(json!({"name": "Reimu", "role": "reviewer", "system_prompt": "be kind"}));
-    let file = at(&r["id"], "--append-system-prompt-file").unwrap();
-    assert!(file.ends_with("/share/roles/reviewer.md"), "{file}");
+    // Its words go in ours, after gensokyo's paragraph and before the user's.
+    assert_eq!(at(&r["id"], "--append-system-prompt-file"), None);
     let ours = at(&r["id"], "--append-system-prompt").unwrap();
     assert!(ours.contains("name is Reimu.") && ours.ends_with("\n\nbe kind"), "{ours:?}");
+    assert!(ours.contains("\n\nYou are a reviewer."), "{ours:?}");
+    assert!(!ours.contains("ledger"), "{ours:?}");
 
     // One of the user's own shadows the shipped one of that name.
     let mine = d.dir.join("conf/roles");
     std::fs::create_dir_all(&mine).unwrap();
     std::fs::write(mine.join("reviewer.md"), "Be terse.").unwrap();
     let r = d.summon(json!({"name": "Marisa", "role": "reviewer"}));
-    let file = at(&r["id"], "--append-system-prompt-file").unwrap();
-    assert_eq!(file, mine.join("reviewer.md").to_str().unwrap());
-    assert!(!at(&r["id"], "--append-system-prompt").unwrap().contains("\n\n"));
+    let ours = at(&r["id"], "--append-system-prompt").unwrap();
+    assert!(ours.ends_with("\n\nBe terse.") && !ours.contains("a reviewer"), "{ours:?}");
 
     // A file by its path, from the CLI's own directory, found again at a recall with the words.
     let own = d.dir.join("mine.md");
@@ -169,7 +170,8 @@ fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall
     let o = o.args(["--system-prompt", "be kind"]).current_dir(&d.dir).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let r: Value = serde_json::from_slice(&o.stdout).unwrap();
-    assert_eq!(at(&r["id"], "--append-system-prompt-file").unwrap(), own.to_str().unwrap());
+    let mine = |r: &Value| at(&r["id"], "--append-system-prompt").unwrap();
+    assert!(mine(&r).ends_with("\n\nOnly read.\n\nbe kind"), "{:?}", mine(&r));
     let recall = |name: &str, r: &Value| {
         let gone = || d.list().iter().all(|x| x["name"] != name || !x["departed"].is_null());
         d.stub(&r["id"], "ready");
@@ -181,13 +183,11 @@ fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall
     };
     assert!(recall("Sanae", &r).status.success());
     assert!(d.stub(&r["id"], "args").contains(" --resume "));
-    assert_eq!(at(&r["id"], "--append-system-prompt-file").unwrap(), own.to_str().unwrap());
-    assert!(at(&r["id"], "--append-system-prompt").unwrap().ends_with("\n\nbe kind"));
+    assert!(mine(&r).ends_with("\n\nOnly read.\n\nbe kind"), "{:?}", mine(&r));
     // Its file gone, a conversation still comes back with the prompt Claude Code recorded...
     std::fs::remove_file(&own).unwrap();
     assert!(recall("Sanae", &r).status.success());
-    assert_eq!(at(&r["id"], "--append-system-prompt-file"), None);
-    assert!(at(&r["id"], "--append-system-prompt").unwrap().ends_with("\n\nbe kind"));
+    assert!(!mine(&r).contains("Only read.") && mine(&r).ends_with("\n\nbe kind"));
     // ...and one with nothing to resume is refused rather than started without it.
     std::fs::write(&own, "Only read.").unwrap();
     let y = d.summon(json!({"name": "Youmu", "role": own}));
@@ -206,6 +206,108 @@ fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall
         let mut req = json!({"t": "summon", "id": 3, "cwd": d.dir});
         req.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
         let e = d.req(req);
+        assert_eq!(e["t"], "error");
+        assert!(e["error"].as_str().unwrap().contains(why), "{e}");
+    }
+}
+
+#[test]
+fn a_role_that_keeps_a_ledger_gets_one_file_per_project() {
+    let d = Daemon::start("ledger", &[]);
+    let at = |id: &Value, f: &str| {
+        let args = d.stub(id, "args");
+        let i = args.find(&format!("{f} "))? + f.len() + 1;
+        Some(args[i..].split(" --").next().unwrap().to_string())
+    };
+    let roles = d.dir.join("conf/roles");
+    std::fs::create_dir_all(&roles).unwrap();
+    std::fs::write(roles.join("cos.md"), "---\nledger: project\n---\n\nKeep track.\n").unwrap();
+    // A repository, and a worktree of it elsewhere: one project.
+    let proj = d.dir.join("proj");
+    let tree = d.dir.join("w");
+    std::fs::create_dir_all(proj.join(".git/worktrees/w")).unwrap();
+    std::fs::write(proj.join(".git/worktrees/w/commondir"), "../..\n").unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let gitdir = format!("gitdir: {}\n", proj.join(".git/worktrees/w").display());
+    std::fs::write(tree.join(".git"), gitdir).unwrap();
+
+    let summon = |name: &str, role: &str, cwd: &std::path::Path| {
+        d.summon(json!({"name": name, "role": role, "cwd": cwd}))
+    };
+    let r = summon("Reimu", "cos", &proj);
+    let ours = at(&r["id"], "--append-system-prompt").unwrap();
+    assert!(ours.ends_with("\n\nKeep track.") && !ours.contains("---"), "{ours:?}");
+    let dir = std::fs::canonicalize(&d.dir).unwrap().join("ledgers");
+    let i = ours.find("ledger is `").expect("the ledger named") + "ledger is `".len();
+    let file = std::path::PathBuf::from(&ours[i..i + ours[i..].find('`').unwrap()]);
+    assert_eq!(file.parent(), Some(dir.as_path()), "{ours:?}");
+    let base = file.file_name().unwrap().to_str().unwrap();
+    assert!(base.starts_with("proj-") && base.ends_with(".md"), "{base}");
+    let head = std::fs::read_to_string(&file).unwrap();
+    let root = std::fs::canonicalize(&proj).unwrap();
+    assert!(head.contains(&root.display().to_string()), "{head}");
+    // Its own file to read and edit, unasked; nothing else of the state dir.
+    let settings = at(&r["id"], "--settings").unwrap();
+    for tool in ["Read", "Edit"] {
+        assert!(settings.contains(&format!("\"{tool}(/{})\"", file.display())), "{settings}");
+    }
+
+    // The worktree is the same project, and a file kept is kept.
+    std::fs::write(&file, "# mine\n").unwrap();
+    let m = summon("Marisa", "cos", &tree);
+    assert!(at(&m["id"], "--append-system-prompt").unwrap().contains(&file.display().to_string()));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "# mine\n");
+    // Another directory is another project; a role without the line keeps none.
+    let other = d.dir.join("other");
+    std::fs::create_dir_all(other.join(".git")).unwrap();
+    let s = summon("Sanae", "cos", &other);
+    let theirs = at(&s["id"], "--append-system-prompt").unwrap();
+    let i = theirs.find("ledger is `").expect("its own ledger") + "ledger is `".len();
+    let theirs = std::path::PathBuf::from(&theirs[i..i + theirs[i..].find('`').unwrap()]);
+    assert_ne!(theirs, file);
+    assert!(
+        theirs.is_file() && theirs.file_name().unwrap().to_str().unwrap().starts_with("other-")
+    );
+    let y = summon("Youmu", "reviewer", &proj);
+    assert!(!at(&y["id"], "--append-system-prompt").unwrap().contains("ledger"));
+    assert!(!at(&y["id"], "--settings").unwrap().contains("ledgers"));
+
+    // A recall follows the role as it reads now: a ledger gone is made again...
+    let recall = |name: &str, r: &Value| {
+        let gone = || d.list().iter().all(|x| x["name"] != name || !x["departed"].is_null());
+        d.stub(&r["id"], "ready");
+        d.cli(&["banish", name]);
+        wait(gone, "it gone");
+        let ready = d.dir.join("stub").join(format!("{}.ready", r["id"].as_str().unwrap()));
+        std::fs::remove_file(&ready).unwrap();
+        let o = d.command(&["resume", name]).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    std::fs::remove_file(&file).unwrap();
+    recall("Reimu", &r);
+    assert!(at(&r["id"], "--settings").unwrap().contains(&format!("Edit(/{})", file.display())));
+    assert!(file.is_file());
+    // ...one that has taken the line up since keeps one from then on, as a resident from before
+    // ledgers does...
+    std::fs::write(roles.join("plain.md"), "Keep track.\n").unwrap();
+    let k = summon("Kanako", "plain", &proj);
+    assert!(!at(&k["id"], "--settings").unwrap().contains(&format!("Edit(/{})", file.display())));
+    std::fs::write(roles.join("plain.md"), "---\nledger: project\n---\nKeep track.\n").unwrap();
+    recall("Kanako", &k);
+    assert!(at(&k["id"], "--settings").unwrap().contains(&format!("Edit(/{})", file.display())));
+    // ...and one that has dropped it keeps none.
+    std::fs::write(roles.join("plain.md"), "Keep track.\n").unwrap();
+    recall("Kanako", &k);
+    assert!(!at(&k["id"], "--settings").unwrap().contains(&format!("Edit(/{})", file.display())));
+
+    // A setting it does not know refuses the summon.
+    std::fs::write(roles.join("odd.md"), "---\nledger: maybe\n---\nx\n").unwrap();
+    std::fs::write(roles.join("typo.md"), "---\nleger: project\n---\nx\n").unwrap();
+    for (role, why) in [
+        ("odd", "ledger: maybe (ledger: project, or no ledger line)"),
+        ("typo", "not a role setting: leger"),
+    ] {
+        let e = d.req(json!({"t": "summon", "id": 3, "cwd": d.dir, "role": role}));
         assert_eq!(e["t"], "error");
         assert!(e["error"].as_str().unwrap().contains(why), "{e}");
     }

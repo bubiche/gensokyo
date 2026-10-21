@@ -52,7 +52,7 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
     let mut args = Vec::new();
     if let Some(role) = &r.role {
         let role = crate::role::find(role, shrine.borrow().share.as_deref())?;
-        args.extend(["--append-system-prompt-file".into(), role.to_string_lossy().into_owned()]);
+        args.extend(["--append-system-prompt".into(), crate::role::read(&role)?.words]);
     }
     args.extend(ritual::args(r, &d.path));
     let cwd = r.cwd.clone().unwrap_or_default();

@@ -239,11 +239,13 @@ fn collect(sh: &mut Shrine, lead: &str, id: &str, until: Option<Until>) {
     }
 }
 
-/// What `lead` is told of its helpers when a compact or a `/clear` has taken its conversation:
-/// each one here, or departed without its lead told, where it works and what waits on the lead.
-/// It collects nothing, so the next `wait` still has the news; names and paths only, never a
-/// word a helper wrote.
+/// What `lead` is told when a compact or a `/clear` has taken its conversation: where its ledger
+/// is, and its helpers, each one here or departed without its lead told, where it works and what
+/// waits on the lead. It collects nothing, so the next `wait` still has the news; names and
+/// paths only, never a word a helper wrote, which a ledger may quote.
 pub(super) fn briefing(sh: &Shrine, lead: &str) -> Option<String> {
+    let ledger = sh.entries.iter().find(|e| e.rec.id == lead).and_then(|e| e.rec.ledger.as_ref());
+    let ledger = ledger.map(|f| format!("Your ledger is `{f}`: read it before anything else."));
     let lines: Vec<String> = sh
         .entries
         .iter()
@@ -278,14 +280,16 @@ pub(super) fn briefing(sh: &Shrine, lead: &str) -> Option<String> {
             format!("- {}: {doing}, in {dir}{on}{unread}", r.name)
         })
         .collect();
-    (!lines.is_empty()).then(|| {
+    let helpers = (!lines.is_empty()).then(|| {
         format!(
             "Your conversation was compacted or cleared, but these helpers you summoned are still \
              yours to wait on, read and close when their work is in (the `gensokyo-lead` \
              skill):\n{}",
             lines.join("\n")
         )
-    })
+    });
+    let told: Vec<String> = [ledger, helpers].into_iter().flatten().collect();
+    (!told.is_empty()).then(|| told.join("\n"))
 }
 
 /// `who`'s last answer, framed as its report; with `screen`, its live screen as text, which

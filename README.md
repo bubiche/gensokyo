@@ -310,10 +310,17 @@ to go with it ("focus on the SQL layer"); either, both or neither. Five ship wit
 | `chief-of-staff` | coordinates instead of coding: hands work to helpers in the roles above, checks it, and keeps you briefed |
 
 Your own go in `~/.config/gensokyo/roles/<name>.md`, and one of yours shadows a shipped one of
-the same name. The file is the text as it stands, with no frontmatter. It reaches Claude Code as
-`--append-system-prompt-file`, after gensokyo's own paragraph and your words, and it adds to
-Claude Code's own system prompt rather than replacing it. From a shell, `gensokyo new --role
-reviewer --system-prompt "…"` does the same, and `--role` also takes a file by its path.
+the same name. The file is the text as it stands, after an optional `---` block. Its words join
+the system prompt after gensokyo's own paragraph and before yours, and add to Claude Code's own
+system prompt rather than replacing it. From a shell, `gensokyo new --role reviewer
+--system-prompt "…"` does the same, and `--role` also takes a file by its path.
+
+A role whose block says `ledger: project`, as `chief-of-staff`'s does, keeps a **ledger**: one
+file per project in `~/.local/state/gensokyo/ledgers/`, shared by every worktree of a
+repository, where the resident keeps its running picture of the work. Its system prompt names
+the file, which it may read and edit without asking, and after a `/compact` or `/clear` it is
+told to read it again, so nothing it wrote down is lost, and a chief of staff summoned there
+next month starts where the last one stopped. A helper keeps none: the project is its lead's.
 
 A resident keeps the system prompt it started with: Claude Code records it with the
 conversation, so a recall brings the same one back even if the file has changed since, until

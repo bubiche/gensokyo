@@ -441,7 +441,8 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             ));
         }
         let share = std::env::current_exe().ok().and_then(|e| paths::share_dir(&e));
-        crate::role::find(role, share.as_deref()).map_err(|e| format!("role: {e}"))?;
+        let file = crate::role::find(role, share.as_deref()).map_err(|e| format!("role: {e}"))?;
+        crate::role::read(&file)?;
     }
     if r.headless() && r.target() != Target::New {
         return p(format!(

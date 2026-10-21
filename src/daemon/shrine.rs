@@ -429,7 +429,7 @@ pub(super) fn may_summon(
     {
         let sh = shrine.borrow();
         if let Some(r) = &s.role {
-            role::find(r, sh.share.as_deref())?;
+            role::read(&role::find(r, sh.share.as_deref())?)?;
         }
         if sh.quitting {
             return Err("the daemon is stopping".into());
@@ -573,7 +573,12 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     let slot = (1..=9).find(|n| sh.entries.iter().all(|e| e.rec.slot != Some(*n)));
     let id = store::uuid();
     let lead = s.owner.as_deref().and_then(|o| lead_name(&sh, o));
-    let role = s.role.as_deref().map(|r| role::find(r, Some(&share))).transpose()?;
+    let role = s.role.as_deref().map(|r| role::read(&role::find(r, Some(&share))?)).transpose()?;
+    // A helper's project is its lead's to keep.
+    let ledger = match role.as_ref().is_some_and(|r| r.ledger) && lead.is_none() {
+        true => Some(crate::ledger::make(&cwd)?),
+        false => None,
+    };
     let opts = launch::Options {
         id: &id,
         session: &id,
@@ -585,7 +590,8 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         resume: false,
         extra: &s.extra,
         lead: lead.as_deref(),
-        role: role.as_deref(),
+        role: role.as_ref().map(|r| r.words.as_str()),
+        ledger: ledger.as_deref(),
         system_prompt: s.system_prompt.as_deref(),
         teleport: s.teleport.as_deref(),
         remote: !s.ritual_run,
@@ -604,6 +610,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         keep: s.keep,
         extra: s.extra,
         role: s.role,
+        ledger: ledger.map(|f| f.to_string_lossy().into_owned()),
         system_prompt: s.system_prompt,
         teleport: s.teleport,
         owner: s.owner,
@@ -697,9 +704,9 @@ pub(super) fn recall(
     let (handle, resume) = match rec.cloud {
         Some(_) => (None, false),
         None => {
-            let (program, argv, handle, resume) = come_back(shrine, &sh, &rec, None)?;
-            (rec.program, rec.argv) = (program, argv);
-            (Some(handle), resume)
+            let back = come_back(shrine, &sh, &rec, None)?;
+            (rec.program, rec.argv, rec.ledger) = (back.program, back.argv, back.ledger);
+            (Some(back.handle), back.resumed)
         }
     };
     let free =
@@ -724,15 +731,24 @@ pub(super) fn recall(
     Ok(r)
 }
 
-/// A departed resident's launch, as a recall and a renew make it: the flags it was summoned
-/// with (`mode` in place of its own, when given), its role found again, and its session resumed
-/// when it has a conversation. The program, the argv, the handle, and whether it resumed.
+/// A departed resident's launch, as a recall and a renew make it.
+pub(super) struct Back {
+    pub program: String,
+    pub argv: Vec<String>,
+    pub handle: Rc<Handle>,
+    pub resumed: bool,
+    /// Its ledger, which follows the role as it now reads.
+    pub ledger: Option<String>,
+}
+
+/// A departed resident's launch: the flags it was summoned with (`mode` in place of its own,
+/// when given), its role found again, and its session resumed when it has a conversation.
 pub(super) fn come_back(
     shrine: &Shared,
     sh: &Shrine,
     rec: &Record,
     mode: Option<String>,
-) -> Result<(String, Vec<String>, Rc<Handle>, bool), String> {
+) -> Result<Back, String> {
     let cwd = PathBuf::from(&rec.cwd);
     if !cwd.is_dir() {
         return Err(format!("{} is gone", rec.cwd));
@@ -751,7 +767,8 @@ pub(super) fn come_back(
     // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
     // it, so a role file gone since does not keep it away; a fresh start would go without, as
     // would one taken over.
-    let role = match rec.role.as_deref().map(|r| role::find(r, sh.share.as_deref())).transpose() {
+    let found = |r: &str| role::read(&role::find(r, sh.share.as_deref())?);
+    let role = match rec.role.as_deref().map(found).transpose() {
         Ok(found) => found,
         Err(e) if !resume || teleport.is_some() => {
             return Err(format!("{} cannot come back: {e}", rec.name));
@@ -760,6 +777,13 @@ pub(super) fn come_back(
             log(json!({"ev": "role_gone", "id": rec.id, "error": e}));
             None
         }
+    };
+    // Made again if it went; a role read no more keeps the one it had.
+    let ledger = match &role {
+        Some(r) => {
+            (r.ledger && rec.owner.is_none()).then(|| crate::ledger::make(&cwd)).transpose()?
+        }
+        None => rec.ledger.as_ref().map(PathBuf::from),
     };
     let opts = launch::Options {
         id: &rec.id,
@@ -772,13 +796,15 @@ pub(super) fn come_back(
         resume,
         extra: &rec.extra,
         lead: lead.as_deref(),
-        role: role.as_deref(),
+        role: role.as_ref().map(|r| r.words.as_str()),
+        ledger: ledger.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
         teleport,
         remote: !rec.ritual_run,
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
-    Ok((program, argv, handle, resume))
+    let ledger = ledger.map(|f| f.to_string_lossy().into_owned());
+    Ok(Back { program, argv, handle, resumed: resume, ledger })
 }
 
 /// The process a resident runs as, for its record.

@@ -52,9 +52,8 @@ this is the first thing to suspect - and you cannot fix it by asking again the s
 
 Saying the same thing to everybody is a spell card, not a conversation: `gensokyo broadcast
 <card> all|awaiting|idle|<name>`, or the shrine's `[cast c]` button. If the user wants this
-exchange again later, the thing to write is a card in the config dir's `spellcards/` (usually
-`~/.config/gensokyo/spellcards/`): a file whose body is the opening message, with `{self}`,
-`{peer}`, `{cwd}` and `{residents}` filled in when it is cast. A card with `{peer}` in it wants
-`peer: required` in its frontmatter, so that it is only cast at one resident with
-`--with <the other one>`; without that line it can be cast with no peer, and `{peer}` comes out
-empty.
+exchange again later, show them a card to save as `spellcards/<name>.md` in the config dir
+(usually `~/.config/gensokyo/`; your file tools are refused there): the opening message as its
+body, with `{self}`, `{peer}`, `{cwd}` and `{residents}` filled in when it is cast, and
+`peer: required` in its frontmatter when it uses `{peer}`, so it is cast only at one resident,
+with `--with <the other one>`.

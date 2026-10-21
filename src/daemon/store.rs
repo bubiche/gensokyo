@@ -62,6 +62,9 @@ pub struct Record {
     /// A ritual run whose finished turns neither ring nor turn gold (`quiet: true`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiet: bool,
+    /// A ritual's run of its own (`target: new`), which Remote Control leaves out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ritual_run: bool,
     /// Turns ended and dialogs or questions opened, over its life: what `wait` counts. Kept
     /// here so they survive a recall and a restart.
     #[serde(default)]

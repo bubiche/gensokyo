@@ -736,6 +736,10 @@ pub struct Resident {
     pub renewing: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "pairs")]
     pub tags: Tags,
+    /// Remote Control's link, while it runs with it: claude.ai/code and the Claude app reach it
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     /// A cloud session: it runs on claude.ai, with no process here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud: Option<CloudSession>,

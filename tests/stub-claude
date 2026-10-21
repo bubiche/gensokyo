@@ -236,7 +236,7 @@ fi
 
 # interactive
 ORIG_ARGS=$*
-id='' name=stub prompt='' resume='' hook_cmd='' status_cmd='' mode=default
+id='' name=stub prompt='' resume='' hook_cmd='' status_cmd='' mode=default remote=''
 while [ $# -gt 0 ]; do
   case $1 in
     --session-id) id=$2; shift ;;
@@ -245,6 +245,7 @@ while [ $# -gt 0 ]; do
     --settings) hook_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_hook\)".*/\1/p')
                 status_cmd=$(printf '%s' "$2" | sed -n 's/.*"command":"\([^"]*_statusline[^"]*\)".*/\1/p'); shift ;;
     --permission-mode) mode=$2; shift ;;
+    --remote-control) remote=$2; shift ;;
     --plugin-dir|--append-system-prompt|--model|--effort|--mcp-config) shift ;;
     --) shift; prompt=$*; break ;;
     *) ;;
@@ -263,6 +264,14 @@ env > "$STUB_STATE/$id.env"
 printf '%s\n' "$name" > "$STUB_STATE/$id.name"
 rm -f "$STUB_STATE/$id.status"
 write_entry "$session" "$name" '"idle"'
+# Remote Control's link, in Claude Code's own record of this process, the same at every resume.
+bridge="${CLAUDE_CONFIG_DIR:-$STUB_STATE/claude}/sessions/$$.json"
+if [ -n "$remote" ]; then
+  mkdir -p "${bridge%/*}"
+  printf '{"pid": %s, "sessionId": "%s", "bridgeSessionId": "session_01%s"}\n' \
+    "$$" "$id" "$(printf '%s' "$id" | tr -d -)" > "$bridge.tmp"
+  mv "$bridge.tmp" "$bridge"
+fi
 
 # fire <event> [,"more": "json"]: one hook, the way Claude Code runs it.
 fire() {
@@ -278,7 +287,7 @@ status() {
 }
 
 esc=$(printf '\033')
-leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$session.json"; }
+leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$session.json" "$bridge"; }
 trap leave EXIT
 # Ignored, not trapped: bash 3.2 can lose the last character of every later line when a trapped
 # SIGINT lands as `read` starts. The tty still throws away a half-typed line on Ctrl-C.

@@ -75,6 +75,7 @@ pub(super) async fn poll(shrine: Shared) {
     loop {
         tokio::time::sleep(POLL).await;
         replay(&shrine, hooks::SPOOL_SETTLE);
+        bridges(&shrine);
         let (claude, env, ask) = {
             let mut sh = shrine.borrow_mut();
             let live = || sh.entries.iter().filter(|e| e.handle.is_some());
@@ -107,6 +108,38 @@ pub(super) async fn poll(shrine: Shared) {
         }
         rev = Some(*shrine.borrow().changed.borrow());
     }
+}
+
+/// Remote Control's session for each resident started with it, from Claude Code's own record
+/// of its process, `sessions/<pid>.json` in its config dir: `bridgeSessionId` (2.1.306), which
+/// `claude agents` leaves out. Undocumented, like the registry. Read every beat until it is
+/// there, which takes a moment after the start, and again for each new process.
+fn bridges(shrine: &Shared) {
+    let Some(dir) = crate::paths::claude_dir().map(|d| d.join("sessions")) else { return };
+    let mut sh = shrine.borrow_mut();
+    let mut found = false;
+    for e in sh.entries.iter_mut() {
+        let Some(pid) = e.handle.as_ref().map(|h| h.pid) else { continue };
+        let started = e.rec.argv.iter().any(|a| a == "--remote-control");
+        if !started || e.remote.as_ref().is_some_and(|(p, _)| *p == pid) {
+            continue;
+        }
+        let Ok(text) = std::fs::read(dir.join(format!("{pid}.json"))) else { continue };
+        let v: serde_json::Value = serde_json::from_slice(&text).unwrap_or_default();
+        if let Some(s) = v["bridgeSessionId"].as_str().filter(|s| bridge(s)) {
+            e.remote = Some((pid, s.into()));
+            found = true;
+        }
+    }
+    if found {
+        touch(&sh);
+    }
+}
+
+/// `session_` and letters and digits: it goes into a link.
+fn bridge(s: &str) -> bool {
+    let rest = s.strip_prefix("session_").unwrap_or_default();
+    (1..=64).contains(&rest.len()) && rest.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The `claude` on PATH as it was last asked its version: the file it resolves to, that file's

@@ -54,6 +54,8 @@ pub(super) struct Entry {
     pub(super) renew: Option<super::renew::Renew>,
     /// A cloud session: how its log is being read.
     pub(super) follow: super::follow::Follow,
+    /// Remote Control's session on claude.ai, and the process it was read for.
+    pub(super) remote: Option<(i32, String)>,
 }
 
 impl Entry {
@@ -80,6 +82,7 @@ impl Entry {
             held: false,
             renew: None,
             follow: Default::default(),
+            remote: None,
         }
     }
 }
@@ -171,6 +174,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         outdated: None,
         renewing: false,
         tags: r.tags.clone(),
+        remote: None,
         cloud: r.cloud.as_ref().map(|c| proto::CloudSession {
             url: c.url.clone(),
             repo: c.repo.clone(),
@@ -197,6 +201,9 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
     r.telemetry = e.tele.clone();
     r.outdated = installed.filter(|_| super::renew::behind(e, installed)).map(String::from);
     r.renewing = e.renew.is_some() && e.handle.is_some();
+    let pid = e.handle.as_ref().map(|h| h.pid);
+    let remote = e.remote.as_ref().filter(|(p, _)| Some(*p) == pid);
+    r.remote = remote.map(|(_, s)| format!("https://claude.ai/code/{s}"));
     r
 }
 
@@ -537,6 +544,8 @@ pub(super) struct Start {
     pub(super) owner: Option<String>,
     /// A ritual run whose finished turns stay quiet.
     pub(super) quiet: bool,
+    /// A ritual's run of its own, not its standing session.
+    pub(super) ritual_run: bool,
     /// A role's name or a file's full path, found at every launch.
     pub(super) role: Option<String>,
     /// The user's own words for its system prompt.
@@ -579,6 +588,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         role: role.as_deref(),
         system_prompt: s.system_prompt.as_deref(),
         teleport: s.teleport.as_deref(),
+        remote: !s.ritual_run,
     };
     let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
     let rec = Record {
@@ -598,6 +608,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         teleport: s.teleport,
         owner: s.owner,
         quiet: s.quiet,
+        ritual_run: s.ritual_run,
         launched: store::now(),
         pid: running_as(&handle),
         ..Record::default()
@@ -764,6 +775,7 @@ pub(super) fn come_back(
         role: role.as_deref(),
         system_prompt: rec.system_prompt.as_deref(),
         teleport,
+        remote: !rec.ritual_run,
     };
     let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
     Ok((program, argv, handle, resume))

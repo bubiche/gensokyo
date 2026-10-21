@@ -224,13 +224,15 @@ config runs your own `statusLine` command instead, with the same input.
 **Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every resident starts with Claude
 Code's Remote Control, under its own name: the Claude app on your phone and claude.ai/code list
 it, and a prompt or an answer can be given there while it stays in the shrine. Once it has had a
-prompt, a recall, a renew or a comeback keeps its link. It is off by default, since whoever
-holds your claude.ai login can then type into every resident; it needs that login (not an API
-key), and the Mac awake and online. The setting is read at each launch, so `gensokyo renew
-Marisa` brings it to a resident already running, and `doctor` says whether it is on. Headless
-ritual runs and cloud sessions don't take it. Claude Code's own `/remote-control` turns it on in
-one resident until that one starts again. On the web, a permission prompt's main button is
-"Always allow", which lasts the session; "Allow once" is under its arrow.
+prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives as `remote`.
+It is off by default, since whoever holds your claude.ai login can then type into every
+resident; it needs that login (not an API key), and the Mac awake and online. The setting is
+read at each launch, so `gensokyo renew Marisa` brings it to a resident already running, and
+`doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take it, so
+claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs and
+cloud sessions. Claude Code's own `/remote-control` turns it on in one resident until that one
+starts again. On the web, a permission prompt's main button is "Always allow", which lasts the
+session; "Allow once" is under its arrow.
 
 ## Spell cards
 
@@ -651,8 +653,9 @@ when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
 or `departed`), `detail` (what it waits for), `blocked` (why nothing may be typed into it now),
 `finished`, `owner` (its lead's id), `turns` and `needs` (turns ended and dialogs opened, ever),
 `mode`, `branch` (at `here`), `telemetry`, `outdated` (the installed Claude Code version, when it
-runs another), `renewing`, `tags` (an object, in the order they were set), and for a departed one `departed` (epoch seconds), `exit` and
-`signal`. `new --json` prints the new resident the same way.
+runs another), `renewing`, `tags` (an object, in the order they were set), `remote` (its
+Remote Control link, from a moment after it starts), and for a departed one `departed` (epoch
+seconds), `exit` and `signal`. `new --json` prints the new resident the same way.
 
 `wait` holds until each resident named has news (`--any`: one of them), or only the kind
 `--until done|needs|gone` names, for at most `--timeout` (`30m`). It prints one JSON line per

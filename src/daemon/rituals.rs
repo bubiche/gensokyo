@@ -518,6 +518,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
         extra,
         owner: None,
         quiet: r.quiet(),
+        ritual_run: r.target() == Target::New,
         role: r.role.clone(),
         system_prompt: None,
         teleport: None,

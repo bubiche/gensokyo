@@ -292,6 +292,32 @@ fn a_persistent_ritual_keeps_one_session_and_recalls_it() {
 }
 
 #[test]
+fn remote_control_skips_a_run_of_its_own_and_keeps_to_a_persistent_session() {
+    let rituals = [("rounds", hourly("")), ("diary", hourly("target: persistent\n"))];
+    let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    let d = Daemon::start("remote", T0 + 120, &rituals, &[]);
+    std::fs::write(d.dir.join("conf/config"), "REMOTE_CONTROL=on\n").unwrap();
+    wait(|| d.stamp("diary").is_some() && d.stamp("rounds").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.live().len() == 2, "both runs");
+    let args = |name: &str| {
+        let live = d.live();
+        let r = live.iter().find(|r| r["name"] == name).unwrap();
+        d.stub(&r["id"], "args")
+    };
+    assert!(!args("rounds").contains("--remote-control"), "{}", args("rounds"));
+    assert!(args("diary").contains("--remote-control diary "), "{}", args("diary"));
+
+    // Still not after a recall.
+    let id = d.live().iter().find(|r| r["name"] == "rounds").unwrap()["id"].clone();
+    assert_eq!(d.req(json!({"t": "banish", "id": 4, "who": "rounds"}))["t"], "done");
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", id.as_str().unwrap()))).unwrap();
+    assert_eq!(d.req(json!({"t": "recall", "id": 5, "who": "rounds"}))["t"], "summoned");
+    assert!(d.stub(&id, "args").contains("--resume"));
+    assert!(!args("rounds").contains("--remote-control"), "{}", args("rounds"));
+}
+
+#[test]
 fn a_named_resident_gets_the_prompt_alone_and_a_missing_one_is_reported() {
     let rituals = [("ask", hourly("target: Sakuya\n")), ("lost", hourly("target: Nobody\n"))];
     let rituals: Vec<(&str, &str)> = rituals.iter().map(|(a, b)| (*a, b.as_str())).collect();

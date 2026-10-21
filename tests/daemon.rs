@@ -929,6 +929,20 @@ fn remote_control_in_the_config_reaches_every_launch_under_the_residents_name() 
     assert_eq!(remote(&m["id"]).as_deref(), Some("Marisa"));
     assert!(d.stub(&m["id"], "args").trim_end().ends_with(" -- first"));
 
+    // Its link, from Claude Code's record of the process, in the listing.
+    let link = |name: &str| {
+        let r = d.list().into_iter().find(|r| r["name"] == name).unwrap();
+        r["remote"].as_str().map(String::from)
+    };
+    let want = |r: &Value| {
+        let id = r["id"].as_str().unwrap().replace('-', "");
+        Some(format!("https://claude.ai/code/session_01{id}"))
+    };
+    wait(|| link("Marisa") == want(&m), "Marisa's link");
+    assert_eq!(link("Reimu"), None);
+    let o = d.command(&["list"]).output().unwrap();
+    assert!(!common::out(&o).contains("claude.ai"), "the table stays as it was");
+
     // Read at every launch, so a recall picks it up.
     d.stub(&r["id"], "ready");
     assert_eq!(d.req(json!({"t": "banish", "id": 3, "who": "Reimu"}))["t"], "done");
@@ -936,6 +950,7 @@ fn remote_control_in_the_config_reaches_every_launch_under_the_residents_name() 
     assert_eq!(d.req(json!({"t": "recall", "id": 4, "who": "Reimu"}))["t"], "summoned");
     assert!(d.stub(&r["id"], "args").contains(" --resume "));
     assert_eq!(remote(&r["id"]).as_deref(), Some("Reimu"));
+    wait(|| link("Reimu") == want(&r), "Reimu's link after the recall");
 }
 
 #[test]

@@ -36,7 +36,7 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 ## Requirements
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
-  2.1.289 to 2.1.291; nothing checks the version.
+  2.1.306; nothing checks the version.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
@@ -226,7 +226,9 @@ Code's Remote Control, under its own name: the Claude app on your phone and clau
 it, and a prompt or an answer can be given there while it stays in the shrine. Once it has had a
 prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives as `remote`.
 It is off by default, since whoever holds your claude.ai login can then type into every
-resident; it needs that login (not an API key), and the Mac awake and online. The setting is
+resident; it needs that login (not an API key), a Claude Code that takes `--remote-control`
+(2.1.306 does; an older one may refuse the flag, and the resident not start), and the Mac
+awake and online. The setting is
 read at each launch, so `gensokyo renew Marisa` brings it to a resident already running, and
 `doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take it, so
 claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs and

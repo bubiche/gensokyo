@@ -181,8 +181,9 @@ pub fn system_paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -
         Some(lead) => format!(
             "You are a helper: the resident {lead} summoned you and gave you your task. When it \
              is done, your last message is your report to {lead}, who reads it as it stands, so \
-             make it complete; leave no background task running. You cannot summon residents: \
-             use subagents (the Agent tool) to split your own work."
+             make it complete; leave no background task running. To ask {lead} something, end \
+             your turn with the question: one asked any other way goes to the user. You cannot \
+             summon residents: use subagents (the Agent tool) to split your own work."
         ),
     };
     let ledger = ledger.map_or(String::new(), |f| {

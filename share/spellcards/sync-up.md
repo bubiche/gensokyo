@@ -20,5 +20,5 @@ One reply each is the whole of it. Never answer a `[sync-up reply]`, never send 
 to the same resident, and if nothing overlaps send nothing at all - silence here is the normal
 outcome, not a failure.
 
-When the notes have stopped arriving, tell me in a few lines who is doing what, what overlapped
-and how the two of you settled it. Then carry on with what you were doing.
+Once your notes are sent, tell me in a few lines who is doing what. If an overlapping note
+comes later, settle it then and tell me how. Then carry on with what you were doing.

@@ -20,7 +20,8 @@ conversation attached, so the exchange only holds together if you carry it yours
 3. **the reply shape** - "either the single word `LGTM` or a numbered list of findings";
 4. **the reply channel** - *that the reply must come back as a `SendMessage` addressed to
    you, by name*;
-5. **the cap** - "this exchange is capped at 3 rounds".
+5. **the cap** - "this exchange is capped at 3 rounds". A lead writing to its own helper
+   leaves this out: that exchange has no cap.
 
 Item 4 is the one that looks like a broken tool when it is missing. A resident that receives a
 request treats it the way it treats a request from a user, and answers where a user would read
@@ -30,8 +31,9 @@ this is the first thing to suspect - and you cannot fix it by asking again the s
 
 ## Keeping it together
 
-- Tag every message after the first `[<topic> round k/N]`, using the same topic throughout, so
-  the other side reads it as the same exchange rather than a new request.
+- Tag every message after the first `[<topic> round k/N]` (`round k` when there is no cap),
+  using the same topic throughout, so the other side reads it as the same exchange rather than
+  a new request.
 - Answer what came back. If it found something, fix it and say what you changed; if you disagree,
   say why rather than complying - a peer is a reviewer, not an authority.
 - Stop at the first of: it says `LGTM`, the cap is reached, or either of you needs the user.

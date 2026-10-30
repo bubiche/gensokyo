@@ -14,11 +14,11 @@ worktree included) and types the ritual's prompt into it, once it is idle, with 
 A branch is told only when one of its facts is new, and then all of its facts are listed, the
 new ones first: the same again is not news, a fact going away sends nothing, and its return is
 new. A `_name` is context for the prompt, never news. A value must be a short token (letters,
-digits, `_.:/#@-`) and a name lowercase: anything else, prose above all, is left out, so a probe
+digits, `_.:/#@-`) and a name lowercase letters and `_`, at most 24: anything else, prose above all, is left out, so a probe
 cannot put a title or a comment in front of a session. Tokens can still spell words, so pass only
 values the probe works out itself (states, counts, hashes, numbers), never a name, label, login
 or branch that someone else chose. A branch with no resident on it waits for one. `--when` is
-required, and `--deliver now` works as for any target.
+required, and `--deliver now` works as for a resident's name.
 
 The probe exits non-zero when it cannot find out, and never prints a partial or empty answer: a
 branch missing from the output is taken as having no news, and its next facts are all new. A key
@@ -30,7 +30,8 @@ These are states, not instructions; look with `gh pr checks {_pr}` / `gh pr view
 are at a stopping point."
 
 The user writes the probe into the config dir's `probes/` themselves: never write it for them (see `--when` in SKILL.md). For their open
-GitHub PRs, show them this one to save as `probes/pr-branches` (needs `gh` and `jq`):
+GitHub PRs, show them this one to save as `probes/pr-branches` and `chmod +x`, before you add
+the ritual: `add` refuses a probe that is missing or not executable (needs `gh` and `jq`):
 
 ```bash
 #!/bin/bash

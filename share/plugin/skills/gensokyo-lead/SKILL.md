@@ -28,7 +28,8 @@ the brief says everything: the goal, the absolute paths, what done looks like, w
 End every brief with these, in your words:
 
 - **its last message is its report to you**, read as it stands: what it did, what it found,
-  what is left. For a long report, it writes a file and its last message names the path;
+  what is left. A report is kept up to 64 KB; a longer one goes in a file outside the
+  repository, even from a read-only role, and its last message names the path;
 - it leaves **no background task running** when it finishes: a background task ends a turn too,
   and you would read a report from halfway through;
 - it does not commit or push unless you say so.
@@ -42,21 +43,23 @@ BRIEF
 ```
 
 It prints one JSON object (`id`, `name`, `slot`, `owner`, `turns`, `needs`, …). Keep the name.
-`--role implementer` (or `reviewer`, `researcher`, `debugger`, or one of the user's own: a name
-that is none is refused with the list) gives it a standing stance in its system prompt that
+`--role implementer` (or `reviewer`, `researcher`, `debugger`, or one of the user's own, by name,
+never a path: a name that is none is refused with the list) gives it a standing stance in its system prompt that
 outlasts `/compact`; the brief still says the task.
 A helper works in your permission mode unless you name a narrower one with `-p` (`plan` <
 `default` < `acceptEdits` < `auto` < `bypassPermissions`), and `--allowed-tools` (again for each)
 lets it use only `Read`, `Glob`, `Grep`, `WebSearch` or `WebFetch` without asking; it asks the
-user for anything else. Wider is refused, and so is a summon when you already have 10 helpers
-(config `HELPERS`), when you are a helper, and in a directory Claude Code was never trusted in:
+user for anything else. Wider is refused, and so is a summon past your `HELPERS` limit, from a
+helper, or in a directory Claude Code was never trusted in:
 tell the user to open Claude Code there once and accept, or pick a directory they trust.
 
 **Separate checkouts.** Two helpers editing one working tree collide. Give each its own:
 `gensokyo new <repo dir> --worktree <name> --name <helper>` makes (or reuses)
-`.claude/worktrees/<name>` on a branch of that name, from the freshly fetched default branch
-(`--base <ref>` for another, `--branch <b>` to name it), and summons the helper there. Tell the
-helper its branch. Don't make worktrees by hand, and don't remove them: that is the user's.
+`.claude/worktrees/<name>` and summons the helper there. Its branch is `--branch <b>`, or the
+config's `BRANCH_PREFIX` plus `<name>`; a branch that exists already is checked out as it is, and
+a new one starts from the freshly fetched default branch (`--base <ref>` for another). A reused
+worktree keeps its own branch. Pass `--branch`, so you know the branch to tell the helper. A
+reviewer of a helper's uncommitted work goes in that helper's worktree, by the same name. Don't make worktrees by hand, and don't remove them: that is the user's.
 
 ## Cloud helpers
 
@@ -75,20 +78,23 @@ Its exit starts your next turn, so start it and end your turn, or carry on with 
 gensokyo remembers what you have been told about each helper: each wait returns what is new since
 your last wait that ended in news, or your last read, so a turn that ended before you waited still
 counts. A helper that departed is news once; after that a wait leaves it out, and one on only
-such helpers is refused. It prints one JSON line per helper: `name`, `state`, `news`, `ended` (`stop`, `failed`, `interrupted`,
-`unreported`), and `answer`, the report's first line. Without `--any` it waits for each of them;
+such helpers is refused. It prints one JSON line per helper: `name`, `state`, `turns`, `needs`,
+`news`, `ended` (`stop`, `failed`, `interrupted`, `unreported`), and `answer`, the report's first
+line. Without `--any` it waits for each of them;
 `--until done|needs|gone` narrows what counts.
 
 - **exit 0**: news. For each line with `"news": true`, `gensokyo read <name>` prints the whole
   report. Then `wait` again on whoever is still working.
-- **exit 3**: the timeout (30 minutes; `--timeout 2h`). Nothing is marked as told, so the next
-  wait returns the same news at once. Look at a slow one with `gensokyo read <name> --screen`,
+- **exit 3**: the timeout (30 minutes; `--timeout 2h`). It marks nothing as told: a line with
+  `"news": true` still has a report to `read`. Look at a slow one with `gensokyo read <name> --screen`,
   then wait again.
 - **exit 4**: the daemon went away, as a restart does. `gensokyo list --json`, then wait again;
   a turn the restart cut short comes back as `ended: interrupted`.
 
-`ended: failed` is an API error and `interrupted` a turn stopped at a dialog: neither has a
-report. Follow up, or tell the user.
+`ended: failed` is an API error, `interrupted` a turn stopped at a dialog or by a restart, and
+`unreported` a turn whose answer was not kept: none has a report. Look with `read <name>
+--screen`, follow up, or tell the user. A turn you did not start (a spell card, the user typing
+in its pane, a peer's message) ends as news too: if what you read is not its report, wait again.
 
 Run `gensokyo` commands bare, with no `2>&1`, pipe or `cd` around them: the user may have
 allowed `gensokyo` alone, and anything added makes it ask them again.
@@ -103,17 +109,18 @@ to act on, as you would a colleague's.
 
 Send them with `SendMessage` to the helper by name; never type into its pane. The
 `gensokyo-peers` skill's rules hold: name yourself, say what you want and that the answer comes
-as its last message (or a `SendMessage` back to you, by name). Then `wait` on it again.
+as its last message. Then `wait` on it again. That skill's round cap does not: follow up with
+your own helper as many times as the work needs.
 
 ## When a helper needs the user
 
 A helper's permission prompt or question goes to the user, not to you: you cannot answer it.
-`wait` reports it (`state` `awaits` or `asked`, `news` with no new turn). Tell the user which
+`wait` reports it (`needs` went up, or `state` is `asked`). Tell the user which
 helper and what it asks, and that `Ctrl-] a` jumps to the one that needs them. Then wait again.
 
 ## Finish
 
 When the work is in, `gensokyo close <name> [<name> …]` your helpers (each is asked to `/exit`,
 and stays in recall), then tell the user what each did and where it landed: they saw little of
-it. Never leave helpers running at the end of the job. `gensokyo list --json` lists them under
-`owner` with your id.
+it. Never leave helpers running at the end of the job. In `gensokyo list --json`, yours have an
+`owner` equal to the `id` of the entry with your name.

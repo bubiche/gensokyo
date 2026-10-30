@@ -11,7 +11,7 @@ Say this back first and get a yes: it checks every 5 minutes while gensokyo runs
 the current directory (which Claude Code must already trust); each change costs a short haiku
 run; the page is private to them until they share it. It needs `gh` logged in (`gh auth
 status`) and a claude.ai login. The list carries the date, so expect one run a day even when
-nothing changed.
+nothing changed. It arrives paused, for them to turn on.
 
 1. **Publish the page yourself, once.** `pr-watch.html` is in this skill's base directory.
    Read it, then publish it with the Artifact tool exactly as it is, never edited: title "PR
@@ -24,8 +24,8 @@ nothing changed.
 gensokyo ritual add --name pr-watch --schedule 'every 5m' --when gh-prs --quiet --keep 1m \
   --model haiku --allowed-tools ArtifactData \
   --description 'my open pull requests, on the PR Watch page' --prompt-file - <<'PROMPT'
-Keep the PR Watch page at https://claude.ai/artifact/… current. Use only the ArtifactData tool,
-and only on that URL.
+Keep the PR Watch page at https://claude.ai/artifact/… current. Use no tool but ArtifactData,
+and that only on this URL; leave your notes alone.
 
 1. ArtifactData get: collection "board", doc_id "prs". Note its version, or that it does not
    exist yet.
@@ -42,8 +42,9 @@ with one line saying what you wrote.
 PROMPT
 ```
 
-3. **Fire it once**, `gensokyo ritual run pr-watch`, and give the user the page's URL. The page
-   fills in a few seconds later. `gensokyo ritual log pr-watch` shows each change it handled.
+3. **Hand it to the user.** Give them the page's URL, and tell them it is paused:
+   `gensokyo ritual run pr-watch` fills the page once, and `gensokyo ritual enable pr-watch`
+   keeps it current. `gensokyo ritual log pr-watch` shows each change it handled.
 
 Its runs need nothing but `ArtifactData`: the probe has already read GitHub, so a title
 written to mislead has nowhere to reach but the page. To stop it, `gensokyo ritual disable

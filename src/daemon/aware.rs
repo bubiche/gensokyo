@@ -62,9 +62,10 @@ pub struct Aware {
     pub auto: bool,
     /// The `tool_input` of Codex's open permission request: its PostToolUse is the grant.
     request: Option<String>,
-    /// The newest Codex PostToolUse that granted nothing, its input and when: a request for
-    /// that call stamped before it, landing after it (from the spool), has been answered.
-    ran: Option<(String, i64)>,
+    /// Codex PostToolUses that granted nothing, stamped after the newest hook, their input and
+    /// when: a request for one of those calls stamped before it, landing after it (from the
+    /// spool), has been answered. At most `RAN_MOST`, the newest.
+    ran: Vec<(String, i64)>,
     /// Codex's terminal title: the last one with an id, and whether it is past its boot.
     title: Option<Title>,
     started: bool,
@@ -103,6 +104,9 @@ struct Typing {
     /// When the Enter went, epoch ms: a prompt hook from before it is some other prompt's.
     entered: Option<i64>,
 }
+
+/// The most PostToolUses `ran` keeps: the calls Codex makes between two other hooks.
+const RAN_MOST: usize = 16;
 
 /// The longest a mark holds: a prompt that fires no hook (a built-in command) leaves it.
 const TYPING_MOST: Duration = Duration::from_secs(15);
@@ -281,11 +285,11 @@ impl Aware {
         let granted = self.pending == Some(Pending::Awaits)
             && self.request.is_some()
             && h.input == self.request;
+        let answered = self.ran.iter().any(|(i, at)| h.input.as_ref() == Some(i) && h.at < *at);
         if !(codex && h.event == "PostToolUse" && !granted) {
             self.hook_at = h.at;
+            self.ran.retain(|(_, at)| *at > h.at);
         }
-        let answered =
-            self.ran.as_ref().is_some_and(|(i, at)| h.input.as_ref() == Some(i) && h.at < *at);
         self.typed_in(h.at);
         // Codex says `default` in every mode.
         if let Some(m) = h.mode.as_ref().filter(|_| !codex) {
@@ -310,10 +314,13 @@ impl Aware {
                 if granted {
                     self.set(None, None);
                     self.running = true;
-                } else if let Some(i) =
-                    h.input.clone().filter(|_| self.ran.as_ref().is_none_or(|r| r.1 <= h.at))
-                {
-                    self.ran = Some((i, h.at));
+                } else if let Some(i) = h.input.clone() {
+                    if self.ran.len() == RAN_MOST {
+                        let oldest = self.ran.iter().enumerate().min_by_key(|(_, r)| r.1);
+                        let n = oldest.map(|(n, _)| n).unwrap_or_default();
+                        self.ran.remove(n);
+                    }
+                    self.ran.push((i, h.at));
                 }
             }
             // Esc, or a denial with a word for Codex: the turn ends with no Stop.

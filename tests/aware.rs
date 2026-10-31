@@ -848,14 +848,24 @@ fn a_codex_request_that_lands_after_a_newer_unrelated_tool_still_opens() {
 
 #[test]
 fn a_codex_request_that_lands_after_its_own_tool_ran_opens_nothing() {
-    // Spooled, it comes back on the next beat, after the grant's PostToolUse.
+    // Spooled, it comes back on the next beat, after the grant's PostToolUse and the next call's.
     let mut a = codex_at_work(false);
     a.hook(&codex_hook("PostToolUse", bash("touch x", None), 12));
+    a.hook(&codex_hook("PostToolUse", bash("ls", None), 13));
     a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 10));
     assert_eq!((a.state(), a.pending, a.take().opened), (State::Busy, None, 0));
     // The same command asked for again, after it ran, is a new request.
-    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 13));
+    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 14));
     assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
+    // Only so many calls are kept between two other hooks: the oldest goes first.
+    let mut a = codex_at_work(false);
+    for n in 0..17 {
+        a.hook(&codex_hook("PostToolUse", bash(&format!("echo {n}"), None), 20 + n));
+    }
+    a.hook(&codex_hook("PermissionRequest", bash("echo 16", Some("Echo?")), 10));
+    assert_eq!(a.pending, None);
+    a.hook(&codex_hook("PermissionRequest", bash("echo 0", Some("Echo?")), 11));
+    assert_eq!(a.pending, Some(Pending::Awaits));
 }
 
 #[test]

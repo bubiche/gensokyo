@@ -231,8 +231,8 @@ pub struct Hook {
     /// Where Claude works when the hook ran: it follows a `cd`, the launch dir does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// `tool_input` as compact JSON, on a Codex PermissionRequest and PostToolUse: a grant is
-    /// the PostToolUse of the request's own input.
+    /// `tool_input` as `hooks::reduce` keeps it, on a PermissionRequest and a PostToolUse: for
+    /// Codex a grant is the PostToolUse of the request's own input.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
 }

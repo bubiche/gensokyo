@@ -29,6 +29,9 @@ pub const SPOOL_SETTLE: i64 = 1000;
 /// The longest answer kept, in bytes.
 pub const ANSWER_MOST: usize = 64 * 1024;
 
+/// The most of a `tool_input` kept, in bytes.
+pub const INPUT_MOST: usize = 4 * 1024;
+
 fn stdin() -> Vec<u8> {
     let mut b = Vec::new();
     // Whole: a payload cut short is no JSON, and a Stop lost with it is a turn never counted.
@@ -64,7 +67,8 @@ pub fn hook_main() {
 /// What the shrine keeps of a hook payload (2.1.260: `hook_event_name`, `session_id`, and per
 /// event `notification_type` + `message`, `source`, `permission_mode` on UserPromptSubmit and
 /// Stop, `tool_name` + `tool_input`, `last_assistant_message`; `error` on StopFailure, 2.1.290;
-/// `cwd`, which follows a `cd`, 2.1.291). Never the prompt.
+/// `cwd`, which follows a `cd`, 2.1.291). Codex sends the same names, with `PermissionRequest`
+/// and `Interrupt` of its own, and a `description` in a request's `tool_input`. Never the prompt.
 pub fn reduce(j: &Value, at: i64) -> Hook {
     let s = |p: &str| j.pointer(p).and_then(Value::as_str);
     let event = s("/hook_event_name").unwrap_or_default();
@@ -76,8 +80,13 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
             c if c.len() < a.len() => format!("{c}\n[cut at {} KB]", ANSWER_MOST / 1024),
             c => c.to_string(),
         });
-    let paths =
-        ["/error", "/tool_input/questions/0/question", "/message", "/last_assistant_message"];
+    let paths = [
+        "/error",
+        "/tool_input/questions/0/question",
+        "/tool_input/description",
+        "/message",
+        "/last_assistant_message",
+    ];
     let text =
         paths.iter().find_map(|p| s(p)).map(|t| tele::clean(t, 80)).filter(|t| !t.is_empty());
     Hook {
@@ -90,8 +99,21 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
         text,
         answer,
         cwd: s("/cwd").filter(|c| tele::is_dir_path(c)).map(String::from),
-        input: None,
+        input: ["PermissionRequest", "PostToolUse"]
+            .contains(&event)
+            .then(|| j.get("tool_input").map(input))
+            .flatten(),
     }
+}
+
+/// `tool_input` as compact JSON with its keys sorted, without the `description` Codex gives a
+/// request and not the call that ran it; cut at `INPUT_MOST`.
+fn input(v: &Value) -> String {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("description");
+    }
+    cap(&v.to_string(), INPUT_MOST).into()
 }
 
 /// At most `n` bytes of `s`, cut at a character.

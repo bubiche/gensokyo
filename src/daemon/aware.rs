@@ -5,6 +5,10 @@
 //! Precedence: a question, then a dialog the registry sees, then busy, then a flag the hooks
 //! raised (a permission prompt, a finished turn), then resting. The registry counts only when
 //! its snapshot began after the newest hook: one taken before a `Stop` knows nothing of it.
+//!
+//! Codex is in no registry. Its hooks alone say what it waits for and whether it works; its
+//! terminal title says only that it has started, and shows idle or busy. The title keeps its
+//! spinner going while an approval dialog is open, so it can never be what clears one.
 
 use crate::proto::{Agent, Ended, Hook, State};
 use crate::tele;
@@ -56,6 +60,37 @@ pub struct Aware {
     pub agent: Agent,
     /// Launched in auto mode, where Codex's reviewer answers its permission requests.
     pub auto: bool,
+    /// The `tool_input` of Codex's open permission request: its PostToolUse is the grant.
+    request: Option<String>,
+    /// Codex's terminal title: the last one with an id, past its boot or not, and what it
+    /// showed last, idle or busy, and when.
+    title: Option<Title>,
+    started: bool,
+    shows: Option<(Registry, i64)>,
+}
+
+/// The first word of Codex's terminal title, `<state> | <thread id, cut> | Context N% used`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Title {
+    Starting,
+    Ready,
+    Working,
+}
+
+/// What Codex's title says, when it has a thread id: none at its very start, or while its
+/// directory-trust dialog is up, which draws no title. A spinner frame follows the id, even
+/// after `Ready`.
+pub fn title_of(title: &str) -> Option<Title> {
+    let mut parts = title.split(" | ");
+    let state = match parts.next()? {
+        "Starting" => Title::Starting,
+        "Ready" => Title::Ready,
+        "Working" => Title::Working,
+        _ => return None,
+    };
+    let id = parts.next()?.as_bytes();
+    let hex = id.len() > 8 && id[..8].iter().all(u8::is_ascii_hexdigit) && id[8] == b'-';
+    hex.then_some(state)
 }
 
 /// gensokyo typing into it, from before the paste until a hook after the Enter: another prompt
@@ -240,12 +275,37 @@ impl Aware {
         }
         self.hook_at = h.at;
         self.typed_in(h.at);
-        if let Some(m) = &h.mode {
+        let codex = self.agent == Agent::Codex;
+        // Codex says `default` in every mode.
+        if let Some(m) = h.mode.as_ref().filter(|_| !codex) {
             self.mode = Some(tele::clean(m, 20));
         }
         let text = h.text.as_deref().map(|t| tele::clean(t, 80)).filter(|t| !t.is_empty());
         let ask = h.tool.as_deref() == Some("AskUserQuestion");
         match (h.event.as_str(), h.kind.as_deref()) {
+            // Codex's approval dialog. In auto it comes too, for a request its reviewer then
+            // answers with no dialog.
+            ("PermissionRequest", _) if codex => {
+                if !self.auto {
+                    self.set(Some(Pending::Awaits), text);
+                    self.request = h.input.clone();
+                    self.shown = true;
+                    self.news.opened += 1;
+                    self.running = false;
+                }
+            }
+            // The request's own call ran: granted. One run alongside it leaves it open.
+            ("PostToolUse", _) if codex => {
+                if self.pending == Some(Pending::Awaits)
+                    && self.request.is_some()
+                    && h.input == self.request
+                {
+                    self.set(None, None);
+                    self.running = true;
+                }
+            }
+            // Esc, or a denial with a word for Codex: the turn ends with no Stop.
+            ("Interrupt", _) if codex => self.left(),
             ("UserPromptSubmit", _) => {
                 self.set(None, None);
                 self.running = true;
@@ -310,6 +370,9 @@ impl Aware {
 
     /// A registry snapshot that began at `at`; `None` when the session was not in it.
     pub fn registry(&mut self, st: Option<Registry>, at: i64) {
+        if self.agent == Agent::Codex {
+            return;
+        }
         self.registry = st.map(|s| (s, at));
         // Busy after the flag went up: the permission was granted, or a new turn began. Idle
         // after a dialog: Esc or a denial, which end the turn with no Stop, no PostToolUse and
@@ -328,6 +391,29 @@ impl Aware {
             }
             _ => {}
         }
+    }
+
+    /// Codex's terminal title at epoch ms `at`; true if that has it started. It moves nothing
+    /// the hooks say. `Ready` with an id comes once before `Starting`, in the same write: seen
+    /// again, or after `Starting`, it is past the boot; `Working` comes only after.
+    pub fn title(&mut self, title: &str, at: i64) -> bool {
+        let Some(t) = title_of(title).filter(|_| self.agent == Agent::Codex) else {
+            return false;
+        };
+        let was = self.started;
+        self.started |= t == Title::Working || (t == Title::Ready && self.title.is_some());
+        self.title = Some(t);
+        match t {
+            Title::Ready => self.shows = Some((Registry::Idle, at)),
+            Title::Working => self.shows = Some((Registry::Busy, at)),
+            Title::Starting => {}
+        }
+        self.started && !was
+    }
+
+    /// Idle or busy, as Codex's title last showed it, and when: for show only.
+    pub fn shows(&self) -> Option<(Registry, i64)> {
+        self.shows
     }
 
     /// Why nothing may be typed into it now, or nothing: a dialog, what the user has typed
@@ -380,11 +466,16 @@ impl Aware {
 
     /// A dialog open, which would take the Enter after a card and answer it. So would one the
     /// registry cannot see yet: a session it does not list may be on the workspace trust
-    /// dialog, where no hook fires either.
+    /// dialog, where no hook fires either. Codex, which no registry lists, is starting until
+    /// its title says otherwise.
     pub fn dialog(&self) -> Option<&'static str> {
+        let starting = match self.agent {
+            Agent::Claude => self.registry.is_none(),
+            Agent::Codex => !self.started,
+        };
         match (self.pending, self.registry) {
             (Some(Pending::Asked), _) => Some("is asking you a question"),
-            (_, None) => Some(STARTING),
+            _ if starting => Some(STARTING),
             (Some(Pending::Awaits), _) | (_, Some((Registry::Waiting, _))) => {
                 Some("has a dialog waiting for you")
             }
@@ -548,5 +639,8 @@ impl Aware {
 
     fn set(&mut self, p: Option<Pending>, detail: Option<String>) {
         (self.pending, self.detail) = (p, detail);
+        if p != Some(Pending::Awaits) {
+            self.request = None;
+        }
     }
 }

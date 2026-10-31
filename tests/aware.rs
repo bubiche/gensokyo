@@ -3,10 +3,10 @@
 
 mod common;
 
-use gensokyo::daemon::aware::{Aware, Key, Line, Registry, kitty_key};
+use gensokyo::daemon::aware::{Aware, Key, Line, Pending, Registry, STARTING, kitty_key};
 use gensokyo::daemon::registry;
 use gensokyo::hooks::{SPOOL_MOST, reduce, spool, take_spool};
-use gensokyo::proto::{Hook, State};
+use gensokyo::proto::{Agent, Hook, State};
 use gensokyo::tele;
 use serde_json::{Value, json};
 
@@ -609,4 +609,231 @@ fn a_resident_being_typed_into_takes_nothing_else_until_its_prompt_goes_in() {
     let _new = a.mark();
     a.unmark(old);
     assert_eq!(a.blocked(), Some(TYPING));
+}
+
+/// Codex's terminal title under `tui.terminal_title=["run-state","thread-id","context-used"]`:
+/// the thread id cut to 29 characters and `...`, then a spinner frame while it works.
+fn codex_title(state: &str, rest: &str) -> String {
+    format!("{state} | 0190aaaa-bbbb-7ccc-8ddd-eeeee...{rest} | Context 0% used")
+}
+
+/// A Codex hook payload, as `_hook` reduces it at `at`.
+fn codex_hook(event: &str, extra: Value, at: i64) -> Hook {
+    let mut v = json!({"hook_event_name": event, "session_id": "0190aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee",
+                       "cwd": "/tmp", "model": "m", "permission_mode": "default"});
+    v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    reduce(&v, at)
+}
+
+/// A Codex resident past its boot, at work on its first prompt.
+fn codex_at_work(auto: bool) -> Aware {
+    let mut a = Aware::new(Agent::Codex, auto);
+    a.title(&codex_title("Starting", ""), 1);
+    a.title(&codex_title("Working", " ⠋"), 2);
+    a.hook(&codex_hook("SessionStart", json!({"source": "startup"}), 3));
+    a.hook(&codex_hook("UserPromptSubmit", json!({"prompt": "go"}), 4));
+    a.take();
+    a
+}
+
+fn bash(command: &str, description: Option<&str>) -> Value {
+    let mut input = json!({"command": command});
+    if let Some(d) = description {
+        input["description"] = d.into();
+    }
+    json!({"tool_name": "Bash", "tool_input": input})
+}
+
+#[test]
+fn only_the_first_word_of_a_codex_title_with_an_id_counts() {
+    use gensokyo::daemon::aware::{Title, title_of};
+    for (t, want) in [
+        ("", None),
+        ("Ready | Context 0% used", None),
+        ("Ready", None),
+        ("[ . ] Action Required | 0190aaaa-bbbb-7ccc-8ddd-eeeee...", None),
+        (&codex_title("Starting", ""), Some(Title::Starting)),
+        (&codex_title("Ready", ""), Some(Title::Ready)),
+        (&codex_title("Ready", " ⠼"), Some(Title::Ready)),
+        ("Ready | 0190aaaa-bbbb-7ccc-8ddd-eeeee... ⠏", Some(Title::Ready)),
+        (&codex_title("Working", " ⠹"), Some(Title::Working)),
+        ("Working | 0190aaaa-bbbb-7ccc-8ddd-eeeee... | Context 2% used", Some(Title::Working)),
+        ("Thinking | 0190aaaa-bbbb-7ccc-8ddd-eeeee...", None),
+    ] {
+        assert_eq!(title_of(t), want, "{t:?}");
+    }
+}
+
+#[test]
+fn a_codex_resident_is_starting_until_its_title_is_past_the_boot() {
+    let idle = ["Ready | Context 0% used", &codex_title("Ready", ""), &codex_title("Starting", "")];
+    // Each title as Codex draws it: with no prompt it comes back to Ready, with one it works.
+    for last in [codex_title("Ready", ""), codex_title("Working", ""), codex_title("Working", " ⠦")]
+    {
+        let mut a = Aware::new(Agent::Codex, false);
+        assert_eq!(a.dialog(), Some(STARTING));
+        for (at, t) in idle.iter().enumerate() {
+            assert!(!a.title(t, at as i64), "{t}");
+            assert_eq!(a.dialog(), Some(STARTING), "{t}");
+        }
+        assert!(a.title(&last, 10));
+        assert_eq!(a.dialog(), None, "{last}");
+        assert!(!a.title(&codex_title("Ready", " ⠼"), 11), "started once");
+        // At its exit the title goes blank: started it stays.
+        a.title("", 12);
+        assert_eq!(a.dialog(), None);
+    }
+}
+
+#[test]
+fn a_codex_title_read_every_few_seconds_starts_it_without_seeing_the_boot() {
+    // `Ready` with an id comes once before `Starting`, in the same write: seen twice, it is past.
+    let mut a = Aware::new(Agent::Codex, false);
+    a.title("Ready | Context 0% used", 1);
+    assert!(!a.title(&codex_title("Ready", ""), 2));
+    assert_eq!(a.dialog(), Some(STARTING));
+    assert!(a.title(&codex_title("Ready", ""), 3));
+    assert_eq!(a.dialog(), None);
+    // `Working` comes only after `Starting`.
+    let mut a = Aware::new(Agent::Codex, false);
+    assert!(a.title(&codex_title("Working", " ⠙"), 1));
+    // No title at all (its directory-trust dialog draws none): starting still.
+    let mut a = Aware::new(Agent::Codex, false);
+    for at in 0..5 {
+        a.title("", at);
+    }
+    assert_eq!(a.dialog(), Some(STARTING));
+}
+
+#[test]
+fn a_claude_resident_takes_nothing_from_a_title() {
+    let mut a = Aware::new(Agent::Claude, false);
+    for t in [codex_title("Starting", ""), codex_title("Ready", ""), codex_title("Ready", "")] {
+        assert!(!a.title(&t, 1));
+    }
+    assert_eq!(a.dialog(), Some(STARTING));
+}
+
+#[test]
+fn a_codex_title_shows_idle_or_busy_and_moves_nothing() {
+    let mut a = codex_at_work(false);
+    assert_eq!(a.shows(), Some((Registry::Busy, 2)));
+    a.title(&codex_title("Ready", ""), 8);
+    assert_eq!(a.shows(), Some((Registry::Idle, 8)));
+    assert_eq!(a.state(), State::Busy, "the hooks say it works");
+    a.title(&codex_title("Starting", ""), 9);
+    assert_eq!(a.shows(), Some((Registry::Idle, 8)));
+}
+
+#[test]
+fn a_codex_approval_awaits_through_the_spinner_until_its_own_tool_runs() {
+    let mut a = codex_at_work(false);
+    let ask = bash("curl -sI https://example.com", Some("Allow network access?"));
+    a.hook(&codex_hook("PermissionRequest", ask, 10));
+    assert_eq!(
+        (a.state(), a.pending, a.detail.as_deref()),
+        (State::Awaits, Some(Pending::Awaits), Some("Allow network access?"))
+    );
+    assert_eq!(a.take().opened, 1);
+    assert!(a.open() && a.dialog() == Some("has a dialog waiting for you"));
+    // Codex keeps drawing its spinner while the dialog is up.
+    for at in 11..15 {
+        a.title(&codex_title("Working", " ⠋"), at);
+    }
+    a.registry(Some(Registry::Busy), 20);
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
+    // Another tool, run alongside, finishes: still waiting.
+    a.hook(&codex_hook("PostToolUse", bash("ls", None), 21));
+    assert_eq!(a.pending, Some(Pending::Awaits));
+    // The request's own command ran: granted. Its PostToolUse has no description.
+    a.hook(&codex_hook("PostToolUse", bash("curl -sI https://example.com", None), 22));
+    assert_eq!((a.state(), a.pending), (State::Busy, None));
+    a.hook(&codex_hook("Stop", json!({"last_assistant_message": "done"}), 30));
+    assert!(a.finished());
+}
+
+#[test]
+fn a_codex_approval_comes_to_nothing_in_auto_where_its_reviewer_answers() {
+    let mut a = codex_at_work(true);
+    a.hook(&codex_hook("PermissionRequest", bash("curl x", Some("Allow?")), 10));
+    assert_eq!((a.state(), a.pending, a.take().opened), (State::Busy, None, 0));
+    a.hook(&codex_hook("PostToolUse", bash("curl x", None), 11));
+    assert_eq!(a.state(), State::Busy);
+}
+
+#[test]
+fn a_codex_interrupt_ends_the_turn_with_no_answer() {
+    use gensokyo::proto::Ended;
+    // At an approval: Esc, or a denial with a word for Codex.
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 10));
+    a.take();
+    a.hook(&codex_hook("Interrupt", json!({}), 11));
+    assert_eq!((a.state(), a.pending), (State::Resting, None));
+    let news = a.take();
+    assert_eq!((news.ends, news.ended), (1, Some(Ended::Interrupted)));
+    assert!(a.finished());
+    // At work.
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("Interrupt", json!({}), 10));
+    assert_eq!((a.state(), a.take().ended), (State::Resting, Some(Ended::Interrupted)));
+    // A turn already over is not ended twice.
+    a.hook(&codex_hook("UserPromptSubmit", json!({}), 20));
+    a.hook(&codex_hook("Stop", json!({}), 30));
+    a.take();
+    a.hook(&codex_hook("Interrupt", json!({}), 31));
+    assert_eq!((a.pending, a.take().ends), (Some(Pending::Stopped), 0));
+}
+
+#[test]
+fn codex_titles_and_snapshots_after_a_hook_leave_its_flag_alone() {
+    // A finished turn, with spinner frames stamped after its Stop.
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("Stop", json!({"last_assistant_message": "done"}), 10));
+    for at in 11..15 {
+        a.title(&codex_title("Working", " ⠸"), at);
+    }
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Stopped)));
+    assert!(a.finished());
+    // The registry's two moves never apply: busy after a flag, idle after a dialog.
+    a.registry(Some(Registry::Busy), 20);
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Stopped)));
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 10));
+    a.registry(Some(Registry::Idle), 20);
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
+    assert_eq!(a.take().ends, 0);
+    assert!(!a.listed(), "nothing can message it");
+}
+
+#[test]
+fn codex_reports_default_as_its_mode_in_every_mode_so_it_is_not_kept() {
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("Stop", json!({}), 10));
+    assert_eq!(a.mode, None);
+    let mut c = Aware::default();
+    c.hook(&recorded("UserPromptSubmit", None, 10));
+    assert_eq!(c.mode.as_deref(), Some("default"));
+}
+
+#[test]
+fn a_codex_request_and_its_tool_reduce_to_the_same_input_and_the_request_to_a_detail() {
+    let ask = codex_hook("PermissionRequest", bash("git commit -m x", Some("Commit?")), 1);
+    let ran = codex_hook("PostToolUse", bash("git commit -m x", None), 2);
+    assert_eq!(ask.input.as_deref(), Some(r#"{"command":"git commit -m x"}"#));
+    assert_eq!(ask.input, ran.input);
+    assert_eq!((ask.text.as_deref(), ask.tool.as_deref()), (Some("Commit?"), Some("Bash")));
+    let patch = json!({"tool_name": "apply_patch",
+                       "tool_input": {"command": "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch"}});
+    let p = codex_hook("PermissionRequest", patch.clone(), 1);
+    assert_eq!(p.input, codex_hook("PostToolUse", patch, 2).input);
+    assert_eq!(p.text, None);
+    assert_eq!(codex_hook("PreToolUse", bash("ls", None), 1).input, None);
+    // Kept small: a big patch is cut.
+    let big = json!({"tool_name": "apply_patch", "tool_input": {"command": "x".repeat(1 << 20)}});
+    let b = codex_hook("PostToolUse", big, 1).input.unwrap();
+    assert!(b.len() <= gensokyo::hooks::INPUT_MOST, "{}", b.len());
+    for e in ["Interrupt", "PermissionRequest", "PostToolUse"] {
+        assert_eq!(codex_hook(e, json!({}), 1).event, e);
+    }
 }

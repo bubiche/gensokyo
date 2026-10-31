@@ -2,7 +2,8 @@
 //! sessionId, name, status, startedAt}` (2.1.260), status `idle`, `busy`, `waiting`, or null for
 //! a headless run. The format is undocumented, and this is the one place that reads it. Asked
 //! every few seconds while anyone is here and may change without a hook, with the spool
-//! replayed on the same beat. On that beat too, which version of `claude` is installed.
+//! replayed on the same beat. On that beat too, which version of `claude` is installed, and
+//! each Codex resident's terminal title, which stands in for the registry Codex is not in.
 
 use super::aware::Registry;
 use super::ingest::replay;
@@ -76,6 +77,7 @@ pub(super) async fn poll(shrine: Shared) {
         tokio::time::sleep(POLL).await;
         replay(&shrine, hooks::SPOOL_SETTLE);
         bridges(&shrine);
+        titles(&shrine);
         let (claude, env, ask) = {
             let mut sh = shrine.borrow_mut();
             let live = || sh.entries.iter().filter(|e| e.handle.is_some());
@@ -188,13 +190,34 @@ async fn version(claude: &Path, env: &[(OsString, OsString)]) -> Option<String> 
         .then(|| crate::tele::clean(word, 40))
 }
 
-/// A registry snapshot: each resident's status, and the name it was renamed to inside.
+/// Each Codex resident's terminal title, every beat, whether or not `claude` is there to ask:
+/// whether it has started, and idle or busy for show.
+fn titles(shrine: &Shared) {
+    let mut sh = shrine.borrow_mut();
+    let sh = &mut *sh;
+    let at = hooks::now_ms();
+    for i in 0..sh.entries.len() {
+        let e = &mut sh.entries[i];
+        let Some(title) = e.handle.as_ref().filter(|_| !e.rec.agent.is_claude()) else { continue };
+        let title = title.modes().title;
+        let before = e.aware.state();
+        if e.aware.title(&title, at) {
+            log(json!({"ev": "started", "id": e.rec.id}));
+            after(sh, i, before);
+        }
+    }
+}
+
+/// A registry snapshot: each Claude resident's status, and the name it was renamed to inside.
 pub(super) fn seen(shrine: &Shared, list: &[Session], at: i64) {
     let mut sh = shrine.borrow_mut();
     let sh = &mut *sh;
     for i in 0..sh.entries.len() {
         let e = &sh.entries[i];
         let Some(pid) = e.handle.as_ref().map(|h| h.pid) else { continue };
+        if !e.rec.agent.is_claude() {
+            continue;
+        }
         let s = list.iter().find(|s| s.session_id == e.rec.session);
         let s = s.or_else(|| list.iter().find(|s| s.pid == Some(pid)));
         let renamed = s

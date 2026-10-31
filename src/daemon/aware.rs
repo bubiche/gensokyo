@@ -1,10 +1,14 @@
 //! What a resident is doing, from two sources: its hooks, which say what it waits for, and
 //! Claude Code's registry (`claude agents --json`), which says whether it is busy or has a
-//! dialog open. Nothing here looks at the screen.
+//! dialog open. Nothing here reads the screen, only Codex's terminal title.
 //!
 //! Precedence: a question, then a dialog the registry sees, then busy, then a flag the hooks
 //! raised (a permission prompt, a finished turn), then resting. The registry counts only when
 //! its snapshot began after the newest hook: one taken before a `Stop` knows nothing of it.
+//!
+//! Codex is in no registry. Its hooks alone say what it waits for and whether it works; its
+//! terminal title says only that it has started. The title keeps its spinner going while an
+//! approval dialog is open, so it can never be what clears one.
 
 use crate::proto::{Agent, Ended, Hook, State};
 use crate::tele;
@@ -56,6 +60,39 @@ pub struct Aware {
     pub agent: Agent,
     /// Launched in auto mode, where Codex's reviewer answers its permission requests.
     pub auto: bool,
+    /// The `tool_input` of Codex's open permission request: its PostToolUse is the grant.
+    request: Option<String>,
+    /// Codex PostToolUses that granted nothing, stamped after the newest hook, their input and
+    /// when: a request for one of those calls stamped before it, landing after it (from the
+    /// spool), has been answered. At most `RAN_MOST`, the newest.
+    ran: Vec<(String, i64)>,
+    /// Codex's terminal title: the last one with an id, and whether it is past its boot.
+    title: Option<Title>,
+    started: bool,
+}
+
+/// The first word of Codex's terminal title, `<state> | <thread id, cut> | Context N% used`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Title {
+    Starting,
+    Ready,
+    Working,
+}
+
+/// What Codex's title says, when it has a thread id: none at its very start, or while its
+/// directory-trust dialog is up, which draws no title. A spinner frame follows the id, even
+/// after `Ready`.
+pub fn title_of(title: &str) -> Option<Title> {
+    let mut parts = title.split(" | ");
+    let state = match parts.next()? {
+        "Starting" => Title::Starting,
+        "Ready" => Title::Ready,
+        "Working" => Title::Working,
+        _ => return None,
+    };
+    let id = parts.next()?.as_bytes();
+    let hex = id.len() > 8 && id[..8].iter().all(u8::is_ascii_hexdigit) && id[8] == b'-';
+    hex.then_some(state)
 }
 
 /// gensokyo typing into it, from before the paste until a hook after the Enter: another prompt
@@ -67,6 +104,9 @@ struct Typing {
     /// When the Enter went, epoch ms: a prompt hook from before it is some other prompt's.
     entered: Option<i64>,
 }
+
+/// The most PostToolUses `ran` keeps: the calls Codex makes between two other hooks.
+const RAN_MOST: usize = 16;
 
 /// The longest a mark holds: a prompt that fires no hook (a built-in command) leaves it.
 const TYPING_MOST: Duration = Duration::from_secs(15);
@@ -238,14 +278,53 @@ impl Aware {
         if h.at < self.hook_at {
             return false;
         }
-        self.hook_at = h.at;
+        let codex = self.agent == Agent::Codex;
+        // Codex sends a PostToolUse for every call, each from a process of its own: one that
+        // grants nothing says nothing, and must not make a request stamped before it, landing
+        // after it, older than the newest hook.
+        let granted = self.pending == Some(Pending::Awaits)
+            && self.request.is_some()
+            && h.input == self.request;
+        let answered = self.ran.iter().any(|(i, at)| h.input.as_ref() == Some(i) && h.at < *at);
+        if !(codex && h.event == "PostToolUse" && !granted) {
+            self.hook_at = h.at;
+            self.ran.retain(|(_, at)| *at > h.at);
+        }
         self.typed_in(h.at);
-        if let Some(m) = &h.mode {
+        // Codex says `default` in every mode.
+        if let Some(m) = h.mode.as_ref().filter(|_| !codex) {
             self.mode = Some(tele::clean(m, 20));
         }
         let text = h.text.as_deref().map(|t| tele::clean(t, 80)).filter(|t| !t.is_empty());
         let ask = h.tool.as_deref() == Some("AskUserQuestion");
         match (h.event.as_str(), h.kind.as_deref()) {
+            // Codex's approval dialog. In auto it comes too, for a request its reviewer then
+            // answers with no dialog.
+            ("PermissionRequest", _) if codex => {
+                if !self.auto && !answered {
+                    self.set(Some(Pending::Awaits), text);
+                    self.request = h.input.clone();
+                    self.shown = true;
+                    self.news.opened += 1;
+                    self.running = false;
+                }
+            }
+            // The request's own call ran: granted. One run alongside it leaves it open.
+            ("PostToolUse", _) if codex => {
+                if granted {
+                    self.set(None, None);
+                    self.running = true;
+                } else if let Some(i) = h.input.clone() {
+                    if self.ran.len() == RAN_MOST {
+                        let oldest = self.ran.iter().enumerate().min_by_key(|(_, r)| r.1);
+                        let n = oldest.map(|(n, _)| n).unwrap_or_default();
+                        self.ran.remove(n);
+                    }
+                    self.ran.push((i, h.at));
+                }
+            }
+            // Esc, or a denial with a word for Codex: the turn ends with no Stop.
+            ("Interrupt", _) if codex => self.left(),
             ("UserPromptSubmit", _) => {
                 self.set(None, None);
                 self.running = true;
@@ -310,6 +389,9 @@ impl Aware {
 
     /// A registry snapshot that began at `at`; `None` when the session was not in it.
     pub fn registry(&mut self, st: Option<Registry>, at: i64) {
+        if self.agent == Agent::Codex {
+            return;
+        }
         self.registry = st.map(|s| (s, at));
         // Busy after the flag went up: the permission was granted, or a new turn began. Idle
         // after a dialog: Esc or a denial, which end the turn with no Stop, no PostToolUse and
@@ -328,6 +410,19 @@ impl Aware {
             }
             _ => {}
         }
+    }
+
+    /// Codex's terminal title; true if that started it. It moves nothing the hooks say. `Ready`
+    /// with an id comes once before `Starting`, in the same write: seen again, or after
+    /// `Starting`, it is past the boot; `Working` comes only after.
+    pub fn title(&mut self, title: &str) -> bool {
+        let Some(t) = title_of(title).filter(|_| self.agent == Agent::Codex) else {
+            return false;
+        };
+        let was = self.started;
+        self.started |= t == Title::Working || (t == Title::Ready && self.title.is_some());
+        self.title = Some(t);
+        self.started && !was
     }
 
     /// Why nothing may be typed into it now, or nothing: a dialog, what the user has typed
@@ -380,11 +475,16 @@ impl Aware {
 
     /// A dialog open, which would take the Enter after a card and answer it. So would one the
     /// registry cannot see yet: a session it does not list may be on the workspace trust
-    /// dialog, where no hook fires either.
+    /// dialog, where no hook fires either. Codex, which no registry lists, is starting until
+    /// its title says otherwise.
     pub fn dialog(&self) -> Option<&'static str> {
+        let starting = match self.agent {
+            Agent::Claude => self.registry.is_none(),
+            Agent::Codex => !self.started,
+        };
         match (self.pending, self.registry) {
             (Some(Pending::Asked), _) => Some("is asking you a question"),
-            (_, None) => Some(STARTING),
+            _ if starting => Some(STARTING),
             (Some(Pending::Awaits), _) | (_, Some((Registry::Waiting, _))) => {
                 Some("has a dialog waiting for you")
             }
@@ -548,5 +648,8 @@ impl Aware {
 
     fn set(&mut self, p: Option<Pending>, detail: Option<String>) {
         (self.pending, self.detail) = (p, detail);
+        if p != Some(Pending::Awaits) {
+            self.request = None;
+        }
     }
 }

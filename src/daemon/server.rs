@@ -218,7 +218,11 @@ fn comeback(shrine: &Shared, running: &HashSet<String>) {
         let mut words = line.split_whitespace();
         let Some(id) = words.next() else { continue };
         let r = match running.contains(id) {
-            true => Err("its claude would not stop".into()),
+            true => {
+                let gone = shrine.borrow().store.load_departed_id(id);
+                let agent = gone.map(|r| r.agent).unwrap_or_default();
+                Err(format!("its {} would not stop", agent.program()))
+            }
             false => recall(shrine, id, None),
         };
         match r {

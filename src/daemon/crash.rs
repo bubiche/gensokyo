@@ -120,7 +120,7 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
             let gone = shrine.borrow().store.load_departed_id(&r.id);
             let session = gone.map_or(r.session.clone(), |g| g.session);
             let why = if left.running.contains(&r.id) {
-                Err("its claude would not stop".to_string())
+                Err(format!("its {} would not stop", r.agent.program()))
             } else if !r.agent.is_claude() {
                 Err("a Codex thread is not resumed".to_string())
             } else if r.cloud.is_none() && !has_conversation(&session) {

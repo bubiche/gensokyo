@@ -177,7 +177,10 @@ fn aim(
         if live(i).is_none() {
             return Err(format!("{peer} has departed and cannot be the peer"));
         }
-        // SendMessage reaches only a session the registry lists.
+        // SendMessage reaches only a session the registry lists, which a Codex one never is.
+        if !e.rec.agent.is_claude() {
+            return Err(format!("{peer} runs Codex, so nothing can message it"));
+        }
         if !e.aware.listed() {
             return Err(format!("{peer} is still starting, so nothing can message it yet"));
         }

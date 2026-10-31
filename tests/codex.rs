@@ -349,7 +349,7 @@ fn a_worktree_is_trusted_through_its_main_checkout() {
 
 /// A daemon whose `codex` is a script that starts a session, reads its keys raw until a Ctrl-C,
 /// then leaves with a SessionEnd hook and exit 0, as Codex does at an empty prompt (`raw`, below,
-/// says when it is reading); Codex's config is under the test's own `CODEX_HOME`.
+/// says when it is reading).
 fn daemon(name: &str) -> common::Daemon {
     let dir = fresh(&format!("cx-{name}"));
     let fake = script(&dir.join("bin"), "codex");
@@ -362,12 +362,9 @@ fn daemon(name: &str) -> common::Daemon {
         bin = launch::sh_quote(common::BIN)
     );
     std::fs::write(&fake, quits).unwrap();
-    std::fs::create_dir_all(dir.join("codex-home")).unwrap();
-    let env = [
-        ("GENSOKYO_CODEX", fake.display().to_string()),
-        ("CODEX_HOME", dir.join("codex-home").display().to_string()),
-    ];
-    let d = common::Daemon::at(dir, env.map(|(k, v)| (k.to_string(), v)).into());
+    std::fs::create_dir_all(dir.join("codex")).unwrap();
+    let env = vec![("GENSOKYO_CODEX".to_string(), fake.display().to_string())];
+    let d = common::Daemon::at(dir, env);
     d.cli(&["list"]);
     d
 }
@@ -489,7 +486,7 @@ fn a_codex_helper_works_in_its_leads_mode_where_codex_is_trusted() {
     let e = ask(json!({}));
     assert!(e["error"].as_str().unwrap().contains("Codex does not trust"), "{e}");
     let config = format!("[projects.\"{}\"]\ntrust_level = \"trusted\"\n", d.dir.display());
-    std::fs::write(d.dir.join("codex-home/config.toml"), config).unwrap();
+    std::fs::write(d.dir.join("codex/config.toml"), config).unwrap();
     let e = ask(json!({"mode": "bypassPermissions"}));
     assert!(e["error"].as_str().unwrap().contains("not bypassPermissions"), "{e}");
 

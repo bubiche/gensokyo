@@ -213,8 +213,9 @@ pub fn system_paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -
 }
 
 /// The daemon's environment minus what belongs to the terminal or session it was started from
-/// (a Claude Code or Codex session's own variables too), plus what a resident needs. `bin` goes first on PATH so the skills' `gensokyo` resolves to
-/// this copy; gensokyo's own `claude` in `shim` before it for a resident or headless run (`id`),
+/// (a Claude Code or Codex session's own variables too), plus what a resident needs. `bin` goes
+/// first on PATH so the skills' `gensokyo` resolves to this copy; gensokyo's own `claude` in
+/// `shim` before it for a resident or headless run (`id`),
 /// and nowhere for the rest: a courier started through a wrapper that runs `claude` by name
 /// needs RemoteTrigger, and a daemon started from a resident's shell has it on its PATH.
 pub fn env(

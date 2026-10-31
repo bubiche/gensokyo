@@ -23,7 +23,8 @@ pub fn fresh(name: &str) -> PathBuf {
     d
 }
 
-/// A daemon's state and config under `dir`, with tests/stub-claude as every resident.
+/// A daemon's state and config under `dir`, with tests/stub-claude as every Claude resident and
+/// tests/stub-codex as every Codex one: never a real one from PATH or the ChatGPT app.
 pub fn stub_env(dir: &Path) -> Vec<(String, String)> {
     let under = |p: &str| dir.join(p).display().to_string();
     vec![
@@ -40,6 +41,8 @@ pub fn stub_env(dir: &Path) -> Vec<(String, String)> {
             concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-caffeinate").into(),
         ),
         ("CLAUDE_CONFIG_DIR".into(), under("claude")),
+        ("GENSOKYO_CODEX".into(), concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-codex").into()),
+        ("CODEX_HOME".into(), under("codex")),
     ]
 }
 

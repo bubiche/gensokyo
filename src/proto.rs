@@ -396,6 +396,14 @@ impl Agent {
     pub fn is_claude(&self) -> bool {
         *self == Agent::Claude
     }
+
+    /// The program it runs, by name.
+    pub fn program(&self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

@@ -390,11 +390,12 @@ pub(super) fn summon(
     let Summon { cwd, agent, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
     let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
     // Named, so a helper never starts in the user's defaultMode where that is wider. A Codex
-    // helper of a lead in a mode Codex has no flags for reads only and asks, its narrowest.
+    // helper of a lead in a mode Codex has no flags for gets the narrowest, as `mode_within`
+    // counts that lead's.
     if let Some(c) = caller.filter(|_| mode.is_none()) {
         mode = shrine.borrow().entries.iter().find(|e| e.rec.id == c).map(mode_of);
         if agent == Agent::Codex && mode.as_deref().and_then(codex::mode_flags).is_none() {
-            mode = Some("default".into());
+            mode = Some(MODES[0].into());
         }
     }
     let mut extra = Vec::new();
@@ -996,8 +997,8 @@ pub(super) async fn banish(shrine: &Shared, who: &str) -> Result<String, String>
 /// Ctrl-C (clears a half-typed prompt or interrupts the turn), a pause for each to land, then
 /// `/exit` and Enter. True once the resident has left. Esc goes as the resident asked keys to
 /// be sent, so it is not read as Alt with what follows; the rest as plain bytes, which Claude
-/// Code takes in kitty mode too. Codex quits at once on a Ctrl-C at an empty prompt, its
-/// SessionEnd hook coming as it goes; keys to it after that go nowhere.
+/// Code takes in kitty mode too. Codex quits on a Ctrl-C at an empty prompt, running its
+/// SessionEnd hook before it exits; keys to it after that go nowhere.
 async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
     if let Some(esc) = crate::vt::KeyEvent::from_kitty(27, 0, 1) {
         h.input(&h.encode(esc)).await;
@@ -1017,6 +1018,10 @@ async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
     // A turn begun meanwhile (a message queued for it, say) may have opened a dialog, which the
     // Enter would answer yes: none goes, and the next ask starts again from Esc.
     if stir(shrine, h) != calm {
+        // Or Codex's SessionEnd, its exit still to come.
+        if tokio::time::timeout(Duration::from_secs(1), h.exited()).await.is_ok() {
+            return true;
+        }
         log(json!({"ev": "exit", "pid": h.pid, "held": "a hook came"}));
         return false;
     }

@@ -121,6 +121,8 @@ pub(super) fn recover(shrine: &Shared, left: &Left) {
             let session = gone.map_or(r.session.clone(), |g| g.session);
             let why = if left.running.contains(&r.id) {
                 Err("its claude would not stop".to_string())
+            } else if !r.agent.is_claude() {
+                Err("a Codex thread is not resumed".to_string())
             } else if r.cloud.is_none() && !has_conversation(&session) {
                 Err("no conversation to resume".to_string())
             } else {

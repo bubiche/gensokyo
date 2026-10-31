@@ -56,19 +56,22 @@ pub fn claude(path: Option<&OsStr>) -> Option<PathBuf> {
     if let Some(c) = std::env::var_os("GENSOKYO_CLAUDE") {
         return Some(c.into());
     }
-    on_path(path, &crate::shim::dir())
+    on_path(path, &crate::shim::dir(), "claude")
 }
 
-/// The first `claude` on `path` outside the directory `skip`.
-pub fn on_path(path: Option<&OsStr>, skip: &Path) -> Option<PathBuf> {
+/// The first program `name` on `path` outside the directory `skip`.
+pub fn on_path(path: Option<&OsStr>, skip: &Path, name: &str) -> Option<PathBuf> {
     let real = std::fs::canonicalize(skip).ok();
     std::env::split_paths(path?)
         .filter(|d| d != skip && (real.is_none() || std::fs::canonicalize(d).ok() != real))
-        .map(|d| d.join("claude"))
-        .find(|p| {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
+        .map(|d| d.join(name))
+        .find(|p| executable(p))
+}
+
+/// A file anyone may run.
+pub fn executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 /// Whether Claude Code kept a conversation for `session`, which it writes only once a prompt is
@@ -209,8 +212,8 @@ pub fn system_paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -
     )
 }
 
-/// The daemon's environment minus what belongs to the terminal or session it was started from,
-/// plus what a resident needs. `bin` goes first on PATH so the skills' `gensokyo` resolves to
+/// The daemon's environment minus what belongs to the terminal or session it was started from
+/// (a Claude Code or Codex session's own variables too), plus what a resident needs. `bin` goes first on PATH so the skills' `gensokyo` resolves to
 /// this copy; gensokyo's own `claude` in `shim` before it for a resident or headless run (`id`),
 /// and nowhere for the rest: a courier started through a wrapper that runs `claude` by name
 /// needs RemoteTrigger, and a daemon started from a resident's shell has it on its PATH.
@@ -250,6 +253,7 @@ pub fn env(
     ];
     let drop = |k: &str| {
         (k.starts_with("CLAUDE") && k != "CLAUDE_CONFIG_DIR")
+            || (k.starts_with("CODEX_") && k != "CODEX_HOME")
             || (k.starts_with("GENSOKYO_")
                 && !["GENSOKYO_STATE_DIR", "GENSOKYO_CONFIG_DIR"].contains(&k))
             || PREFIXES.iter().any(|p| k.starts_with(p))

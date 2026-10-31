@@ -38,11 +38,16 @@ pub(super) fn installed(sh: &Shrine) -> Option<&str> {
 
 /// Live and running another claude than `installed`, by its status line (an older one, or a
 /// newer one rolled back from), and not a ritual run kept only until it has rested a while,
-/// which is left to end on its own: the marker, and whom a renew with nobody named takes.
+/// which is left to end on its own: the marker, and whom a renew with nobody named takes. A
+/// Codex resident never is.
 pub(super) fn behind(e: &Entry, installed: Option<&str>) -> bool {
     let runs = e.tele.as_ref().and_then(|t| t.version.as_deref());
     let brief = e.rec.ritual.is_some() && e.rec.keep.is_some();
-    e.handle.is_some() && !brief && installed.is_some_and(|i| runs.is_some_and(|v| v != i))
+    let claude = e.rec.agent.is_claude();
+    claude
+        && e.handle.is_some()
+        && !brief
+        && installed.is_some_and(|i| runs.is_some_and(|v| v != i))
 }
 
 /// Whether `e` runs as `h`: not since departed, recalled or renewed.
@@ -67,6 +72,12 @@ pub(super) fn ask(shrine: &Shared, who: &[String]) -> Result<String, String> {
                 if super::shrine::cloud_here(e) {
                     return Err(format!(
                         "{} is a cloud session: it has no process here",
+                        e.rec.name
+                    ));
+                }
+                if !e.rec.agent.is_claude() {
+                    return Err(format!(
+                        "{} runs Codex: a renew starts Claude Code on the claude installed now",
                         e.rec.name
                     ));
                 }

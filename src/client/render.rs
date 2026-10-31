@@ -4,7 +4,7 @@
 
 use super::modal::{Modal, when_short};
 use crate::paths::tilde;
-use crate::proto::{CloudWatch, Resident, RitualInfo, State};
+use crate::proto::{Agent, CloudWatch, Resident, RitualInfo, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -555,7 +555,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         };
         // A cloud session: on claude.ai, with nothing here to be in a state.
         let glyph = if r.in_cloud() { "☁" } else { r.state.glyph() };
-        format!("{slot} {tee}{glyph} ")
+        // Codex, marked in the space before its name.
+        let gap = if r.agent == Agent::Codex { "ᶜ" } else { " " };
+        format!("{slot} {tee}{glyph}{gap}")
     };
     // Behind the claude installed now, or on its way to it.
     let renew = |r: &Resident| match (r.renewing, r.outdated.is_some()) {

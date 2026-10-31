@@ -96,7 +96,8 @@ pub fn args(
 pub fn main(argv: &[OsString]) -> ExitCode {
     let Some((own, argv)) = argv.split_first() else { return ExitCode::from(2) };
     let path = std::env::var_os("PATH");
-    let Some(claude) = crate::daemon::launch::on_path(path.as_deref(), Path::new(own)) else {
+    let Some(claude) = crate::daemon::launch::on_path(path.as_deref(), Path::new(own), "claude")
+    else {
         eprintln!("gensokyo: no claude on PATH but gensokyo's own");
         return ExitCode::from(127);
     };

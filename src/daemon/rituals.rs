@@ -508,6 +508,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
     };
     let s = Start {
         cwd: r.cwd.clone().unwrap_or_default(),
+        agent: Default::default(),
         name,
         model,
         effort,

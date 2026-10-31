@@ -10,7 +10,7 @@ mod rituals;
 pub use conn::{Error, connect_or_start, peer_pid, refusal, request};
 
 use crate::paths;
-use crate::proto::{Cast, Reply, Request, Summon, Until, Wait, WorktreeAsk};
+use crate::proto::{Agent, Cast, Reply, Request, Summon, Until, Wait, WorktreeAsk};
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
@@ -182,13 +182,18 @@ struct New {
     /// Its name; otherwise one from the shipped list
     #[arg(short, long)]
     name: Option<String>,
-    /// The model it runs on (claude --model)
+    /// What it runs: claude (Claude Code), or codex (Codex, which takes no --allowed-tools,
+    /// --teleport or --cloud)
+    #[arg(long, value_name = "AGENT", value_parser = ["claude", "codex"], default_value = "claude")]
+    agent: String,
+    /// The model it runs on (claude --model, codex -m)
     #[arg(short, long)]
     model: Option<String>,
-    /// Its effort (claude --effort)
+    /// Its effort (claude --effort, codex's model_reasoning_effort)
     #[arg(short, long)]
     effort: Option<String>,
-    /// Its permission mode (claude --permission-mode)
+    /// Its permission mode (claude --permission-mode; for codex, the sandbox and approvals
+    /// nearest it)
     #[arg(short = 'p', long = "permission-mode", value_name = "MODE")]
     mode: Option<String>,
     /// Its first prompt
@@ -344,6 +349,9 @@ fn list(json: bool, all: bool) -> Result<(), String> {
         if let Some(at) = t.map(|t| t.at).filter(|at| *at > 0) {
             fields = format!("{fields} · {} ago", crate::tele::age(now.saturating_sub(at) as u64));
         }
+        if r.agent == Agent::Codex {
+            fields = [fields.as_str(), "codex"].join(if fields.is_empty() { "" } else { " · " });
+        }
         if r.renewing {
             fields = format!("{fields} · ↻ renewing");
         } else if let Some(v) = &r.outdated {
@@ -435,7 +443,10 @@ fn new(n: New) -> Result<(), String> {
     };
     let s = Summon {
         cwd: cwd.to_string_lossy().into_owned(),
-        agent: Default::default(),
+        agent: match n.agent.as_str() {
+            "codex" => Agent::Codex,
+            _ => Agent::Claude,
+        },
         name: n.name,
         model: n.model,
         effort: n.effort,

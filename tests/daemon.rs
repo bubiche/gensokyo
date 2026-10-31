@@ -1773,11 +1773,17 @@ fn the_claude_on_path_skips_gensokyos_own() {
     std::os::unix::fs::symlink(dir.join("own"), dir.join("alias")).unwrap();
     let path = |ds: &[&str]| std::env::join_paths(ds.iter().map(|d| dir.join(d))).unwrap();
     let own = dir.join("own");
-    assert_eq!(on_path(Some(&path(&["own", "real"])), &own), Some(dir.join("real/claude")));
-    assert_eq!(on_path(Some(&path(&["alias", "real"])), &own), Some(dir.join("real/claude")));
-    assert_eq!(on_path(Some(&path(&["own"])), &own), None);
     assert_eq!(
-        on_path(Some(&path(&["real", "own"])), &dir.join("x")),
+        on_path(Some(&path(&["own", "real"])), &own, "claude"),
+        Some(dir.join("real/claude"))
+    );
+    assert_eq!(
+        on_path(Some(&path(&["alias", "real"])), &own, "claude"),
+        Some(dir.join("real/claude"))
+    );
+    assert_eq!(on_path(Some(&path(&["own"])), &own, "claude"), None);
+    assert_eq!(
+        on_path(Some(&path(&["real", "own"])), &dir.join("x"), "claude"),
         Some(dir.join("real/claude"))
     );
 }

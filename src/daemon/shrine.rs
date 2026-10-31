@@ -2,13 +2,14 @@
 //! summon, recall, banish, close, quit.
 
 use super::aware::Aware;
+use super::codex;
 use super::launch;
 use super::log::log;
 use super::pty;
 use super::resident::{self, Handle};
 use super::rituals::Rites;
 use super::store::{self, Record, Store};
-use crate::proto::{self, NAME_RULE, Reply, State, Summon, Telemetry, valid_name};
+use crate::proto::{self, Agent, NAME_RULE, Reply, State, Summon, Telemetry, valid_name};
 use crate::role;
 use crate::tele;
 use serde_json::json;
@@ -141,9 +142,19 @@ impl Shrine {
     /// a courier, a card).
     pub(super) fn claude(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
         let program = launch::claude(std::env::var_os("PATH").as_deref())?;
+        Some((program, self.env(id)))
+    }
+
+    /// `codex`, and the environment it runs in for resident `id`.
+    pub(super) fn codex(&self, id: &str) -> Option<(PathBuf, Vec<(OsString, OsString)>)> {
+        let program = codex::program(std::env::var_os("PATH").as_deref())?;
+        Some((program, self.env(id)))
+    }
+
+    fn env(&self, id: &str) -> Vec<(OsString, OsString)> {
         let bin = self.exe.parent().unwrap_or(Path::new("/")).to_path_buf();
         let shim = crate::shim::dir();
-        Some((program, launch::env(std::env::vars_os(), id, &bin, &shim, &self.socket)))
+        launch::env(std::env::vars_os(), id, &bin, &shim, &self.socket)
     }
 }
 
@@ -166,7 +177,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
         signal: r.signal,
         state: if r.departed.is_some() { State::Departed } else { State::Resting },
         detail: (r.cloud.is_some() && r.departed.is_none()).then(|| "starting".into()),
-        mode: flag(&r.argv, "--permission-mode"),
+        mode: launched_mode(r),
         branch: None,
         telemetry: None,
         blocked: None,
@@ -198,7 +209,7 @@ fn entry_info(e: &Entry, installed: Option<&str>) -> proto::Resident {
     } else if cloud_here(e) {
         (r.state, r.detail) = (cloud_state(e), Some(e.follow.phase.word().into()));
     }
-    r.mode = e.aware.mode.clone().or(r.mode);
+    r.mode = heard_mode(e).or(r.mode);
     r.here = e.here.as_ref().map(|(_, d)| d.clone()).filter(|d| *d != e.rec.cwd);
     r.branch = tele::git_branch(Path::new(r.here.as_ref().unwrap_or(&e.rec.cwd)));
     r.telemetry = e.tele.clone();
@@ -257,18 +268,29 @@ pub(super) fn find(shrine: &Shrine, who: &str) -> Option<usize> {
     })
 }
 
-/// Starts `claude` for a resident: the argv, the environment and the PTY at the shrine's size,
-/// with the record following its exit. Gives the program and argv for the record.
+/// Starts `claude` or `codex` for a resident: the argv, the environment and the PTY at the
+/// shrine's size, with the record following its exit. Gives the program and argv for the record.
 fn launch(
     shrine: &Shared,
     sh: &Shrine,
+    agent: Agent,
     o: &launch::Options,
     cwd: &Path,
 ) -> Result<(String, Vec<String>, Rc<Handle>), String> {
     let share = sh.share.clone().ok_or("no share/ directory beside the binary")?;
-    let (program, env) = sh.claude(o.id).ok_or("claude not found on PATH")?;
     let paths = launch::Paths { exe: &sh.exe, share: &share, socket: &sh.socket };
-    let argv = launch::argv(&paths, o, cwd);
+    let (program, env, argv) = match agent {
+        Agent::Claude => {
+            let (program, env) = sh.claude(o.id).ok_or("claude not found on PATH")?;
+            (program, env, launch::argv(&paths, o, cwd))
+        }
+        Agent::Codex => {
+            let (program, env) = sh
+                .codex(o.id)
+                .ok_or("codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app")?;
+            (program, env, codex::argv(&paths, o)?)
+        }
+    };
     let (cols, rows) = sh.size;
     let spawn = pty::Spawn { program: &program, args: &argv, env: &env, cwd, cols, rows };
     let handle = resident::start(spawn)
@@ -299,8 +321,21 @@ fn read_only(t: &str) -> bool {
 /// The mode a resident works in: its hooks' word, else what it was launched with, else
 /// Claude Code's own default.
 fn mode_of(e: &Entry) -> String {
-    let launched = || flag(&e.rec.argv, "--permission-mode");
-    e.aware.mode.clone().or_else(launched).unwrap_or_else(|| "default".into())
+    heard_mode(e).or_else(|| launched_mode(&e.rec)).unwrap_or_else(|| "default".into())
+}
+
+/// The mode its hooks last said. Codex's say only default or bypassPermissions, whatever it
+/// was started in, so a Codex resident's is never heard.
+fn heard_mode(e: &Entry) -> Option<String> {
+    e.aware.mode.clone().filter(|_| e.rec.agent.is_claude())
+}
+
+/// The mode it was launched in, by its argv.
+pub(super) fn launched_mode(r: &Record) -> Option<String> {
+    match r.agent {
+        Agent::Claude => flag(&r.argv, "--permission-mode"),
+        Agent::Codex => codex::mode_of(&r.argv).map(String::from),
+    }
 }
 
 /// Whether a helper may work in `mode` under a lead in `lead`: the lead's own, or one narrower.
@@ -352,11 +387,15 @@ pub(super) fn summon(
         Some(who) => Some(super::cloud::run_of(&shrine.borrow(), who)?),
         None => None,
     };
-    let Summon { cwd, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
+    let Summon { cwd, agent, name, model, effort, mut mode, prompt, allowed_tools, role, .. } = s;
     let system_prompt = s.system_prompt.filter(|p| !p.trim().is_empty());
-    // Named, so a helper never starts in the user's defaultMode where that is wider.
+    // Named, so a helper never starts in the user's defaultMode where that is wider. A Codex
+    // helper of a lead in a mode Codex has no flags for reads only and asks, its narrowest.
     if let Some(c) = caller.filter(|_| mode.is_none()) {
         mode = shrine.borrow().entries.iter().find(|e| e.rec.id == c).map(mode_of);
+        if agent == Agent::Codex && mode.as_deref().and_then(codex::mode_flags).is_none() {
+            mode = Some("default".into());
+        }
     }
     let mut extra = Vec::new();
     if !allowed_tools.is_empty() {
@@ -369,6 +408,7 @@ pub(super) fn summon(
         shrine,
         Start {
             cwd,
+            agent,
             name,
             model,
             effort,
@@ -421,6 +461,9 @@ pub(super) fn may_summon(
     }
     if let Some(t) = s.allowed_tools.iter().find(|t| t.starts_with('-')) {
         return Err(format!("allowed tools: {t} starts with -, which claude would read as a flag"));
+    }
+    if s.agent == Agent::Codex {
+        may_codex(s)?;
     }
     if s.cloud {
         may_cloud(s)?;
@@ -484,14 +527,42 @@ pub(super) fn may_summon(
             ));
         }
     }
-    if caller.is_some() && dir.is_dir() && !super::rituals::trust(shrine).trusted(dir) {
-        return Err(format!(
-            "nothing has answered Claude Code's trust prompt for {} (the user opens Claude Code \
-             there once and accepts)",
-            crate::paths::short(&dir.to_string_lossy())
-        ));
+    if caller.is_some() && dir.is_dir() {
+        let short = crate::paths::short(&dir.to_string_lossy());
+        match s.agent {
+            Agent::Claude if !super::rituals::trust(shrine).trusted(dir) => {
+                return Err(format!(
+                    "nothing has answered Claude Code's trust prompt for {short} (the user opens \
+                     Claude Code there once and accepts)"
+                ));
+            }
+            Agent::Codex if !codex::home().is_some_and(|h| codex::trusted(&h, dir)) => {
+                return Err(format!(
+                    "Codex does not trust {short} or its repository (the user opens Codex there \
+                     once and trusts it)"
+                ));
+            }
+            _ => {}
+        }
     }
     Ok(())
+}
+
+/// Whether a Codex resident would be refused what only Claude Code has, or a mode or effort
+/// Codex cannot take.
+fn may_codex(s: &Summon) -> Result<(), String> {
+    let not = [
+        (s.cloud, "a cloud session is Claude Code on claude.ai, not Codex"),
+        (s.teleport.is_some(), "a cloud run is taken over by Claude Code, not Codex"),
+        (
+            !s.allowed_tools.is_empty(),
+            "Codex has no tools allowed without asking: its permission mode says what it asks",
+        ),
+    ];
+    if let Some((_, why)) = not.iter().find(|(asked, _)| *asked) {
+        return Err((*why).into());
+    }
+    codex::check(s.mode.as_deref(), s.effort.as_deref())
 }
 
 /// Whether this cloud session would be refused before git or claude is asked: its task is its
@@ -534,6 +605,7 @@ fn may_cloud(s: &Summon) -> Result<(), String> {
 #[derive(Default)]
 pub(super) struct Start {
     pub(super) cwd: String,
+    pub(super) agent: Agent,
     pub(super) name: Option<String>,
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
@@ -599,11 +671,12 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
         teleport: s.teleport.as_deref(),
         remote: !s.ritual_run,
     };
-    let (program, argv, handle) = launch(shrine, &sh, &opts, &cwd)?;
+    let (program, argv, handle) = launch(shrine, &sh, s.agent, &opts, &cwd)?;
     let rec = Record {
         id: id.clone(),
         session: id.clone(),
         name,
+        agent: s.agent,
         slot,
         cwd: cwd.to_string_lossy().into_owned(),
         program,
@@ -758,11 +831,18 @@ pub(super) fn come_back(
     }
     let lead = rec.owner.as_deref().and_then(|o| lead_name(sh, o));
     let flag = |f: &str| flag(&rec.argv, f);
-    let (model, effort) = (flag("--model"), flag("--effort"));
-    let mode = mode.or_else(|| flag("--permission-mode"));
+    let (model, effort, launched) = match rec.agent {
+        Agent::Claude => (flag("--model"), flag("--effort"), flag("--permission-mode")),
+        Agent::Codex => {
+            let l = codex::launched(&rec.argv);
+            (l.model, l.effort, l.mode)
+        }
+    };
+    let mode = mode.or(launched);
     // The session its hooks last named, which /clear moves on. One that never got a prompt has
-    // nothing to resume: it starts afresh on that session, with the same name.
-    let resume = launch::has_conversation(&rec.session);
+    // nothing to resume: it starts afresh on that session, with the same name. A Codex thread
+    // is never resumed: it starts afresh.
+    let resume = rec.agent.is_claude() && launch::has_conversation(&rec.session);
     // Taken over from a cloud run, while still on the session the run was copied into (one
     // `/clear` started is gensokyo's from its first prompt): copied when there is nothing yet,
     // and its prompt built afresh at every start.
@@ -805,7 +885,7 @@ pub(super) fn come_back(
         teleport,
         remote: !rec.ritual_run,
     };
-    let (program, argv, handle) = launch(shrine, sh, &opts, &cwd)?;
+    let (program, argv, handle) = launch(shrine, sh, rec.agent, &opts, &cwd)?;
     let ledger = ledger.map(|f| f.to_string_lossy().into_owned());
     Ok(Back { program, argv, handle, resumed: resume, ledger })
 }
@@ -916,7 +996,8 @@ pub(super) async fn banish(shrine: &Shared, who: &str) -> Result<String, String>
 /// Ctrl-C (clears a half-typed prompt or interrupts the turn), a pause for each to land, then
 /// `/exit` and Enter. True once the resident has left. Esc goes as the resident asked keys to
 /// be sent, so it is not read as Alt with what follows; the rest as plain bytes, which Claude
-/// Code takes in kitty mode too.
+/// Code takes in kitty mode too. Codex quits at once on a Ctrl-C at an empty prompt, its
+/// SessionEnd hook coming as it goes; keys to it after that go nowhere.
 async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
     if let Some(esc) = crate::vt::KeyEvent::from_kitty(27, 0, 1) {
         h.input(&h.encode(esc)).await;
@@ -924,9 +1005,15 @@ async fn ask_leave(shrine: &Shared, h: &Handle, wait: Duration) -> bool {
     }
     h.input(b"\x03").await;
     h.settle(Duration::from_millis(200), Duration::from_secs(2)).await;
+    if h.exit().is_some() {
+        return true;
+    }
     let calm = stir(shrine, h);
     h.input(b"/exit").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
+    if h.exit().is_some() {
+        return true;
+    }
     // A turn begun meanwhile (a message queued for it, say) may have opened a dialog, which the
     // Enter would answer yes: none goes, and the next ask starts again from Esc.
     if stir(shrine, h) != calm {

@@ -5,6 +5,7 @@ pub mod aware;
 mod branch;
 pub mod cards;
 mod cloud;
+pub mod codex;
 mod crash;
 mod follow;
 mod headless;

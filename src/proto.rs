@@ -8,7 +8,7 @@
 use crate::vt::{Frame, Modes, Pointer, Run};
 use serde::{Deserialize, Serialize};
 
-pub const PROTO: u32 = 17;
+pub const PROTO: u32 = 18;
 
 /// The longest a notice is, in characters: long enough that a crash's, naming everyone it cut
 /// off, is never cut.
@@ -231,6 +231,10 @@ pub struct Hook {
     /// Where Claude works when the hook ran: it follows a `cd`, the launch dir does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// `tool_input` as compact JSON, on a Codex PermissionRequest and PostToolUse: a grant is
+    /// the PostToolUse of the request's own input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 impl Hook {
@@ -379,9 +383,26 @@ pub struct Key {
     pub event: u8,
 }
 
+/// The program a resident runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Agent {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Agent {
+    pub fn is_claude(&self) -> bool {
+        *self == Agent::Claude
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Summon {
     pub cwd: String,
+    #[serde(default, skip_serializing_if = "Agent::is_claude")]
+    pub agent: Agent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -689,6 +710,8 @@ pub struct Notice {
 pub struct Resident {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub agent: Agent,
     pub slot: Option<u8>,
     pub cwd: String,
     /// Where it works now, when that is not `cwd`: Claude moved into a worktree or a subdir.

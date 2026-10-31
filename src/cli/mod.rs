@@ -435,6 +435,7 @@ fn new(n: New) -> Result<(), String> {
     };
     let s = Summon {
         cwd: cwd.to_string_lossy().into_owned(),
+        agent: Default::default(),
         name: n.name,
         model: n.model,
         effort: n.effort,

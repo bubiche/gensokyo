@@ -6,7 +6,7 @@
 //! raised (a permission prompt, a finished turn), then resting. The registry counts only when
 //! its snapshot began after the newest hook: one taken before a `Stop` knows nothing of it.
 
-use crate::proto::{Ended, Hook, State};
+use crate::proto::{Agent, Ended, Hook, State};
 use crate::tele;
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,10 @@ pub struct Aware {
     typing: Option<Typing>,
     marks: u64,
     news: News,
+    /// What it runs. For Codex the hooks alone say what it waits for.
+    pub agent: Agent,
+    /// Launched in auto mode, where Codex's reviewer answers its permission requests.
+    pub auto: bool,
 }
 
 /// gensokyo typing into it, from before the paste until a hook after the Enter: another prompt
@@ -224,6 +228,11 @@ pub fn kitty_key(code: u32, mods: u8, event: u8) -> Option<Key> {
 }
 
 impl Aware {
+    /// Nothing known yet of a resident that runs `agent`, launched in auto mode or not.
+    pub fn new(agent: Agent, auto: bool) -> Aware {
+        Aware { agent, auto, ..Aware::default() }
+    }
+
     /// Applies one hook; false, and nothing changes, for one older than the newest applied.
     pub fn hook(&mut self, h: &Hook) -> bool {
         if h.at < self.hook_at {
@@ -423,7 +432,13 @@ impl Aware {
     pub fn renewed(&self, resumed: bool) -> Aware {
         // A hook the old process sent late is older than anything the new one says.
         // Marks keep counting, so one a card still holds is never taken for a new one.
-        let mut a = Aware { hook_at: self.hook_at, marks: self.marks, ..Aware::default() };
+        let mut a = Aware {
+            hook_at: self.hook_at,
+            marks: self.marks,
+            agent: self.agent,
+            auto: self.auto,
+            ..Aware::default()
+        };
         if self.pending == Some(Pending::Stopped) {
             a.set(self.pending, self.detail.clone());
         }

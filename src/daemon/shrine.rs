@@ -71,10 +71,12 @@ impl Entry {
     }
 
     fn new(rec: Record, handle: Option<Rc<Handle>>) -> Entry {
+        let auto =
+            rec.agent == proto::Agent::Codex && rec.argv.iter().any(|a| a == "--approve-for-me");
         Entry {
+            aware: Aware::new(rec.agent, auto),
             rec,
             handle,
-            aware: Aware::default(),
             tele: None,
             here: None,
             idle_since: None,
@@ -154,6 +156,7 @@ fn info(r: &Record, pid: Option<i32>) -> proto::Resident {
     proto::Resident {
         id: r.id.clone(),
         name: r.name.clone(),
+        agent: r.agent,
         slot: r.slot,
         cwd: r.cwd.clone(),
         here: None,

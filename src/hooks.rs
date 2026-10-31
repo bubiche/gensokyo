@@ -90,6 +90,7 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
         text,
         answer,
         cwd: s("/cwd").filter(|c| tele::is_dir_path(c)).map(String::from),
+        input: None,
     }
 }
 

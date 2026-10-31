@@ -30,6 +30,8 @@ pub struct Record {
     #[serde(default)]
     pub session_at: i64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "crate::proto::Agent::is_claude")]
+    pub agent: crate::proto::Agent,
     pub slot: Option<u8>,
     pub cwd: String,
     pub program: String,

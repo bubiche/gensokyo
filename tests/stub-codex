@@ -14,14 +14,16 @@
 # runs flag hooks only then. SessionStart ("startup") fires with the first prompt, not at start;
 # every prompt fires UserPromptSubmit, works for $STUB_WORK seconds (default 1, tenths allowed),
 # then fires Stop with "echo: <prompt>". The prompt /perm opens an approval instead: PreToolUse
-# and PermissionRequest for a Bash command with a description; y or Enter grants it (PostToolUse,
-# whose tool_input has no description, as Codex sends it; then the turn goes on to its Stop),
-# Esc or n refuses it (Interrupt, no Stop). SessionEnd ("other") fires on leaving, whether or
+# and PermissionRequest for a Bash command with a description, with three choices; y, or Enter on
+# the first two, grants it (PostToolUse, whose tool_input has no description, as Codex sends it;
+# then the turn goes on to its Stop); Esc, n, or Enter on the third refuses it (Interrupt, no
+# Stop). Up and Down move between the choices. SessionEnd ("other") fires on leaving, whether or
 # not a session started.
 # Title, only with `-c tui.terminal_title=...`, by OSC 0 as Codex draws it: "Ready | Context 0%
 # used", then "Ready | <id cut to 29>... | ...", "Starting | ...", then Ready or Working, each held
 # for a moment so a poller sees it. A turn draws Working frames with a spinner glyph, through an
-# approval too; Ready after Stop, and after an Interrupt Ready frames whose glyph keeps turning.
+# approval too. A Stop draws one more Working frame, its glyph gone, before Ready; an Interrupt
+# one more with its glyph, then Ready frames whose glyph keeps turning.
 # Keys, read a byte at a time with the tty's ISIG off: Esc at an idle prompt does nothing and
 # keeps the draft; Esc or Ctrl-C in a turn interrupts it; Ctrl-C clears a draft, or on an empty
 # prompt quits at once (exit 0); /exit + Enter exits 0; Enter on an empty prompt does nothing.
@@ -143,7 +145,7 @@ w=${STUB_WORK:-1} f=0
 case $w in *.*) f=${w#*.}; f=${f:0:1}; w=${w%%.*} ;; esac
 work=$(( ${w:-0} * 10 + ${f:-0} ))
 
-turn='' left=0 said='' tool='' draft='' pasting='' pbuf='' taken=0
+turn='' left=0 row=1 said='' tool='' draft='' pasting='' pbuf='' taken=0
 pend="${esc}[201~"
 [ -f "$STUB_STATE/$thread.queue.taken" ] && taken=$(cat "$STUB_STATE/$thread.queue.taken")
 
@@ -153,10 +155,10 @@ submit() {
   fire UserPromptSubmit ",\"prompt\":\"$(json "$1")\""
   printf '\n› %s\n' "$1"
   if [ "$1" = /perm ]; then
-    turn=perm tool=exec-$(uuid)
+    turn=perm tool=exec-$(uuid) row=1
     fire PreToolUse ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch stub-perm.txt\"},\"tool_use_id\":\"$tool\""
     fire PermissionRequest ',"tool_name":"Bash","tool_input":{"command":"touch stub-perm.txt","description":"Allow the stub to create stub-perm.txt?"}'
-    printf 'Would you like to run the following command?\n  $ touch stub-perm.txt\n› 1. Yes, proceed (y)\n  3. No, and tell Codex what to do differently (esc)\n'
+    printf "Would you like to run the following command?\n  \$ touch stub-perm.txt\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for these commands\n  3. No, and tell Codex what to do differently (esc)\n"
   else
     turn=work left=$work
   fi
@@ -171,12 +173,14 @@ finish() {
   turn='' ctx=$((ctx + 2))
   fire Stop ",\"stop_hook_active\":false,\"last_assistant_message\":\"$(json "echo: $said")\""
   printf '• echo: %s\n› ' "$said"
+  state Working; sleep 0.2
   state Ready
 }
 interrupt() {
   turn='' ctx=$((ctx + 2)) spin=1
   fire Interrupt
   printf '\n■ Conversation interrupted\n› '
+  state Working "${glyphs[glyph]}"; sleep 0.2
   state Ready "${glyphs[glyph]}"
 }
 quit() {
@@ -225,7 +229,7 @@ key_ctrlc() {
 key_enter() {
   local d=$draft
   case $turn in
-    perm) grant ;;
+    perm) if [ "$row" = 3 ]; then interrupt; else grant; fi ;;
     work) ;;
     *) [ -n "$d" ] || return 0
        draft=''
@@ -235,15 +239,19 @@ key_enter() {
 }
 add() { draft=$draft$1; printf '%s' "$1"; }
 
-# A CSI sequence: kitty keys, a paste's start; focus reports and the rest mean nothing here.
+# A CSI sequence: kitty keys, a paste's start, arrows in an approval; focus reports and the rest
+# mean nothing here.
 csi() {
   local code=${1%%;*} mods=''
+  code=${code%%:*}
   case $1 in *';'*) mods=${1#*;}; mods=${mods%%:*} ;; esac
   case $2:$code:$mods in
     '~:200:') pasting=1 ;;
     u:27:*) key_esc ;;
     u:13:*) key_enter ;;
     u:99:5) key_ctrlc ;;
+    A::) [ "$turn" != perm ] || [ "$row" = 1 ] || row=$((row - 1)) ;;
+    B::) [ "$turn" != perm ] || [ "$row" = 3 ] || row=$((row + 1)) ;;
   esac
 }
 
@@ -264,7 +272,7 @@ keys() {
                 if [ -z "$fin" ]; then grab; if [ -n "$got" ]; then rest="$esc$rest$got"; else rest=''; fi; continue; fi
                 rest=${body:$((${#params} + 1))}
                 csi "$params" "$fin" ;;
-          O*) rest=${rest#??} ;;
+          O*) fin=${rest:1:1}; rest=${rest#??}; csi '' "$fin" ;;
           *) key_esc ;;
         esac ;;
       $'\003') key_ctrlc ;;

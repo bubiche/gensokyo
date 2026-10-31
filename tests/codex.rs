@@ -353,13 +353,19 @@ fn a_worktree_is_trusted_through_its_main_checkout() {
 /// A daemon whose Codex residents are tests/stub-codex, with Codex trusting its directory or
 /// not.
 fn daemon(name: &str, trusted: bool) -> common::Daemon {
+    daemon_with(name, trusted, &[])
+}
+
+/// The same, with `env` for the daemon and so every resident.
+fn daemon_with(name: &str, trusted: bool, env: &[(&str, &str)]) -> common::Daemon {
     let dir = fresh(&format!("cx-{name}"));
     std::fs::create_dir_all(dir.join("codex")).unwrap();
     if trusted {
         let config = format!("[projects.\"{}\"]\ntrust_level = \"trusted\"\n", dir.display());
         std::fs::write(dir.join("codex/config.toml"), config).unwrap();
     }
-    let d = common::Daemon::at(dir, vec![]);
+    let env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let d = common::Daemon::at(dir, env);
     d.cli(&["list"]);
     d
 }
@@ -369,8 +375,14 @@ fn lead(d: &common::Daemon) -> Value {
     let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Seiran",
                          "mode": "acceptEdits"}));
     assert_eq!(r["t"], "summoned", "{r}");
-    d.stub(&r["resident"]["id"], "ready");
+    ready(d, &r["resident"]["id"]);
     r["resident"].clone()
+}
+
+/// Once resident `id`'s stand-in reads its keys.
+fn ready(d: &common::Daemon, id: &Value) {
+    let f = d.dir.join(format!("stub/{}.ready", id.as_str().unwrap()));
+    common::wait_for(LONG, || f.exists(), "the stand-in to be ready");
 }
 
 /// `gensokyo <args>` from inside resident `me`.
@@ -411,6 +423,21 @@ fn keys(d: &common::Daemon, who: &str, bytes: &[u8]) {
 
 /// Long enough for "started" (up to two 3 s beats) and a loaded machine.
 const LONG: Duration = Duration::from_secs(60);
+
+/// The daemon reads a Codex title once a beat, every 3 s.
+const BEAT: Duration = Duration::from_secs(3);
+
+/// How long the stand-in keeps its last `Working` frame after a Stop or an Interrupt: longer than
+/// a beat, so one reads it.
+const TAIL: &str = "5";
+
+/// `who` in `state` all through `long`, whatever titles Codex draws meanwhile.
+fn stays(d: &common::Daemon, who: &str, state: &str, long: Duration, why: &str) {
+    let t = Instant::now();
+    while t.elapsed() < long {
+        assert_eq!(me(d, who)["state"], state, "{why}");
+    }
+}
 
 fn record(d: &common::Daemon, id: &Value) -> Value {
     let f = d.dir.join(format!("residents/{}.json", id.as_str().unwrap()));
@@ -455,6 +482,7 @@ fn a_codex_resident_is_started_listed_left_and_started_afresh() {
     assert_eq!(launched.model.as_deref(), Some("gpt-x"));
     assert_eq!(launched.effort.as_deref(), Some("high"));
     // The stand-in got exactly that.
+    ready(&d, &r["id"]);
     let got = d.stub(&r["id"], "args");
     assert_eq!(got.split('\0').filter(|a| !a.is_empty()).collect::<Vec<_>>(), argv);
 
@@ -483,7 +511,7 @@ fn a_codex_resident_is_started_listed_left_and_started_afresh() {
     let again = strings(&record(&d, &r["id"])["argv"]);
     assert_eq!(again[..], argv[..argv.len() - 2]);
     assert_eq!(me(&d, "Nitori")["mode"], "acceptEdits");
-    d.stub(&r["id"], "ready");
+    ready(&d, &r["id"]);
     let c = d.req(json!({"t": "close", "id": 5, "who": "Nitori"}));
     assert_eq!(c["message"], "Nitori has left (/exit)", "{c}");
 }
@@ -537,7 +565,7 @@ fn a_codex_helper_works_in_its_leads_mode_where_codex_is_trusted() {
 /// A helper's turn, from its brief to its answer: busy by its hooks, waited on, read, closed.
 #[test]
 fn a_codex_helpers_turn_is_waited_on_read_and_it_leaves_on_close() {
-    let d = daemon("turn", true);
+    let d = daemon_with("turn", true, &[("STUB_TAIL", TAIL)]);
     let lead = lead(&d);
     let h = helper(&d, &lead, "Kappa", "hello there");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
@@ -551,6 +579,8 @@ fn a_codex_helpers_turn_is_waited_on_read_and_it_leaves_on_close() {
     };
     assert_eq!(busy("UserPromptSubmit"), ["busy"]);
     assert_eq!(busy("Stop"), ["awaits"]);
+    // Codex draws Working a while longer after its Stop, the answer collected: no busier for it.
+    stays(&d, "Kappa", "resting", BEAT + BEAT / 2, "a Working title after Stop made it busy");
     let o = inside(&d, &lead, &["read", "Kappa"]);
     assert!(common::out(&o).contains("echo: hello there"), "{}", common::out(&o));
     let o = inside(&d, &lead, &["close", "Kappa"]);
@@ -570,12 +600,9 @@ fn a_codex_approval_is_needed_until_it_is_granted() {
     assert_eq!(code, 0, "{l:?}");
     let k = me(&d, "Kappa");
     assert_eq!((&k["state"], &k["needs"]), (&json!("awaits"), &json!(1)), "{k}");
-    // Codex's spinner draws a Working frame every tenth of a second meanwhile: for two seconds of
-    // them, it is still waiting on the user.
-    let t = Instant::now();
-    while t.elapsed() < Duration::from_secs(2) {
-        assert_eq!(me(&d, "Kappa")["state"], "awaits", "the spinner cleared the approval");
-    }
+    // Codex's spinner draws a Working frame every tenth of a second meanwhile: through two beats
+    // that read them, it is still waiting on the user.
+    stays(&d, "Kappa", "awaits", 2 * BEAT + BEAT / 3, "the spinner cleared the approval");
     keys(&d, "Kappa", b"y");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!(code, 0, "{l:?}");
@@ -586,7 +613,7 @@ fn a_codex_approval_is_needed_until_it_is_granted() {
 
 #[test]
 fn a_codex_approval_refused_ends_the_turn_interrupted() {
-    let d = daemon("esc", true);
+    let d = daemon_with("esc", true, &[("STUB_TAIL", TAIL)]);
     let lead = lead(&d);
     helper(&d, &lead, "Kappa", "/perm");
     let (code, _) = waited(&d, &lead, &["Kappa", "--until", "needs", "--timeout", "60s"]);
@@ -595,6 +622,9 @@ fn a_codex_approval_refused_ends_the_turn_interrupted() {
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
     assert_eq!(l[0]["answer"], Value::Null);
+    // Codex draws Working a while longer after the Interrupt: not working for it.
+    let why = "a Working title after Interrupt made it busy";
+    stays(&d, "Kappa", "resting", BEAT + BEAT / 2, why);
 }
 
 /// With no prompt there is no thread until one comes, but its title says it has started; and a

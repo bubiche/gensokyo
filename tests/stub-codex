@@ -23,7 +23,8 @@
 # used", then "Ready | <id cut to 29>... | ...", "Starting | ...", then Ready or Working, each held
 # for a moment so a poller sees it. A turn draws Working frames with a spinner glyph, through an
 # approval too. A Stop draws one more Working frame, its glyph gone, before Ready; an Interrupt
-# one more with its glyph, then Ready frames whose glyph keeps turning.
+# one more with its glyph, then Ready frames whose glyph keeps turning. That last Working frame
+# stays $STUB_TAIL seconds (default 0.2), long enough with a few for the daemon to read it.
 # Keys, read a byte at a time with the tty's ISIG off: Esc at an idle prompt does nothing and
 # keeps the draft; Esc or Ctrl-C in a turn interrupts it; Ctrl-C clears a draft, or on an empty
 # prompt quits at once (exit 0); /exit + Enter exits 0; Enter on an empty prompt does nothing.
@@ -173,14 +174,14 @@ finish() {
   turn='' ctx=$((ctx + 2))
   fire Stop ",\"stop_hook_active\":false,\"last_assistant_message\":\"$(json "echo: $said")\""
   printf '• echo: %s\n› ' "$said"
-  state Working; sleep 0.2
+  state Working; sleep "${STUB_TAIL:-0.2}"
   state Ready
 }
 interrupt() {
   turn='' ctx=$((ctx + 2)) spin=1
   fire Interrupt
   printf '\n■ Conversation interrupted\n› '
-  state Working "${glyphs[glyph]}"; sleep 0.2
+  state Working "${glyphs[glyph]}"; sleep "${STUB_TAIL:-0.2}"
   state Ready "${glyphs[glyph]}"
 }
 quit() {

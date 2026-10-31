@@ -191,17 +191,16 @@ async fn version(claude: &Path, env: &[(OsString, OsString)]) -> Option<String> 
 }
 
 /// Each Codex resident's terminal title, every beat, whether or not `claude` is there to ask:
-/// whether it has started, and idle or busy for show.
+/// whether it has started.
 fn titles(shrine: &Shared) {
     let mut sh = shrine.borrow_mut();
     let sh = &mut *sh;
-    let at = hooks::now_ms();
     for i in 0..sh.entries.len() {
         let e = &mut sh.entries[i];
         let Some(title) = e.handle.as_ref().filter(|_| !e.rec.agent.is_claude()) else { continue };
         let title = title.modes().title;
         let before = e.aware.state();
-        if e.aware.title(&title, at) {
+        if e.aware.title(&title) {
             log(json!({"ev": "started", "id": e.rec.id}));
             after(sh, i, before);
         }

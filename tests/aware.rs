@@ -628,8 +628,8 @@ fn codex_hook(event: &str, extra: Value, at: i64) -> Hook {
 /// A Codex resident past its boot, at work on its first prompt.
 fn codex_at_work(auto: bool) -> Aware {
     let mut a = Aware::new(Agent::Codex, auto);
-    a.title(&codex_title("Starting", ""), 1);
-    a.title(&codex_title("Working", " ⠋"), 2);
+    a.title(&codex_title("Starting", ""));
+    a.title(&codex_title("Working", " ⠋"));
     a.hook(&codex_hook("SessionStart", json!({"source": "startup"}), 3));
     a.hook(&codex_hook("UserPromptSubmit", json!({"prompt": "go"}), 4));
     a.take();
@@ -672,15 +672,15 @@ fn a_codex_resident_is_starting_until_its_title_is_past_the_boot() {
     {
         let mut a = Aware::new(Agent::Codex, false);
         assert_eq!(a.dialog(), Some(STARTING));
-        for (at, t) in idle.iter().enumerate() {
-            assert!(!a.title(t, at as i64), "{t}");
+        for t in idle {
+            assert!(!a.title(t), "{t}");
             assert_eq!(a.dialog(), Some(STARTING), "{t}");
         }
-        assert!(a.title(&last, 10));
+        assert!(a.title(&last));
         assert_eq!(a.dialog(), None, "{last}");
-        assert!(!a.title(&codex_title("Ready", " ⠼"), 11), "started once");
+        assert!(!a.title(&codex_title("Ready", " ⠼")), "started once");
         // At its exit the title goes blank: started it stays.
-        a.title("", 12);
+        a.title("");
         assert_eq!(a.dialog(), None);
     }
 }
@@ -689,18 +689,18 @@ fn a_codex_resident_is_starting_until_its_title_is_past_the_boot() {
 fn a_codex_title_read_every_few_seconds_starts_it_without_seeing_the_boot() {
     // `Ready` with an id comes once before `Starting`, in the same write: seen twice, it is past.
     let mut a = Aware::new(Agent::Codex, false);
-    a.title("Ready | Context 0% used", 1);
-    assert!(!a.title(&codex_title("Ready", ""), 2));
+    a.title("Ready | Context 0% used");
+    assert!(!a.title(&codex_title("Ready", "")));
     assert_eq!(a.dialog(), Some(STARTING));
-    assert!(a.title(&codex_title("Ready", ""), 3));
+    assert!(a.title(&codex_title("Ready", "")));
     assert_eq!(a.dialog(), None);
     // `Working` comes only after `Starting`.
     let mut a = Aware::new(Agent::Codex, false);
-    assert!(a.title(&codex_title("Working", " ⠙"), 1));
+    assert!(a.title(&codex_title("Working", " ⠙")));
     // No title at all (its directory-trust dialog draws none): starting still.
     let mut a = Aware::new(Agent::Codex, false);
-    for at in 0..5 {
-        a.title("", at);
+    for _ in 0..5 {
+        a.title("");
     }
     assert_eq!(a.dialog(), Some(STARTING));
 }
@@ -709,20 +709,9 @@ fn a_codex_title_read_every_few_seconds_starts_it_without_seeing_the_boot() {
 fn a_claude_resident_takes_nothing_from_a_title() {
     let mut a = Aware::new(Agent::Claude, false);
     for t in [codex_title("Starting", ""), codex_title("Ready", ""), codex_title("Ready", "")] {
-        assert!(!a.title(&t, 1));
+        assert!(!a.title(&t));
     }
     assert_eq!(a.dialog(), Some(STARTING));
-}
-
-#[test]
-fn a_codex_title_shows_idle_or_busy_and_moves_nothing() {
-    let mut a = codex_at_work(false);
-    assert_eq!(a.shows(), Some((Registry::Busy, 2)));
-    a.title(&codex_title("Ready", ""), 8);
-    assert_eq!(a.shows(), Some((Registry::Idle, 8)));
-    assert_eq!(a.state(), State::Busy, "the hooks say it works");
-    a.title(&codex_title("Starting", ""), 9);
-    assert_eq!(a.shows(), Some((Registry::Idle, 8)));
 }
 
 #[test]
@@ -737,8 +726,8 @@ fn a_codex_approval_awaits_through_the_spinner_until_its_own_tool_runs() {
     assert_eq!(a.take().opened, 1);
     assert!(a.open() && a.dialog() == Some("has a dialog waiting for you"));
     // Codex keeps drawing its spinner while the dialog is up.
-    for at in 11..15 {
-        a.title(&codex_title("Working", " ⠋"), at);
+    for _ in 11..15 {
+        a.title(&codex_title("Working", " ⠋"));
     }
     a.registry(Some(Registry::Busy), 20);
     assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
@@ -790,8 +779,8 @@ fn codex_titles_and_snapshots_after_a_hook_leave_its_flag_alone() {
     // A finished turn, with spinner frames stamped after its Stop.
     let mut a = codex_at_work(false);
     a.hook(&codex_hook("Stop", json!({"last_assistant_message": "done"}), 10));
-    for at in 11..15 {
-        a.title(&codex_title("Working", " ⠸"), at);
+    for _ in 11..15 {
+        a.title(&codex_title("Working", " ⠸"));
     }
     assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Stopped)));
     assert!(a.finished());
@@ -855,4 +844,27 @@ fn a_codex_request_that_lands_after_a_newer_unrelated_tool_still_opens() {
     let mut c = Aware::default();
     c.hook(&hook(json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}), 7));
     assert_eq!(c.heard(), 7);
+}
+
+#[test]
+fn a_codex_request_that_lands_after_its_own_tool_ran_opens_nothing() {
+    // Spooled, it comes back on the next beat, after the grant's PostToolUse.
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("PostToolUse", bash("touch x", None), 12));
+    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 10));
+    assert_eq!((a.state(), a.pending, a.take().opened), (State::Busy, None, 0));
+    // The same command asked for again, after it ran, is a new request.
+    a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 13));
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
+}
+
+#[test]
+fn a_codex_patch_is_granted_by_its_own_call() {
+    let patch = json!({"tool_name": "apply_patch",
+                       "tool_input": {"command": "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch"}});
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("PermissionRequest", patch.clone(), 10));
+    assert_eq!(a.pending, Some(Pending::Awaits));
+    a.hook(&codex_hook("PostToolUse", patch, 11));
+    assert_eq!((a.state(), a.pending), (State::Busy, None));
 }

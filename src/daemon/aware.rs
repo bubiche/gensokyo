@@ -1,14 +1,14 @@
 //! What a resident is doing, from two sources: its hooks, which say what it waits for, and
 //! Claude Code's registry (`claude agents --json`), which says whether it is busy or has a
-//! dialog open. Nothing here looks at the screen.
+//! dialog open. Nothing here reads the screen, only Codex's terminal title.
 //!
 //! Precedence: a question, then a dialog the registry sees, then busy, then a flag the hooks
 //! raised (a permission prompt, a finished turn), then resting. The registry counts only when
 //! its snapshot began after the newest hook: one taken before a `Stop` knows nothing of it.
 //!
 //! Codex is in no registry. Its hooks alone say what it waits for and whether it works; its
-//! terminal title says only that it has started, and shows idle or busy. The title keeps its
-//! spinner going while an approval dialog is open, so it can never be what clears one.
+//! terminal title says only that it has started. The title keeps its spinner going while an
+//! approval dialog is open, so it can never be what clears one.
 
 use crate::proto::{Agent, Ended, Hook, State};
 use crate::tele;
@@ -62,11 +62,12 @@ pub struct Aware {
     pub auto: bool,
     /// The `tool_input` of Codex's open permission request: its PostToolUse is the grant.
     request: Option<String>,
-    /// Codex's terminal title: the last one with an id, past its boot or not, and what it
-    /// showed last, idle or busy, and when.
+    /// The newest Codex PostToolUse that granted nothing, its input and when: a request for
+    /// that call stamped before it, landing after it (from the spool), has been answered.
+    ran: Option<(String, i64)>,
+    /// Codex's terminal title: the last one with an id, and whether it is past its boot.
     title: Option<Title>,
     started: bool,
-    shows: Option<(Registry, i64)>,
 }
 
 /// The first word of Codex's terminal title, `<state> | <thread id, cut> | Context N% used`.
@@ -283,6 +284,8 @@ impl Aware {
         if !(codex && h.event == "PostToolUse" && !granted) {
             self.hook_at = h.at;
         }
+        let answered =
+            self.ran.as_ref().is_some_and(|(i, at)| h.input.as_ref() == Some(i) && h.at < *at);
         self.typed_in(h.at);
         // Codex says `default` in every mode.
         if let Some(m) = h.mode.as_ref().filter(|_| !codex) {
@@ -294,7 +297,7 @@ impl Aware {
             // Codex's approval dialog. In auto it comes too, for a request its reviewer then
             // answers with no dialog.
             ("PermissionRequest", _) if codex => {
-                if !self.auto {
+                if !self.auto && !answered {
                     self.set(Some(Pending::Awaits), text);
                     self.request = h.input.clone();
                     self.shown = true;
@@ -307,6 +310,10 @@ impl Aware {
                 if granted {
                     self.set(None, None);
                     self.running = true;
+                } else if let Some(i) =
+                    h.input.clone().filter(|_| self.ran.as_ref().is_none_or(|r| r.1 <= h.at))
+                {
+                    self.ran = Some((i, h.at));
                 }
             }
             // Esc, or a denial with a word for Codex: the turn ends with no Stop.
@@ -398,27 +405,17 @@ impl Aware {
         }
     }
 
-    /// Codex's terminal title at epoch ms `at`; true if that has it started. It moves nothing
-    /// the hooks say. `Ready` with an id comes once before `Starting`, in the same write: seen
-    /// again, or after `Starting`, it is past the boot; `Working` comes only after.
-    pub fn title(&mut self, title: &str, at: i64) -> bool {
+    /// Codex's terminal title; true if that started it. It moves nothing the hooks say. `Ready`
+    /// with an id comes once before `Starting`, in the same write: seen again, or after
+    /// `Starting`, it is past the boot; `Working` comes only after.
+    pub fn title(&mut self, title: &str) -> bool {
         let Some(t) = title_of(title).filter(|_| self.agent == Agent::Codex) else {
             return false;
         };
         let was = self.started;
         self.started |= t == Title::Working || (t == Title::Ready && self.title.is_some());
         self.title = Some(t);
-        match t {
-            Title::Ready => self.shows = Some((Registry::Idle, at)),
-            Title::Working => self.shows = Some((Registry::Busy, at)),
-            Title::Starting => {}
-        }
         self.started && !was
-    }
-
-    /// Idle or busy, as Codex's title last showed it, and when: for show only.
-    pub fn shows(&self) -> Option<(Registry, i64)> {
-        self.shows
     }
 
     /// Why nothing may be typed into it now, or nothing: a dialog, what the user has typed

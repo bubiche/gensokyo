@@ -273,9 +273,17 @@ impl Aware {
         if h.at < self.hook_at {
             return false;
         }
-        self.hook_at = h.at;
-        self.typed_in(h.at);
         let codex = self.agent == Agent::Codex;
+        // Codex sends a PostToolUse for every call, each from a process of its own: one that
+        // grants nothing says nothing, and must not make a request stamped before it, landing
+        // after it, older than the newest hook.
+        let granted = self.pending == Some(Pending::Awaits)
+            && self.request.is_some()
+            && h.input == self.request;
+        if !(codex && h.event == "PostToolUse" && !granted) {
+            self.hook_at = h.at;
+        }
+        self.typed_in(h.at);
         // Codex says `default` in every mode.
         if let Some(m) = h.mode.as_ref().filter(|_| !codex) {
             self.mode = Some(tele::clean(m, 20));
@@ -296,10 +304,7 @@ impl Aware {
             }
             // The request's own call ran: granted. One run alongside it leaves it open.
             ("PostToolUse", _) if codex => {
-                if self.pending == Some(Pending::Awaits)
-                    && self.request.is_some()
-                    && h.input == self.request
-                {
+                if granted {
                     self.set(None, None);
                     self.running = true;
                 }

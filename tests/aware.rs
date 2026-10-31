@@ -837,3 +837,22 @@ fn a_codex_request_and_its_tool_reduce_to_the_same_input_and_the_request_to_a_de
         assert_eq!(codex_hook(e, json!({}), 1).event, e);
     }
 }
+
+#[test]
+fn a_codex_request_that_lands_after_a_newer_unrelated_tool_still_opens() {
+    // Each hook is a process of its own: a parallel call's PostToolUse, stamped later, lands first.
+    let mut a = codex_at_work(false);
+    a.hook(&codex_hook("PostToolUse", bash("ls", None), 11));
+    assert_eq!(a.heard(), 4, "a PostToolUse that grants nothing says nothing");
+    assert!(a.hook(&codex_hook("PermissionRequest", bash("touch x", Some("Create x?")), 10)));
+    assert_eq!((a.state(), a.pending), (State::Awaits, Some(Pending::Awaits)));
+    // The grant itself counts, and makes what is older than it old.
+    a.hook(&codex_hook("PostToolUse", bash("touch x", None), 12));
+    assert_eq!((a.state(), a.heard()), (State::Busy, 12));
+    assert!(!a.hook(&codex_hook("PermissionRequest", bash("rm y", Some("Remove y?")), 11)));
+    assert_eq!(a.pending, None);
+    // Claude's PostToolUse is heard as ever.
+    let mut c = Aware::default();
+    c.hook(&hook(json!({"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion"}), 7));
+    assert_eq!(c.heard(), 7);
+}

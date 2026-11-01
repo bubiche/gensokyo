@@ -254,7 +254,9 @@ pub fn env(
     ];
     let drop = |k: &str| {
         (k.starts_with("CLAUDE") && k != "CLAUDE_CONFIG_DIR")
-            || (k.starts_with("CODEX_") && k != "CODEX_HOME")
+            // What a Codex session sets for its own children; the user's own CODEX_* go through.
+            || k == "CODEX_THREAD_ID"
+            || k.starts_with("CODEX_SANDBOX")
             || (k.starts_with("GENSOKYO_")
                 && !["GENSOKYO_STATE_DIR", "GENSOKYO_CONFIG_DIR"].contains(&k))
             || PREFIXES.iter().any(|p| k.starts_with(p))

@@ -237,15 +237,23 @@ fn a_resident_gets_none_of_the_codex_session_it_was_started_from() {
     let base = [
         ("CODEX_THREAD_ID", "t"),
         ("CODEX_SANDBOX", "seatbelt"),
+        ("CODEX_SANDBOX_NETWORK_DISABLED", "1"),
         ("CODEX_HOME", "/h/.codex"),
+        ("CODEX_API_KEY", "not-a-key"),
+        ("CODEX_CA_CERTIFICATE", "/h/ca.pem"),
         ("CODEXY", "kept"),
         ("HOME", "/h"),
     ];
     let base = base.map(|(k, v)| (OsString::from(k), OsString::from(v)));
     let env = launch::env(base, "id", Path::new("/g"), Path::new("/shim"), Path::new("/s"));
     let has = |k: &str| env.iter().any(|(n, _)| n == k);
-    assert!(!has("CODEX_THREAD_ID") && !has("CODEX_SANDBOX"));
-    assert!(has("CODEX_HOME") && has("CODEXY") && has("HOME"));
+    for gone in ["CODEX_THREAD_ID", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"] {
+        assert!(!has(gone), "{gone}");
+    }
+    // The user's own Codex setup goes through.
+    for kept in ["CODEX_HOME", "CODEX_API_KEY", "CODEX_CA_CERTIFICATE", "CODEXY", "HOME"] {
+        assert!(has(kept), "{kept}");
+    }
 }
 
 #[test]

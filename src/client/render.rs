@@ -555,8 +555,8 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         };
         // A cloud session: on claude.ai, with nothing here to be in a state.
         let glyph = if r.in_cloud() { "☁" } else { r.state.glyph() };
-        // Codex, marked in the space before its name.
-        let gap = if r.agent == Agent::Codex { "ᶜ" } else { " " };
+        // Codex, marked in the space before its name: a one-cell hexagon.
+        let gap = if r.agent == Agent::Codex { "⬡" } else { " " };
         format!("{slot} {tee}{glyph}{gap}")
     };
     // Behind the claude installed now, or on its way to it.

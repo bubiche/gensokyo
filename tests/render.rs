@@ -972,9 +972,11 @@ fn the_focused_name_wraps_over_rows_that_are_all_its() {
 fn a_codex_resident_is_marked_before_its_name_which_keeps_its_place() {
     let mut m = shrine();
     m.residents[1].agent = gensokyo::proto::Agent::Codex;
-    let (rows, _) = side(&m, AREA);
+    let (rows, buf) = side(&m, AREA);
     assert!(rows[1].starts_with("1 ○ Reimu"), "{rows:#?}");
-    assert!(rows[2].starts_with("2 ○ᶜMarisa"), "{rows:#?}");
+    assert!(rows[2].starts_with("2 ○⬡Marisa"), "{rows:#?}");
+    // One cell: both names start in the same column.
+    assert_eq!((buf[(5, 1)].symbol(), buf[(5, 2)].symbol()), ("R", "M"));
     let map = hits(&m, AREA);
     assert_eq!(map.at(5, 2).map(|(_, h)| h), Some(Hit::Resident(1)));
 }

@@ -4,7 +4,7 @@
 
 use super::modal::{Modal, when_short};
 use crate::paths::tilde;
-use crate::proto::{Agent, CloudWatch, Resident, RitualInfo, State};
+use crate::proto::{CloudWatch, Resident, RitualInfo, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -555,9 +555,7 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         };
         // A cloud session: on claude.ai, with nothing here to be in a state.
         let glyph = if r.in_cloud() { "☁" } else { r.state.glyph() };
-        // Codex, marked in the space before its name: a one-cell hexagon.
-        let gap = if r.agent == Agent::Codex { "⬡" } else { " " };
-        format!("{slot} {tee}{glyph}{gap}")
+        format!("{slot} {tee}{glyph} ")
     };
     // Behind the claude installed now, or on its way to it.
     let renew = |r: &Resident| match (r.renewing, r.outdated.is_some()) {
@@ -575,19 +573,20 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         let pad = width(&lead(i, helper)) as usize;
         let mark = renew(r).map_or(0, |_| 2);
         let most = w.saturating_sub(pad + width(&right(r)) as usize + mark).max(1);
-        let name = match width(&r.name) as usize > most {
-            true => wrap(&r.name, most, 3),
-            false => vec![r.name.clone()],
+        // Cut past three rows: then nothing follows it.
+        let (name, cut) = match width(&r.name) as usize > most {
+            true => (wrap(&r.name, most, 3), wrap(&r.name, most, usize::MAX).len() > 3),
+            false => (vec![r.name.clone()], false),
         };
         let dim = match has_row(r) {
             true => whole_row(r, &m.prefix, w.saturating_sub(pad).max(1)),
             false => Vec::new(),
         };
-        (i, name, dim)
+        (i, name, dim, cut)
     });
     let branches = order.iter().filter(|(i, _)| has_row(&m.residents[*i])).count();
     let room = bottom.saturating_sub(inner.y + 1) as usize;
-    let (names, dims) = whole.as_ref().map_or((0, 0), |(_, n, d)| (n.len() - 1, d.len()));
+    let (names, dims) = whole.as_ref().map_or((0, 0), |(_, n, d, _)| (n.len() - 1, d.len()));
     // Best first: every dim row and the one on screen whole, every dim row, a row each but the
     // one on screen whole, a row each.
     let n = order.len();
@@ -637,21 +636,37 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         buf.set_style(line, style);
         let lead = lead(i, helper);
         let pad = width(&lead) as usize;
-        let (name, dim) = match whole.as_ref().filter(|wh| grow && wh.0 == i) {
-            Some((_, n, d)) => (n.clone(), d.clone()),
+        let (name, dim, cut) = match whole.as_ref().filter(|wh| grow && wh.0 == i) {
+            Some((_, n, d, c)) => (n.clone(), d.clone(), *c),
             None if two && has_row(r) => {
-                (vec![r.name.clone()], vec![branch_row(r, &m.prefix, w.saturating_sub(pad))])
+                let dim = vec![branch_row(r, &m.prefix, w.saturating_sub(pad))];
+                (vec![r.name.clone()], dim, false)
             }
-            None => (vec![r.name.clone()], Vec::new()),
+            None => (vec![r.name.clone()], Vec::new(), false),
         };
         let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
         let right = right(r);
         let rw = (width(&right) as usize).min(w);
-        let (x, _) = buf.set_stringn(inner.x, y, format!("{lead}{}", name[0]), w - rw, style);
+        let under = match focused && !r.state.needs_you() {
+            true => DIM.bg(Color::Indexed(237)),
+            false => DIM,
+        };
+        // The program it runs, dim after the last of its name while it fits whole there.
+        let agent = format!(" {}", r.agent.program());
+        let aw = width(&agent);
+        // Drawn over the row's style, so it sheds the focused name's bold.
+        let tag = match r.state.needs_you() {
+            true => style,
+            false => under.remove_modifier(Modifier::BOLD),
+        };
+        let (mut x, _) = buf.set_stringn(inner.x, y, format!("{lead}{}", name[0]), w - rw, style);
         let end = inner.x + (w - rw) as u16;
         if let Some(g) = renew(r).filter(|_| x + 2 <= end) {
             let mark = if r.state.needs_you() { style } else { style.fg(Color::Yellow) };
-            buf.set_stringn(x, y, g, 2, mark);
+            (x, _) = buf.set_stringn(x, y, g, 2, mark);
+        }
+        if name.len() == 1 && x + aw <= end {
+            buf.set_stringn(x, y, &agent, aw as usize, tag);
         }
         buf.set_stringn(inner.x + (w - rw) as u16, y, right, rw, style);
         // The context, warm or hot as it fills, unless the line is already gold.
@@ -664,19 +679,20 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         }
         hits.push(line, Hit::Resident(i));
         y += 1;
-        let under = match focused && !r.state.needs_you() {
-            true => DIM.bg(Color::Indexed(237)),
-            false => DIM,
-        };
         // The rest of its name, then its dim rows, under the name, a lead's `│` down beside them.
-        let rest = name[1..].iter().map(|s| (s, style)).chain(dim.iter().map(|s| (s, under)));
-        for (s, st) in rest {
+        let last = name.len() - 1;
+        let rest = name.iter().enumerate().skip(1).map(|(k, s)| (s, style, k == last));
+        let rest = rest.chain(dim.iter().map(|s| (s, under, false)));
+        for (s, st, last) in rest {
             if y + 1 >= bottom {
                 break;
             }
             let line = Rect { y, height: 1, ..inner };
             buf.set_style(line, st);
-            buf.set_stringn(inner.x + pad as u16, y, s, w.saturating_sub(pad), st);
+            let (x, _) = buf.set_stringn(inner.x + pad as u16, y, s, w.saturating_sub(pad), st);
+            if last && !cut && x + aw <= inner.x + w as u16 {
+                buf.set_stringn(x, y, &agent, aw as usize, tag);
+            }
             // Under the tee, one past the slot.
             let bar = r.slot.map_or(1, |s| width(&s.to_string())) + 1;
             if held.contains(&i) && (bar as usize) < w {

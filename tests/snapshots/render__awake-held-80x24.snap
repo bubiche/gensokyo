@@ -3,9 +3,9 @@ source: tests/render.rs
 expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 1 Reimu · ~/dev/gensokyo ───────────────────────────┐"
-"│1 ○ Reimu              ││line 00                                              │"
-"│2 ○ Marisa             ││line 01     ~                                        │"
-"│3 · Cirno              ││line 02     ~~                                       │"
+"│1 ○ Reimu claude       ││line 00                                              │"
+"│2 ○ Marisa claude      ││line 01     ~                                        │"
+"│3 · Cirno claude       ││line 02     ~~                                       │"
 "│                       ││line 03     ~~~                                      │"
 "│                       ││line 04     ~~~~                                     │"
 "│                       ││line 05     ~~~~~                                    │"

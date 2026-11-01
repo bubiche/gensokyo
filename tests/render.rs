@@ -948,7 +948,9 @@ fn the_focused_name_wraps_over_rows_that_are_all_its() {
     let (rows, buf) = side(&m, AREA);
     // One model, so the name has 14 columns beside the context, which stays on its first row.
     let top: Vec<&str> = rows[1..4].iter().map(|r| r.trim_end()).collect();
-    assert_eq!(top, ["1 ○ Reimu Hakurei   12%", "    of the Hakurei", "    Shrine"], "{rows:#?}");
+    // Its agent after the last of it.
+    let last = "    Shrine claude";
+    assert_eq!(top, ["1 ○ Reimu Hakurei   12%", "    of the Hakurei", last], "{rows:#?}");
     assert!(rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
     let map = hits(&m, AREA);
     for y in 1..4 {
@@ -962,23 +964,82 @@ fn the_focused_name_wraps_over_rows_that_are_all_its() {
     m.residents[0].outdated = Some("2.1.0".into());
     let (rows, _) = side(&m, AREA);
     assert!(rows[1].starts_with("1 ○ Reimu ⇡"), "{rows:#?}");
-    // Past three rows, the third ends in `…`.
+    // Past three rows, the third ends in `…`, and nothing after it.
     m.residents[0].name = "x".repeat(50);
     let (rows, _) = side(&m, AREA);
     assert!(rows[3].trim_end().ends_with('…') && rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
 }
 
 #[test]
-fn a_codex_resident_is_marked_before_its_name_which_keeps_its_place() {
+fn each_row_names_its_agent_dim_after_its_name() {
     let mut m = shrine();
     m.residents[1].agent = gensokyo::proto::Agent::Codex;
     let (rows, buf) = side(&m, AREA);
-    assert!(rows[1].starts_with("1 ○ Reimu"), "{rows:#?}");
-    assert!(rows[2].starts_with("2 ○⬡Marisa"), "{rows:#?}");
-    // One cell: both names start in the same column.
+    let top: Vec<&str> = rows[1..4].iter().map(|r| r.trim_end()).collect();
+    assert_eq!(top, ["1 ○ Reimu claude", "2 ○ Marisa codex", "3 · Cirno claude"], "{rows:#?}");
+    // Both names start in the same column.
     assert_eq!((buf[(5, 1)].symbol(), buf[(5, 2)].symbol()), ("R", "M"));
+    // The word dim, on the focused row's background there, the name not.
+    let dark = ratatui::style::Color::DarkGray;
+    let lit = ratatui::style::Color::Indexed(237);
+    for x in 11..17 {
+        assert_eq!((buf[(x, 1)].fg, buf[(x, 1)].bg), (dark, lit), "x {x}");
+        // Not bold like the focused name: no heavier than the dim rows under it.
+        assert!(!buf[(x, 1)].modifier.contains(Modifier::BOLD), "x {x}");
+    }
+    for x in 12..17 {
+        assert_eq!(buf[(x, 2)].fg, dark, "x {x}");
+    }
+    assert_ne!(buf[(5, 1)].fg, dark);
+    assert_ne!(buf[(5, 2)].fg, dark);
+    // Part of the resident's row.
     let map = hits(&m, AREA);
-    assert_eq!(map.at(5, 2).map(|(_, h)| h), Some(Hit::Resident(1)));
+    assert_eq!(map.at(13, 2).map(|(_, h)| h), Some(Hit::Resident(1)));
+}
+
+#[test]
+fn the_agent_shows_only_whole_and_never_cuts_the_name() {
+    let mut m = shrine();
+    m.residents[1].agent = gensokyo::proto::Agent::Codex;
+    // A name that fits only without it.
+    m.residents[1].name = "Marisa Kirisame X".into();
+    // One past the room: the name is cut as it always was, and nothing follows it.
+    m.residents[2].name = "Cirno the Strongest Fairy".into();
+    let (rows, _) = side(&m, AREA);
+    assert_eq!(rows[2].trim_end(), "2 ○ Marisa Kirisame X", "{rows:#?}");
+    assert_eq!(rows[3], "3 · Cirno the Strongest", "{rows:#?}");
+    // Beside the model and context there is no room for it.
+    let mut m = aware();
+    m.residents[1].agent = gensokyo::proto::Agent::Codex;
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[1].starts_with("1 ● Reimu ") && rows[1].ends_with(" Hai  12%"), "{rows:#?}");
+    assert!(rows[3].starts_with("2 ✦ Marisa ") && rows[3].ends_with(" Opu   8%"), "{rows:#?}");
+    let both = [&rows[1], &rows[3]];
+    assert!(!both.iter().any(|r| r.contains("claude") || r.contains("codex")), "{rows:#?}");
+}
+
+#[test]
+fn on_a_gold_row_the_agent_keeps_the_gold() {
+    let mut m = shrine();
+    m.residents[1].agent = gensokyo::proto::Agent::Codex;
+    m.residents[1].state = State::Awaits;
+    let (rows, buf) = side(&m, AREA);
+    assert_eq!(rows[2].trim_end(), "2 ✦ Marisa codex", "{rows:#?}");
+    for x in 11..17 {
+        let c = &buf[(x, 2)];
+        let gold = (ratatui::style::Color::Black, ratatui::style::Color::Yellow);
+        assert_eq!((c.fg, c.bg), gold, "x {x}");
+    }
+}
+
+#[test]
+fn the_agent_follows_the_renew_mark() {
+    let mut m = shrine();
+    m.residents[0].outdated = Some("2.1.0".into());
+    m.residents[1].renewing = true;
+    let (rows, _) = side(&m, AREA);
+    assert_eq!(rows[1].trim_end(), "1 ○ Reimu ⇡ claude", "{rows:#?}");
+    assert_eq!(rows[2].trim_end(), "2 ○ Marisa ↻ claude", "{rows:#?}");
 }
 
 #[test]

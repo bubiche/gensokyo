@@ -923,6 +923,40 @@ fn every_row_shows_its_model_at_the_right_lined_up() {
 }
 
 #[test]
+fn a_model_too_long_for_the_sidebar_is_cut_and_every_lead_stays() {
+    let mut m = shrine();
+    // Marisa on screen, so Reimu's row is a plain one.
+    m.focused = Some("id-Marisa".into());
+    let t =
+        |model: String, ctx| Telemetry { model: Some(model), ctx, at: NOW, ..Default::default() };
+    let long = format!("gpt-5.1-codex-max-{}", "x".repeat(22));
+    assert_eq!(long.len(), 40);
+    m.residents[0].telemetry = Some(t("Opus 4.7".into(), Some(100)));
+    m.residents[1].agent = gensokyo::proto::Agent::Codex;
+    m.residents[1].telemetry = Some(t(long, Some(7)));
+    let (rows, _) = side(&m, AREA);
+    // A letter of each name, the model cut to what is left, and a gap before the context.
+    assert_eq!(rows[1], "1 ○ R            opus-4.7 100%", "{rows:#?}");
+    assert_eq!(rows[2], "2 ○ M gpt-5.1-codex-max-…   7%", "{rows:#?}");
+    assert!(rows[3].starts_with("    a"), "{rows:#?}");
+    assert!(rows.iter().any(|r| r.starts_with("3 · Cirno")), "{rows:#?}");
+    // Beside a helper's lead too, a column wider.
+    let mut m = helpers();
+    for r in &mut m.residents {
+        r.telemetry = Some(t(format!("gpt-{}", "y".repeat(36)), Some(12)));
+    }
+    let (rows, _) = side(&m, AREA);
+    let leads: Vec<&String> = rows.iter().filter(|r| r.starts_with(char::is_numeric)).collect();
+    assert_eq!(leads.len(), m.residents.len(), "{rows:#?}");
+    for r in leads {
+        let tee = matches!(r.chars().nth(2), Some('├' | '└'));
+        let letter = r.chars().nth(if tee { 5 } else { 4 });
+        assert!(letter.is_some_and(char::is_alphabetic), "{rows:#?}");
+        assert!(!r.contains("gpt-") || r.ends_with("…  12%"), "{rows:#?}");
+    }
+}
+
+#[test]
 fn a_branch_that_repeats_the_name_is_left_off() {
     let mut m = shrine();
     m.residents[0].branch = Some("main".into());

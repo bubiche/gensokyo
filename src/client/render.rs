@@ -520,28 +520,6 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let mut order = drawn(&m.residents);
     // Those with a helper below them: a lead with helpers, and each helper but the last.
     let held: Vec<usize> = order.windows(2).filter(|p| p[1].1).map(|p| p[0].0).collect();
-    // Each one's model while it runs: Claude's by the name it shows, Codex's by its id.
-    let model = |r: &Resident| {
-        let m = r.telemetry.as_ref().filter(|_| r.state != State::Departed)?.model.as_deref()?;
-        Some(match r.agent {
-            Agent::Claude => tele::model_name(m),
-            Agent::Codex => m.to_string(),
-        })
-    };
-    // As wide as the widest, so they line up.
-    let mw = m.residents.iter().filter_map(model).map(|s| width(&s) as usize).max().unwrap_or(0);
-    // Model and context at the right, while it runs and has reported.
-    let right = |r: &Resident| {
-        let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
-        t.map_or(String::new(), |t| {
-            let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
-            match (model(r), ctx.is_empty()) {
-                (Some(model), _) => format!(" {model:>mw$} {ctx:>4}"),
-                (None, true) => String::new(),
-                (None, false) => format!(" {ctx:>4}"),
-            }
-        })
-    };
     let lead = |i: usize, helper: bool| {
         let r = &m.residents[i];
         let slot = r.slot.map_or(" ".into(), |s| s.to_string());
@@ -553,6 +531,35 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         // A cloud session: on claude.ai, with nothing here to be in a state.
         let glyph = if r.in_cloud() { "☁" } else { r.state.glyph() };
         format!("{slot} {tee}{glyph} ")
+    };
+    // Each one's model while it runs: Claude's by the name it shows, Codex's by its id.
+    let model = |r: &Resident| {
+        let m = r.telemetry.as_ref().filter(|_| r.state != State::Departed)?.model.as_deref()?;
+        Some(match r.agent {
+            Agent::Claude => tele::model_name(m),
+            Agent::Codex => m.to_string(),
+        })
+    };
+    // As wide as the widest, so they line up, but never so wide that a lead and a letter of its
+    // name have no room beside it and the context: a longer one is cut.
+    let lw = order.iter().map(|&(i, helper)| width(&lead(i, helper)) as usize).max().unwrap_or(0);
+    let mw = m.residents.iter().filter_map(model).map(|s| width(&s) as usize).max().unwrap_or(0);
+    let mw = mw.min(w.saturating_sub(lw + 1 + 6));
+    // Model and context at the right, while it runs and has reported.
+    let right = |r: &Resident| {
+        let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
+        t.map_or(String::new(), |t| {
+            let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
+            match (model(r).filter(|_| mw > 0), ctx.is_empty()) {
+                (Some(model), _) => {
+                    let model = cut(&model, mw);
+                    let pad = " ".repeat(mw.saturating_sub(width(&model) as usize));
+                    format!(" {pad}{model} {ctx:>4}")
+                }
+                (None, true) => String::new(),
+                (None, false) => format!(" {ctx:>4}"),
+            }
+        })
     };
     // Behind the claude installed now, or on its way to it.
     let renew = |r: &Resident| match (r.renewing, r.outdated.is_some()) {

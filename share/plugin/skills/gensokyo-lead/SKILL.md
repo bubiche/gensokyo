@@ -119,10 +119,11 @@ to act on, as you would a colleague's.
 SendMessage, and never by typing into its pane. Claude Code gets the words typed in as its next
 prompt, refused while something is in the way (a dialog, or a prompt the user has half typed:
 `say` says which); Codex runs them once its turn is over, and takes none before its first prompt
-is in, nor after an interrupted turn until a new one starts. They arrive as a prompt, much as the user's would: start with your name, say what you
-want, and that the answer comes as its last message. Then `wait` on it again, as many rounds as
-the work needs. A helper asks you something by ending its turn with the question: `read` it and
-answer with `say`. A cloud helper's follow-ups go by `gensokyo cloud say` instead.
+is in, nor after an interrupted turn until a new one starts. They arrive as a prompt, much as
+the user's would: start with your name, say what you want, and that the answer comes as its
+last message. Then `wait` on it again, as many rounds as the work needs. A helper asks you
+something by ending its turn with the question: `read` it and answer with `say`. A cloud
+helper's follow-ups go by `gensokyo cloud say` instead.
 
 ## When a helper needs the user
 

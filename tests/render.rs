@@ -543,7 +543,7 @@ fn every_sidebar_button_and_line_resolves() {
         assert!(resolves(&map, Hit::Resident(i)), "resident {i}");
     }
     let g = render::grid_rect(AREA);
-    assert_eq!(g, Rect::new(26, 1, 93, 38));
+    assert_eq!(g, Rect::new(33, 1, 86, 38));
     assert_eq!(map.at(g.x, g.y), Some((g, Hit::Grid)));
     assert_eq!(map.at(g.right() - 1, g.bottom() - 1), Some((g, Hit::Grid)));
 }
@@ -585,7 +585,7 @@ fn a_tag_row_is_its_residents_with_or_without_a_branch() {
     // Tags never squeeze a branch below half the row: they are cut instead, the branch at its
     // middle.
     let (rows, _) = side(&m, AREA);
-    assert!(rows[2].contains("⎇ pad…oard pr=#123…"), "{rows:#?}");
+    assert!(rows[2].contains("⎇ padle…-board pr=#123 ci…"), "{rows:#?}");
 }
 
 #[test]
@@ -860,9 +860,8 @@ fn whoever_needs_you_is_gold_across_the_sidebar() {
     let gold = |y: u16| {
         (1..render::SIDEBAR_W - 1).all(|x| buf[(x, y)].bg == ratatui::style::Color::Yellow)
     };
-    // Inside the box: Reimu busy, its name's second row and its branch, Marisa awaits, Cirno
-    // departed, Sakuya asked.
-    assert_eq!([1, 2, 3, 4, 5, 6].map(gold), [false, false, false, true, false, true]);
+    // Inside the box: Reimu busy and its branch, Marisa awaits, Cirno departed, Sakuya asked.
+    assert_eq!([1, 2, 3, 4, 5].map(gold), [false, false, true, false, true]);
 }
 
 #[test]
@@ -911,8 +910,9 @@ fn every_row_shows_its_model_at_the_right_lined_up() {
     m.residents.push(resident(4, "Sakuya", "work", None));
     let (rows, _) = side(&m, AREA);
     let top: Vec<&str> = rows[1..5].iter().map(|r| r.trim_end()).collect();
-    // Claude's name for it lowercase and joined, Codex's as given; the name cut, not the model.
-    let want = ["1 ○ Reimu opus-4.7  12%", "2 ○ Maris  gpt-5.5", "3 · Cirno", "4 ○ Sakuya"];
+    // Claude's name for it lowercase and joined, Codex's as given.
+    let want =
+        ["1 ○ Reimu        opus-4.7  12%", "2 ○ Marisa        gpt-5.5", "3 · Cirno", "4 ○ Sakuya"];
     assert_eq!(top, want, "{rows:#?}");
     // Both end in one column.
     let end = |r: &str, m: &str| r.find(m).map(|b| r[..b].chars().count() + m.len());
@@ -957,25 +957,25 @@ fn the_focused_name_wraps_over_rows_that_are_all_its() {
     let t = Telemetry { ctx: Some(12), at: NOW, ..Default::default() };
     m.residents[0].telemetry = Some(t);
     let (rows, buf) = side(&m, AREA);
-    // No model known, so the name has 14 columns beside the context, which stays on its first
+    // No model known, so the name has 21 columns beside the context, which stays on its first
     // row.
-    let top: Vec<&str> = rows[1..4].iter().map(|r| r.trim_end()).collect();
-    assert_eq!(top, ["1 ○ Reimu Hakurei   12%", "    of the Hakurei", "    Shrine"], "{rows:#?}");
-    assert!(rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
+    let top: Vec<&str> = rows[1..3].iter().map(|r| r.trim_end()).collect();
+    assert_eq!(top, ["1 ○ Reimu Hakurei of the   12%", "    Hakurei Shrine"], "{rows:#?}");
+    assert!(rows[3].starts_with("2 ○ Marisa"), "{rows:#?}");
     let map = hits(&m, AREA);
-    for y in 1..4 {
+    for y in 1..3 {
         assert_eq!(map.at(5, y).map(|(_, h)| h), Some(Hit::Resident(0)), "row {y}");
         let lit = (1..render::SIDEBAR_W - 1)
             .all(|x| buf[(x, y)].bg == ratatui::style::Color::Indexed(237));
         assert!(lit, "row {y}");
     }
-    assert_eq!(map.at(5, 4).map(|(_, h)| h), Some(Hit::Resident(1)));
+    assert_eq!(map.at(5, 3).map(|(_, h)| h), Some(Hit::Resident(1)));
     // Behind the installed claude: its mark keeps its place beside the first row.
     m.residents[0].outdated = Some("2.1.0".into());
     let (rows, _) = side(&m, AREA);
-    assert!(rows[1].starts_with("1 ○ Reimu ⇡"), "{rows:#?}");
+    assert!(rows[1].starts_with("1 ○ Reimu Hakurei of ⇡"), "{rows:#?}");
     // Past three rows, the third ends in `…`.
-    m.residents[0].name = "x".repeat(50);
+    m.residents[0].name = "x".repeat(70);
     let (rows, _) = side(&m, AREA);
     assert!(rows[3].trim_end().ends_with('…') && rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");
 }
@@ -997,7 +997,7 @@ fn the_focused_branch_shows_whole_and_a_leads_bar_runs_down_its_rows() {
     let (rows, _) = side(&m, AREA);
     // Reimu's name over two rows, then its branch over as many as it takes, down to Youmu.
     assert!(rows[1].starts_with("1 ○ Reimu Hakurei of"), "{rows:#?}");
-    assert_eq!(rows[2].trim_end(), "  │ the Hakurei Shrine");
+    assert_eq!(rows[2].trim_end(), "  │ Hakurei Shrine");
     let youmu = rows.iter().position(|r| r.starts_with("4 ├")).unwrap();
     assert!((5..=6).contains(&youmu), "{rows:#?}");
     let whole = joined(&rows[3..youmu]);
@@ -1017,10 +1017,10 @@ fn the_focused_resident_is_drawn_whole_only_while_it_fits() {
     let at = |h| side(&branches(), Rect::new(0, 0, 120, h)).0;
     let has = |rows: &[String], s: &str| rows.iter().any(|r| r.contains(s));
     // Every branch row fits but not Reimu's whole: as before, its branch cut in the middle.
-    let rows = at(18);
-    assert!(has(&rows, "⎇ padlet-a…ry-board") && has(&rows, "⎇ main"), "{rows:#?}");
-    // Not every branch row: one row each, Reimu's whole below it.
     let rows = at(17);
+    assert!(has(&rows, "⎇ padlet-ai-s…-every-board") && has(&rows, "⎇ main"), "{rows:#?}");
+    // Not every branch row: one row each, Reimu's whole below it.
+    let rows = at(16);
     assert!(
         !has(&rows, "⎇ fix-ci") && !has(&rows, "⎇ main") && has(&rows, "6 ○ Chen"),
         "{rows:#?}"
@@ -1028,7 +1028,7 @@ fn the_focused_resident_is_drawn_whole_only_while_it_fits() {
     let youmu = rows.iter().position(|r| r.starts_with("4 ├")).unwrap();
     assert!(joined(&rows[2..youmu]).contains("⎇padlet-ai-summary-for-every-board"), "{rows:#?}");
     // Not that either: one row each, as before.
-    let rows = at(15);
+    let rows = at(14);
     assert!(!has(&rows, "⎇") && has(&rows, "6 ○ Chen"), "{rows:#?}");
     // Not even one row each: Reimu on one row among those that fit.
     let rows = at(12);
@@ -1038,7 +1038,7 @@ fn the_focused_resident_is_drawn_whole_only_while_it_fits() {
 #[test]
 fn a_message_breaks_at_spaces_and_keeps_a_word_that_fits_whole() {
     let mut m = shrine();
-    m.message = Some(Message::new(Say::Error, "Duel needs a peer: --with <name>"));
+    m.message = Some(Message::new(Say::Error, "Duel needs a peer to start: --with <name>"));
     let (rows, _) = side(&m, AREA);
     assert!(rows.iter().any(|r| r.trim() == "--with <name>"), "{rows:#?}");
     assert!(!rows.iter().any(|r| r.trim_end().ends_with("--")), "{rows:#?}");
@@ -1095,11 +1095,11 @@ fn a_cloud_session_on_screen_has_its_buttons_and_no_grid() {
     // Its link whole at 80 columns, wrapped, and a click on any of it opens it.
     let (t, map) = draw(&m, 80, 24);
     let buf = t.backend().buffer();
-    let pane = |y: u16| (26..79).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let pane = |y: u16| (33..79).map(|x| buf[(x, y)].symbol()).collect::<String>();
     let y = (0..24).find(|&y| pane(y).contains("https://")).expect("its link");
     assert_eq!(format!("{}{}", pane(y).trim(), pane(y + 1).trim()), LINK);
     for y in [y, y + 1] {
-        assert_eq!(map.at(27, y).map(|h| h.1), Some(Hit::Button(Button::OpenFocused)), "{y}");
+        assert_eq!(map.at(34, y).map(|h| h.1), Some(Hit::Button(Button::OpenFocused)), "{y}");
     }
     // No answer yet, and a tiny screen: nothing breaks.
     let (t, _) = draw(&m, 40, 6);

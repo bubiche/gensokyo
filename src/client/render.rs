@@ -14,7 +14,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Widget};
 
 /// The sidebar's width, its box included.
-pub const SIDEBAR_W: u16 = 25;
+pub const SIDEBAR_W: u16 = 32;
 
 /// What each key after the leader does, in the order the sidebar and help list them.
 pub(super) const CHORDS: [(&str, &str); 21] = [

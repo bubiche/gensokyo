@@ -4,7 +4,7 @@
 use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
-use gensokyo::client::render::grid_rect;
+use gensokyo::client::render::{SIDEBAR_W, grid_rect};
 use gensokyo::proto::{
     Card, CloudSession, CloudWatch, NAME_RULE, Notice, Reply, Resident, RitualInfo, RoutineInfo,
     State,
@@ -1203,7 +1203,7 @@ fn sgr(a: &mut App, b: u8, x: u16, y: u16, press: bool) {
     host(a, format!("\x1b[<{b};{x};{y}{end}").as_bytes());
 }
 
-/// Reimu on screen at 120x40: her grid's first cell is column 27, row 2 in SGR terms.
+/// Reimu on screen at 120x40: her grid's first cell is column 34, row 2 in SGR terms.
 fn gridded() -> App {
     let mut a = shrine();
     let area = Rect::new(0, 0, 120, 40);
@@ -1223,10 +1223,10 @@ fn picks(out: &[Value]) -> Vec<(&str, u64, u64)> {
 #[test]
 fn a_drag_in_the_grid_is_the_daemons_to_select_and_what_it_answers_is_copied() {
     let mut a = gridded();
-    sgr(&mut a, 0, 27, 2, true);
-    sgr(&mut a, 32, 30, 3, true);
+    sgr(&mut a, 0, 34, 2, true);
+    sgr(&mut a, 32, 37, 3, true);
     // The same cell again says nothing new; over the sidebar it is held to the grid.
-    sgr(&mut a, 32, 30, 3, true);
+    sgr(&mut a, 32, 37, 3, true);
     sgr(&mut a, 32, 10, 3, true);
     sgr(&mut a, 0, 10, 3, false);
     let out = sent(&mut a);
@@ -1242,7 +1242,7 @@ fn a_drag_in_the_grid_is_the_daemons_to_select_and_what_it_answers_is_copied() {
     let modes = Modes { mouse: 1000, sgr: true, ..Modes::default() };
     let frame = Frame { cols: 80, rows: vec![], ..Frame::default() };
     daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes });
-    sgr(&mut a, 0, 27, 2, true);
+    sgr(&mut a, 0, 34, 2, true);
     assert_eq!(kinds(&sent(&mut a)), ["input"]);
 }
 
@@ -1253,14 +1253,14 @@ fn a_second_press_on_the_same_cell_soon_after_is_a_double_click_and_a_third_a_si
         sgr(a, 0, x, 5, true);
         sgr(a, 0, x, 5, false);
     };
-    click(&mut a, 30);
-    click(&mut a, 30);
-    click(&mut a, 30);
+    click(&mut a, 37);
+    click(&mut a, 37);
+    click(&mut a, 37);
     a.later(Duration::from_millis(600));
-    click(&mut a, 30);
+    click(&mut a, 37);
     a.later(Duration::from_millis(400));
-    click(&mut a, 30);
-    click(&mut a, 31);
+    click(&mut a, 37);
+    click(&mut a, 38);
     let out = sent(&mut a);
     let presses: Vec<&str> =
         picks(&out).into_iter().map(|p| p.0).filter(|h| *h != "release").collect();
@@ -1270,9 +1270,9 @@ fn a_second_press_on_the_same_cell_soon_after_is_a_double_click_and_a_third_a_si
 #[test]
 fn held_past_the_grids_edge_a_drag_moves_the_view_on_the_clock_until_it_comes_back() {
     let mut a = gridded();
-    sgr(&mut a, 0, 40, 20, true);
+    sgr(&mut a, 0, 47, 20, true);
     // Over the box's top border, past the grid's top edge: held to its first row.
-    sgr(&mut a, 32, 40, 1, true);
+    sgr(&mut a, 32, 47, 1, true);
     assert_eq!(picks(&sent(&mut a)), [("press", 13, 18), ("drag", 13, 0)]);
     assert!(a.edge().is_some());
     a.tick();
@@ -1283,19 +1283,19 @@ fn held_past_the_grids_edge_a_drag_moves_the_view_on_the_clock_until_it_comes_ba
     a.tick();
     assert_eq!(picks(&sent(&mut a)), [("back", 13, 0), ("back", 13, 0)]);
     // Past the bottom edge, on toward the live screen.
-    sgr(&mut a, 32, 41, 40, true);
+    sgr(&mut a, 32, 48, 40, true);
     a.later(EDGE);
     a.tick();
     assert_eq!(picks(&sent(&mut a)), [("drag", 14, 37), ("on", 14, 37)]);
     // Back inside, it stops.
-    sgr(&mut a, 32, 41, 20, true);
+    sgr(&mut a, 32, 48, 20, true);
     assert!(a.edge().is_none());
     a.later(EDGE);
     a.tick();
     assert_eq!(picks(&sent(&mut a)), [("drag", 14, 18)]);
     // So does a release past the edge.
-    sgr(&mut a, 32, 41, 1, true);
-    sgr(&mut a, 0, 41, 1, false);
+    sgr(&mut a, 32, 48, 1, true);
+    sgr(&mut a, 0, 48, 1, false);
     assert!(a.edge().is_none());
     a.later(EDGE);
     a.tick();
@@ -1306,25 +1306,25 @@ fn held_past_the_grids_edge_a_drag_moves_the_view_on_the_clock_until_it_comes_ba
 fn a_drag_whose_release_cannot_come_stops_moving_the_view() {
     let mut a = gridded();
     // Another button's release is not the drag's.
-    sgr(&mut a, 0, 40, 20, true);
-    sgr(&mut a, 2, 41, 20, false);
+    sgr(&mut a, 0, 47, 20, true);
+    sgr(&mut a, 2, 48, 20, false);
     assert_eq!(picks(&sent(&mut a)), [("press", 13, 18)]);
     // A press soon after a drag is a new selection, not a double click.
-    sgr(&mut a, 32, 42, 20, true);
-    sgr(&mut a, 0, 42, 20, false);
-    sgr(&mut a, 0, 40, 20, true);
-    sgr(&mut a, 0, 40, 20, false);
+    sgr(&mut a, 32, 49, 20, true);
+    sgr(&mut a, 0, 49, 20, false);
+    sgr(&mut a, 0, 47, 20, true);
+    sgr(&mut a, 0, 47, 20, false);
     let want = [("drag", 15, 18), ("release", 15, 18), ("press", 13, 18), ("release", 13, 18)];
     assert_eq!(picks(&sent(&mut a)), want);
     // A release away from the last cell reported: the motion to it was not.
     a.later(EDGE * 20);
-    sgr(&mut a, 0, 40, 20, true);
-    sgr(&mut a, 0, 46, 20, false);
+    sgr(&mut a, 0, 47, 20, true);
+    sgr(&mut a, 0, 53, 20, false);
     let want = [("press", 13, 18), ("drag", 19, 18), ("release", 19, 18)];
     assert_eq!(picks(&sent(&mut a)), want);
     // Capture turned off mid-drag past the edge: the release goes to the host now.
-    sgr(&mut a, 0, 50, 20, true);
-    sgr(&mut a, 32, 50, 1, true);
+    sgr(&mut a, 0, 57, 20, true);
+    sgr(&mut a, 32, 57, 1, true);
     host(&mut a, b"\x1dm");
     sent(&mut a);
     a.later(EDGE);
@@ -1333,8 +1333,8 @@ fn a_drag_whose_release_cannot_come_stops_moving_the_view() {
     assert_eq!(picks(&sent(&mut a)), []);
     // A modal opened mid-drag.
     host(&mut a, b"\x1dm");
-    sgr(&mut a, 0, 50, 20, true);
-    sgr(&mut a, 32, 50, 1, true);
+    sgr(&mut a, 0, 57, 20, true);
+    sgr(&mut a, 32, 57, 1, true);
     host(&mut a, b"\x1dt");
     sent(&mut a);
     a.later(EDGE);
@@ -1346,8 +1346,8 @@ fn a_drag_whose_release_cannot_come_stops_moving_the_view() {
 #[test]
 fn the_wheel_while_a_drag_is_held_scrolls_and_the_selection_follows_the_pointer() {
     let mut a = gridded();
-    sgr(&mut a, 0, 40, 20, true);
-    sgr(&mut a, 64, 40, 20, true);
+    sgr(&mut a, 0, 47, 20, true);
+    sgr(&mut a, 64, 47, 20, true);
     let out = sent(&mut a);
     assert_eq!(kinds(&out), ["select", "scroll", "select"]);
     assert_eq!(picks(&out), [("press", 13, 18), ("drag", 13, 18)]);
@@ -1374,8 +1374,8 @@ fn leader_y_copies_the_last_answer_or_says_why_it_cannot() {
 fn a_click_while_an_answer_is_on_its_way_leaves_it_bound_for_the_clipboard() {
     let mut a = gridded();
     host(&mut a, b"\x1dy");
-    sgr(&mut a, 0, 30, 5, true);
-    sgr(&mut a, 0, 30, 5, false);
+    sgr(&mut a, 0, 37, 5, true);
+    sgr(&mut a, 0, 37, 5, false);
     let out = sent(&mut a);
     assert_eq!(kinds(&out), ["read", "select", "select"]);
     let (read, release) = (out[0]["id"].as_u64().unwrap(), out[2]["id"].as_u64().unwrap());
@@ -1476,25 +1476,26 @@ fn a_link_that_goes_away_is_drawn_again_bare_and_none_shows_under_a_modal() {
     // Nothing more to say then.
     assert_eq!(h.draw(&mut a), b"");
     // A link the whole width of the grid's middle row, under the quit modal.
-    let x = "x".repeat(90);
+    let gw = grid_rect(Rect::new(0, 0, 120, 40)).width as usize;
+    let x = "x".repeat(gw);
     let mut rows = vec![vec![]; 19];
     let link = Some("https://x".to_string());
     rows.push(vec![Run { col: 0, style: Style::default(), text: x, link }]);
-    let frame = Frame { cols: 93, rows, ..Frame::default() };
+    let frame = Frame { cols: gw as u16, rows, ..Frame::default() };
     daemon(&mut a, Reply::Frame { who: "id-Reimu".into(), rev: 2, frame, modes: Modes::default() });
     let linked = |h: &mut Host| h.links().iter().map(|l| l.2.len()).sum::<usize>();
     h.draw(&mut a);
-    assert_eq!(linked(&mut h), 90);
+    assert_eq!(linked(&mut h), gw);
     host(&mut a, b"\x1dq");
     assert!(matches!(a.m.modal, Some(Modal::Quit)));
     h.draw(&mut a);
     let links = h.links();
     assert_eq!(links.len(), 2, "{links:?}");
     assert!(links.iter().all(|l| l.2.chars().all(|c| c == 'x')));
-    assert!(linked(&mut h) < 90);
+    assert!(linked(&mut h) < gw);
     host(&mut a, b"\x1b");
     h.draw(&mut a);
-    assert_eq!(linked(&mut h), 90);
+    assert_eq!(linked(&mut h), gw);
 }
 
 #[test]
@@ -1564,7 +1565,7 @@ fn a_sidebar_too_short_for_everyone_keeps_the_one_on_screen_and_counts_the_rest(
         let mut buf = Buffer::empty(area);
         a.paint(area, &mut buf);
         let cells: Vec<&str> = buf.content.iter().map(|c| c.symbol()).collect();
-        cells.chunks(120).map(|r| r[..25].concat()).collect::<Vec<_>>()
+        cells.chunks(120).map(|r| r[..SIDEBAR_W as usize].concat()).collect::<Vec<_>>()
     };
     let has = |rows: &[String], s: &str| rows.iter().position(|l| l.contains(s));
     // Reimu on screen: the top of the list, and a count of the rest below.

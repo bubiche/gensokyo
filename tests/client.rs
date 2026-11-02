@@ -220,7 +220,7 @@ async fn summon_type_click_detach_reattach() {
     // order, and nothing of the sidebar.
     let (_, top) = find(&s, "gensokyo on PATH");
     c.drag((x + 6, y), (1, top)).await;
-    let grid = |l: &str| l.chars().skip(26).take(93).collect::<String>().trim_end().to_string();
+    let grid = |l: &str| l.chars().skip(33).take(86).collect::<String>().trim_end().to_string();
     let rows: Vec<&str> = s.lines().skip(top as usize - 1).take((y - top + 1) as usize).collect();
     let want = rows.iter().map(|l| grid(l)).collect::<Vec<_>>().join("\n");
     c.wait("the second copy", |_| copied() == want).await;
@@ -238,7 +238,7 @@ async fn summon_type_click_detach_reattach() {
     c.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes()).await;
     c.send(b"after\r").await;
     // The tty echoes it before the stub has read it: the stub's record is what counts.
-    let (gx, gy) = (x - 26, y - 1);
+    let (gx, gy) = (x - 33, y - 1);
     let want = format!("\x1b[<0;{gx};{gy}M\x1b[<0;{gx};{gy}mafter");
     let got = |_: &str| stub(&dir, "input").lines().last() == Some(want.as_str());
     c.wait("the click and the line after it", got).await;
@@ -254,11 +254,11 @@ async fn summon_type_click_detach_reattach() {
     assert_eq!(stub(&dir, "input").lines().last(), Some("probe"));
 
     // Detach: the client leaves, the resident stays; a new client draws it again, at its grid
-    // size (the window less the 25-column sidebar and the main box).
+    // size (the window less the 32-column sidebar and the main box).
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
     let mut c = Client::spawn(&dir, 100, 30);
-    c.wait("the new grid size", |_| stub(&dir, "size").trim() == "28 73").await;
+    c.wait("the new grid size", |_| stub(&dir, "size").trim() == "28 66").await;
     let s =
         c.wait("the resident again", |s| s.contains("1 ○ Reimu") && s.contains("> probe")).await;
     assert!(s.contains("stub-claude Reimu") && !s.contains("╱╨╲"), "{s}");
@@ -344,7 +344,7 @@ async fn a_resident_nobody_watches_rings_the_host() {
     c.send(b"\r").await;
     // The reply wraps in the sidebar: its rows, read as one line.
     let side = |s: &str| {
-        let rows = s.lines().map(|l| l.chars().skip(1).take(23).collect::<String>());
+        let rows = s.lines().map(|l| l.chars().skip(1).take(30).collect::<String>());
         rows.map(|r| r.trim().to_string()).collect::<Vec<_>>().join(" ")
     };
     c.wait("the cast", |s| side(s).contains("cast Aa Probe on Reimu and Marisa")).await;
@@ -551,14 +551,14 @@ async fn the_wheel_scrolls_back_for_every_client_and_a_letter_goes_home_and_on()
 
 /// The sidebar's rows read as one line, so a message that wraps there can be matched.
 fn side(s: &str) -> String {
-    let rows = s.lines().map(|l| l.chars().skip(1).take(23).collect::<String>());
+    let rows = s.lines().map(|l| l.chars().skip(1).take(30).collect::<String>());
     rows.map(|r| r.trim().to_string()).collect::<Vec<_>>().join(" ")
 }
 
 /// A grid row of a 120-column client's screen (1-based), trailing blanks dropped.
 fn grid_row(s: &str, y: u16) -> String {
     let line = s.lines().nth(y as usize - 1).unwrap_or_default();
-    line.chars().skip(26).take(93).collect::<String>().trim_end().to_string()
+    line.chars().skip(33).take(86).collect::<String>().trim_end().to_string()
 }
 
 impl Client {
@@ -659,13 +659,13 @@ async fn a_drag_copies_soft_wraps_joined_line_breaks_kept_and_wide_characters_wh
     c.send(b"\x1dy").await;
     c.wait("no answer", |s| side(s).contains("Reimu has not finished a turn yet")).await;
 
-    // A line longer than the 93-column grid: the stub's echo of it wraps onto a second row.
+    // A line longer than the 86-column grid: the stub's echo of it wraps onto a second row.
     let long: Vec<String> = (0..30).map(|i| format!("w{i:02}")).collect();
     let long = long.join(" ");
     c.send(format!("{long}\r").as_bytes()).await;
     let s = c.wait("the long echo", |s| s.contains("> w00")).await;
     let (x, y) = find(&s, "> w00");
-    assert!(grid_row(&s, y + 1).starts_with(" w23"), "{s}");
+    assert!(grid_row(&s, y + 1).starts_with("w21"), "{s}");
     c.drag((x, y), (119, y + 1)).await;
     let want = format!("> {long}");
     c.wait("the long line, joined", |_| copied() == want).await;
@@ -740,9 +740,9 @@ async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrol
     let s = c.wait("the other line here", |s| s.contains("> more")).await;
     let (x, y) = find(&s, "> more");
     c.mouse(0, (x + 5, y), true).await;
-    c.mouse(32, (27, 1), true).await;
+    c.mouse(32, (34, 1), true).await;
     c.wait("scrolled back", |s| s.contains("↑ ") && !s.contains("↑ 1 ")).await;
-    c.mouse(32, (27, 2), true).await;
+    c.mouse(32, (34, 2), true).await;
     let mut last = String::new();
     let s = loop {
         let t = Instant::now();
@@ -754,7 +754,7 @@ async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrol
     };
     let top = grid_row(&s, 2);
     let k: usize = top.strip_prefix("> line").and_then(|n| n.parse().ok()).expect(&top);
-    c.mouse(0, (27, 2), false).await;
+    c.mouse(0, (34, 2), false).await;
     let mut want: Vec<String> = (k..60).map(|i| format!("> line{i}")).collect();
     want.extend(["more".into(), "> more".into()]);
     let want = want.join("\n");
@@ -800,7 +800,7 @@ async fn a_link_the_resident_marks_is_a_link_on_the_host_and_the_title_names_her
     let s = c.vt.frame().text().join("\n");
     // Where the stub printed it: the grid's first column, the row after the line typed.
     let (_, y) = find(&s, "/link https://example.com/x here");
-    assert_eq!(links, [(y as usize, 26, "here".into(), "https://example.com/x".into())], "{s}");
+    assert_eq!(links, [(y as usize, 33, "here".into(), "https://example.com/x".into())], "{s}");
     assert_eq!(grid_row(&s, y + 1), "here");
     assert!(at(&c.seen, b"\x1b]8;;https://example.com/x\x1b\\").is_some());
 

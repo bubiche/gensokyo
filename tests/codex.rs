@@ -911,6 +911,14 @@ fn a_lead_says_more_to_its_codex_helper_by_codex_queue_on_its_thread() {
     assert_eq!(got.split_terminator('\0').collect::<Vec<_>>(), ["queue", &thread_arg, &message]);
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["answer"]), (0, &json!(format!("echo: {text}"))), "{l:?}");
+    // As a card is cleaned: no escape reaches codex, a newline and a tab do.
+    say(&d, &lead, "Kappa", "red \x1b[31mtext\x1b[0m\tand\nmore").unwrap();
+    let got = std::fs::read_to_string(&args).unwrap();
+    let clean = "red [31mtext[0m\tand\nmore";
+    let message = format!("--message={clean}");
+    assert_eq!(got.split_terminator('\0').collect::<Vec<_>>(), ["queue", &thread_arg, &message]);
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!(code, 0, "{l:?}");
 
     // What codex says when it will not, as it said it.
     let why = "Error: a codex app-server is running (pid 4242).\nStop it, then queue again.";
@@ -943,9 +951,9 @@ fn a_lead_says_more_to_its_codex_helper_by_codex_queue_on_its_thread() {
     let rec = record(&d, &h["id"]);
     assert_eq!(rec["session"], h["id"]);
     assert!(rec["session_at"].as_i64().unwrap() > named, "{rec}");
-    // Its old thread got the one message said to it, and nothing since.
+    // Its old thread got the messages said to it, and nothing since.
     let q = std::fs::read_to_string(d.dir.join(format!("stub/{thread}.queue"))).unwrap();
-    assert_eq!(q.split_terminator('\0').collect::<Vec<_>>(), [text]);
+    assert_eq!(q.split_terminator('\0').collect::<Vec<_>>(), [text, clean]);
 }
 
 /// A follow-up to a Claude Code helper is typed in as a card is: several lines in one paste, one

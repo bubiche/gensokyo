@@ -421,7 +421,8 @@ async fn queue(shrine: &Shared, rec: &Record, text: &str) -> Result<String, Stri
     }
     let (codex, env) = shrine.borrow().codex(&rec.id).ok_or(super::codex::MISSING)?;
     let cwd = Some(Path::new(&rec.cwd)).filter(|d| d.is_dir()).unwrap_or(Path::new("/"));
-    let args = super::codex::queue(&rec.session, text);
+    // As a card's: no escape or other control character, but newlines and tabs.
+    let args = super::codex::queue(&rec.session, &crate::card::clean(text));
     let (_, code, err) = super::pty::output(&codex, &args, &env, cwd, QUEUE_LIMIT, "codex").await?;
     match (code, err.trim_end()) {
         (Some(0), _) => Ok(format!("queued for {name}: Codex runs it once its turn is over")),

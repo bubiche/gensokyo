@@ -754,7 +754,8 @@ fn a_codex_residents_model_and_context_are_listed() {
     let d = daemon("tele", true);
     let config = d.dir.join("codex/config.toml");
     let trust = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(&config, format!("model = \"gpt-5.4-mini\"\n{trust}")).unwrap();
+    let written = format!("model = \"gpt-5.4-mini\"\n{trust}");
+    std::fs::write(&config, &written).unwrap();
     let dir = d.dir.display().to_string();
     let new = |name: &str, model: &[&str]| {
         let args = [&["new", "--agent", "codex", "--json", "--name", name][..], model]
@@ -781,7 +782,7 @@ fn a_codex_residents_model_and_context_are_listed() {
         assert!(t["effort"].is_null() && t["cost"].is_null(), "{t}");
     }
     // The config was only read.
-    assert!(std::fs::read_to_string(&config).unwrap().starts_with("model = \"gpt-5.4-mini\"\n"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
     let line = common::out(&d.cli(&["list"]));
     assert!(line.contains("gpt-5.5 · ctx 2%"), "{line}");
 }

@@ -285,9 +285,7 @@ fn launch(
             (program, env, launch::argv(&paths, o, cwd))
         }
         Agent::Codex => {
-            let (program, env) = sh
-                .codex(o.id)
-                .ok_or("codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app")?;
+            let (program, env) = sh.codex(o.id).ok_or(codex::MISSING)?;
             (program, env, codex::argv(&paths, o)?)
         }
     };
@@ -301,8 +299,8 @@ fn launch(
     Ok((program.to_string_lossy().into_owned(), argv, handle))
 }
 
-/// The longest first prompt: it goes on claude's command line.
-const PROMPT_MOST: usize = 64 * 1024;
+/// The longest first prompt: it goes on claude's command line. A `say` is held to it too.
+pub(super) const PROMPT_MOST: usize = 64 * 1024;
 
 /// Claude Code's permission modes, narrowest first: a helper's is never past its lead's.
 pub(super) const MODES: [&str; 5] = ["plan", "default", "acceptEdits", "auto", "bypassPermissions"];
@@ -783,6 +781,11 @@ pub(super) fn recall(
         None => {
             let back = come_back(shrine, &sh, &rec, None)?;
             (rec.program, rec.argv, rec.ledger) = (back.program, back.argv, back.ledger);
+            // Started afresh, a Codex resident is on a thread its SessionStart has yet to name:
+            // the old one would take a `say` that nothing reads.
+            if !rec.agent.is_claude() && !back.resumed {
+                rec.session = rec.id.clone();
+            }
             (Some(back.handle), back.resumed)
         }
     };

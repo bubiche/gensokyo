@@ -1,16 +1,21 @@
-//! Leads and their helpers: `wait` for news of a helper, `read` what it answered, and which of
-//! its finished turns ring the user. A helper is a resident another resident summoned, its lead.
+//! Leads and their helpers: `wait` for news of a helper, `read` what it answered, `say` more to
+//! it, and which of its finished turns ring the user. A helper is a resident another resident
+//! summoned, its lead.
 
 use super::aware::Pending;
 use super::log::log;
 use super::shrine::{Shared, Shrine, cloud_here, find, here, touch};
 use super::store::{self, Record, Store};
-use crate::proto::{Ended, Report, State, Until, Wait};
+use crate::proto::{Agent, Ended, Report, State, Until, Wait};
 use crate::tele;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
+
+/// The longest `codex queue` may take: it only hands the words to the thread.
+const QUEUE_LIMIT: Duration = Duration::from_secs(30);
 
 /// One `wait` being held: who asked, for whom, and for what. In the shrine for as long as its
 /// guard lives, which is as long as the connection that asked.
@@ -351,6 +356,79 @@ pub(super) fn read(
          you]\n{text}\n[end of {name}'s report{whole}]",
         a.turn
     ))
+}
+
+/// `say`: `text` as resident `who`'s next prompt. Typed into a Claude Code one as a card is,
+/// with nothing in its way; for a Codex one, `codex queue` keeps it until its turn is over. A
+/// cloud session's words go by `cloud say`. Never the words in the log.
+pub(super) async fn say(shrine: &Shared, who: &str, text: &str) -> Result<String, String> {
+    if crate::card::clean(text).trim().is_empty() {
+        return Err("nothing to say".into());
+    }
+    if text.len() > super::shrine::PROMPT_MOST {
+        let kb = super::shrine::PROMPT_MOST / 1024;
+        return Err(format!("a message is at most {kb} KB: put the rest in a file and name it"));
+    }
+    // No argv can hold one, and a terminal would drop it.
+    if text.contains('\0') {
+        return Err("a message cannot hold a NUL byte".into());
+    }
+    let (rec, h) = {
+        let sh = shrine.borrow();
+        if sh.quitting {
+            return Err("the daemon is stopping".into());
+        }
+        let rec = record(&sh, who).ok_or_else(|| format!("no resident {who}"))?;
+        if rec.cloud.is_some() {
+            let n = &rec.name;
+            return Err(format!("{n} works on claude.ai: gensokyo cloud say {n} \"<words>\""));
+        }
+        let e = sh.entries.iter().find(|e| e.rec.id == rec.id);
+        let h = e.and_then(|e| e.handle.clone()).filter(|h| h.exit().is_none());
+        let h = h.ok_or_else(|| format!("{} has departed", rec.name))?;
+        (rec, h)
+    };
+    let name = &rec.name;
+    let r = match rec.agent {
+        Agent::Codex => queue(shrine, &rec, text).await,
+        // Unbracketed, every newline would be an Enter, each line a prompt of its own.
+        Agent::Claude if text.contains('\n') && !h.modes().paste => Err(format!(
+            "{name} is not taking pastes, so the lines would go in one at a time; nothing was typed"
+        )),
+        Agent::Claude => {
+            async {
+                super::cards::look(shrine).await?;
+                let typed = super::cards::deliver(shrine, &rec.id, &h, text, "message").await;
+                typed.map_err(|why| format!("{name} {why}"))?;
+                Ok(format!("said to {name}"))
+            }
+            .await
+        }
+    };
+    log(json!({"ev": "say", "id": rec.id, "agent": rec.agent, "error": r.as_ref().err()}));
+    r
+}
+
+/// `text` for Codex resident `rec`'s thread, by `codex queue` run as its launch was: the same
+/// codex and environment. What codex wrote to stderr when it would not.
+async fn queue(shrine: &Shared, rec: &Record, text: &str) -> Result<String, String> {
+    let name = &rec.name;
+    // Its SessionStart names the thread, at its first prompt: the id in its title is cut short.
+    if rec.session == rec.id {
+        return Err(format!(
+            "{name} has not started yet: Codex names its thread at its first prompt"
+        ));
+    }
+    let (codex, env) = shrine.borrow().codex(&rec.id).ok_or(super::codex::MISSING)?;
+    let cwd = Some(Path::new(&rec.cwd)).filter(|d| d.is_dir()).unwrap_or(Path::new("/"));
+    let args = super::codex::queue(&rec.session, text);
+    let (_, code, err) = super::pty::output(&codex, &args, &env, cwd, QUEUE_LIMIT, "codex").await?;
+    match (code, err.trim_end()) {
+        (Some(0), _) => Ok(format!("queued for {name}: Codex runs it once its turn is over")),
+        (Some(c), "") => Err(format!("codex queue failed, exit {c}, and said nothing")),
+        (None, "") => Err("codex queue was killed by a signal".into()),
+        (_, err) => Err(format!("codex queue: {err}")),
+    }
 }
 
 /// A helper's turn has just finished, here or on claude.ai: quiet when its lead will collect

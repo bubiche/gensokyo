@@ -94,6 +94,18 @@ enum Cmd {
         #[arg(long)]
         screen: bool,
     },
+    /// Say more to a resident, as its next prompt: typed into Claude Code, queued for Codex
+    ///
+    /// Claude Code gets it typed in once nothing is in the way (a dialog, a half-typed prompt);
+    /// Codex runs it once its turn is over. A cloud session's words go by `gensokyo cloud say`.
+    /// From inside a resident, only to its own helpers.
+    Say {
+        /// A name, a slot or an id
+        who: String,
+        /// The words, quoted as one argument
+        #[arg(allow_hyphen_values = true)]
+        text: String,
+    },
     /// Cast a spell card at residents; with no card, list the cards
     #[command(visible_alias = "cast")]
     Broadcast {
@@ -259,6 +271,7 @@ pub fn main(args: &[String]) -> ExitCode {
         Cmd::Read { who, screen } => {
             say(request(Request::Read { who, screen, bare: false }, false))
         }
+        Cmd::Say { who, text } => say(request(Request::Say { who, text }, false)),
         Cmd::Ritual { cmd } => rituals::main(cmd),
         Cmd::Cloud { cmd } => cloud::main(cmd),
         Cmd::Tag { who, tags, clear } => {

@@ -188,6 +188,13 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         bare: bool,
     },
+    /// Words for resident `who` as its next prompt: typed into a Claude Code one as a card is,
+    /// queued by `codex queue` for a Codex one. Answered with `done`. A cloud session's go by
+    /// `cloud_say`.
+    Say {
+        who: String,
+        text: String,
+    },
     /// The client's host terminal gained or lost focus. Until it first says, it has not.
     Focus {
         on: bool,

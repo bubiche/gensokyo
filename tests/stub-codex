@@ -5,7 +5,11 @@
 #   queue --thread <id> --message <text>
 #                             queues <text> for the interactive stub on that thread, which runs
 #                             it as a prompt once it is idle; prints "Queued message ..." as
-#                             codex does. Its argv, each arg ended by a NUL, is queue.args
+#                             codex does. Its argv, each arg ended by a NUL, is queue.args.
+#                             --thread=<id> and --message=<text> too; a value after its flag
+#                             that starts with `-` is refused as an argument, as codex's parser
+#                             does. With queue.fail there it queues nothing: its text goes to
+#                             stderr and it exits 1, as codex does while an app-server runs
 #   resume <thread> [flags]   starts on that thread: its first SessionStart says "resume"
 #   interactive (default)     takes the prompt after `--` (or a bare word), swallows the other
 #                             launch flags, `-m` sets the hooks' model
@@ -50,10 +54,20 @@ case ${1:-} in
   queue)
     printf '%s\0' "$@" > "$STUB_STATE/queue.args"
     thread='' msg=''
+    shift
     while [ $# -gt 0 ]; do
-      case $1 in --thread) thread=$2; shift ;; --message) msg=$2; shift ;; esac
+      case $1 in
+        --thread=*) thread=${1#--thread=} ;;
+        --message=*) msg=${1#--message=} ;;
+        --thread|--message)
+          case ${2:-} in -*)
+            printf "error: unexpected argument '%s' found\n" "${2:-}" >&2; exit 2 ;;
+          esac
+          [ "$1" = --thread ] && thread=$2 || msg=$2; shift ;;
+      esac
       shift
     done
+    if [ -f "$STUB_STATE/queue.fail" ]; then cat "$STUB_STATE/queue.fail" >&2; exit 1; fi
     printf '%s\0' "$msg" >> "$STUB_STATE/$thread.queue"
     echo "Queued message $(uuid) for thread $thread."
     exit 0 ;;

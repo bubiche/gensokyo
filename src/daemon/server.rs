@@ -440,7 +440,8 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
             | Request::CloudAdd(_)
             | Request::CloudShow { .. }
             | Request::CloudAct { .. }
-            | Request::CloudSay { .. } => {
+            | Request::CloudSay { .. }
+            | Request::Say { .. } => {
                 let (shrine, out, caller) = (shrine.clone(), out.clone(), caller.clone());
                 tokio::task::spawn_local(async move {
                     let r = match req {
@@ -461,6 +462,7 @@ async fn conn(shrine: Shared, quit: Rc<Stop>, s: UnixStream) {
                         Request::CloudSay { who, text } => {
                             super::cloud::say(&shrine, &who, &text, caller.as_deref()).await
                         }
+                        Request::Say { who, text } => lead::say(&shrine, &who, &text).await,
                         _ => unreachable!("matched above"),
                     };
                     send(&out, &r.map_or_else(fail, |message| Reply::Done { id, message })).await;
@@ -707,7 +709,8 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         Request::Close { who }
         | Request::Banish { who }
         | Request::Recall { who }
-        | Request::Read { who, .. } => mine(&shrine.borrow(), caller, who).err(),
+        | Request::Read { who, .. }
+        | Request::Say { who, .. } => mine(&shrine.borrow(), caller, who).err(),
         Request::Renew { who } if who.is_empty() => Some(
             "renewing everyone behind the installed claude is the user's; name your helpers".into(),
         ),
@@ -721,7 +724,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
     }
 }
 
-/// Whether resident `caller` may close, banish, recall, read or wait on `who`: only one it leads
+/// Whether resident `caller` may close, banish, recall, read, say to or wait on `who`: only one it leads
 /// may be, here or departed.
 fn mine(sh: &Shrine, caller: &str, who: &str) -> Result<(), String> {
     match lead::record(sh, who) {

@@ -861,3 +861,109 @@ fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
         assert!(!here.iter().any(|w| w == "--add-dir" || w.contains("writable_roots")), "{here:?}");
     }
 }
+
+#[test]
+fn a_queued_message_is_joined_to_its_flags_so_a_dash_cannot_make_it_one() {
+    let a = codex::queue("019a-thread", "-m gpt, then the rest");
+    let a: Vec<_> = a.iter().map(|a| a.to_str().unwrap()).collect();
+    assert_eq!(a, ["queue", "--thread=019a-thread", "--message=-m gpt, then the rest"]);
+}
+
+/// `gensokyo say <name>` from inside resident `me`: its stdout, or its error.
+fn say(d: &common::Daemon, me: &Value, who: &str, text: &str) -> Result<String, String> {
+    let o = inside(d, me, &["say", who, text]);
+    match o.status.success() {
+        true => Ok(common::out(&o)),
+        false => Err(common::err(&o)),
+    }
+}
+
+/// A follow-up to a Codex helper is `codex queue` on its thread, the one its SessionStart named:
+/// refused before there is one, after it has gone, and when it is not the lead's to send.
+#[test]
+fn a_lead_says_more_to_its_codex_helper_by_codex_queue_on_its_thread() {
+    let d = daemon("say", true);
+    let lead = lead(&d);
+    let refused = |who: &str, text: &str, why: &str| {
+        let e = say(&d, &lead, who, text).unwrap_err();
+        assert!(e.contains(why), "{e}");
+    };
+    // No prompt yet, so no thread.
+    let o = inside(&d, &lead, &["new", "--agent", "codex", "--json", "--name", "Nue"]);
+    let nue: Value = serde_json::from_slice(&o.stdout).unwrap();
+    ready(&d, &nue["id"]);
+    refused("Nue", "hello", "Nue has not started yet");
+    let args = d.dir.join("stub/queue.args");
+    assert!(!args.exists());
+
+    let h = helper(&d, &lead, "Kappa", "hello there");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!(code, 0, "{l:?}");
+    let thread = d.stub(&h["id"], "thread").trim().to_string();
+    assert_eq!(record(&d, &h["id"])["session"], thread.as_str());
+    // A message that starts with a dash arrives whole, and is its next turn.
+    let text = "-m gpt-5, and then: the rest";
+    let said = say(&d, &lead, "Kappa", text).unwrap();
+    assert!(said.contains("queued for Kappa"), "{said}");
+    let got = std::fs::read_to_string(&args).unwrap();
+    let message = format!("--message={text}");
+    let thread_arg = format!("--thread={thread}");
+    assert_eq!(got.split_terminator('\0').collect::<Vec<_>>(), ["queue", &thread_arg, &message]);
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!(format!("echo: {text}"))), "{l:?}");
+
+    // What codex says when it will not, as it said it.
+    let why = "Error: a codex app-server is running (pid 4242).\nStop it, then queue again.";
+    std::fs::write(d.dir.join("stub/queue.fail"), format!("{why}\n")).unwrap();
+    refused("Kappa", "more", &format!("codex queue: {why}"));
+    std::fs::remove_file(d.dir.join("stub/queue.fail")).unwrap();
+
+    refused("Kappa", " \n ", "nothing to say");
+    refused("Kappa", &"x".repeat(64 * 1024 + 1), "at most 64 KB");
+    let nul = json!({"t": "say", "id": 9, "who": "Kappa", "text": "a\0b"});
+    let e = d.req_as(lead["id"].as_str().unwrap(), nul);
+    assert!(e["error"].as_str().unwrap().contains("NUL"), "{e}");
+    // Someone else's helper is not this lead's to send to; nor is the lead itself.
+    let other = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Youmu"}));
+    let other = other["resident"].clone();
+    ready(&d, &other["id"]);
+    let e = say(&d, &other, "Kappa", "hi").unwrap_err();
+    assert!(e.contains("Kappa is not one of your helpers"), "{e}");
+    refused("Seiran", "hi", "Seiran is you");
+
+    // Gone, it hears nothing; back afresh, it is on no thread until its first prompt.
+    let o = inside(&d, &lead, &["close", "Kappa"]);
+    assert!(o.status.success(), "{}", common::err(&o));
+    refused("Kappa", "hi", "Kappa has departed");
+    let b = d.req(json!({"t": "recall", "id": 4, "who": "Kappa"}));
+    assert_eq!(b["t"], "summoned", "{b}");
+    refused("Kappa", "hi", "Kappa has not started yet");
+    // Its old thread got the one message said to it, and nothing since.
+    let q = std::fs::read_to_string(d.dir.join(format!("stub/{thread}.queue"))).unwrap();
+    assert_eq!(q.split_terminator('\0').collect::<Vec<_>>(), [text]);
+}
+
+/// A follow-up to a Claude Code helper is typed in as a card is: several lines in one paste, one
+/// prompt, never a prompt per line; and not while something is in its way.
+#[test]
+fn a_lead_says_more_to_its_claude_helper_in_one_paste() {
+    let d = daemon_with("sayc", true, &[("STUB_HOOKS", "1")]);
+    let lead = lead(&d);
+    let o = inside(&d, &lead, &["new", "--json", "--name", "Mima", "--prompt", "brief"]);
+    assert!(o.status.success(), "{}", common::err(&o));
+    let h: Value = serde_json::from_slice(&o.stdout).unwrap();
+    ready(&d, &h["id"]);
+    common::wait_for(LONG, || me(&d, "Mima")["turns"] == 1, "its brief's turn");
+    let said = say(&d, &lead, "Mima", "line one\nline two").unwrap();
+    assert!(said.contains("said to Mima"), "{said}");
+    common::wait_for(LONG, || me(&d, "Mima")["turns"] == 2, "the message's turn");
+    let input = d.stub(&h["id"], "input");
+    assert!(input.contains("\x1b[200~line one\nline two\x1b[201~\n"), "{input:?}");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(me(&d, "Mima")["turns"], 2, "a line went in as a prompt of its own");
+
+    // A prompt half typed into it: refused, with why.
+    keys(&d, "Mima", b"half");
+    let e = say(&d, &lead, "Mima", "more").unwrap_err();
+    assert!(e.contains("Mima has a prompt half typed into it"), "{e}");
+}

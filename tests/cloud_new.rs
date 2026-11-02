@@ -354,6 +354,9 @@ fn a_lead_starts_cloud_helpers_counted_with_its_others_and_a_helper_starts_none(
         d.req(json!({"t": "summon", "id": 7, "cwd": work, "name": "Youmu", "mode": "acceptEdits"}));
     let r = cloud(r["resident"]["id"].as_str().unwrap(), json!({}));
     assert!(r["error"].as_str().unwrap().contains("wider than your mode (acceptEdits)"), "{r}");
+    // Its follow-ups go by `cloud say`.
+    let o = inside(&d, &lead, &["say", "Aya", "more"]);
+    assert!(err(&o).contains("gensokyo cloud say Aya"), "{}", err(&o));
     // Closed, it leaves room, and its lead hears where the session goes on.
     let o = inside(&d, &lead, &["close", "Aya"]);
     assert!(out(&o).contains(&format!("the session goes on at {LINK}")), "{}", out(&o));

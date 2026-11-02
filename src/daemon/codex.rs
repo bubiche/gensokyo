@@ -69,6 +69,9 @@ pub fn launched(argv: &[String]) -> Launched {
     }
 }
 
+/// What a launch or a `say` is told when `program` finds none.
+pub const MISSING: &str = "codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app";
+
 /// The `codex` to run: `$GENSOKYO_CODEX`, else the first on PATH that is not in gensokyo's own
 /// shim directory, else the ChatGPT app's.
 pub fn program(path: Option<&OsStr>) -> Option<PathBuf> {
@@ -122,6 +125,12 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
         a.extend(["--".into(), prompt.into()]);
     }
     Ok(a)
+}
+
+/// `codex queue`'s argv: `text` as the next prompt of `thread`, once it is idle. Each value
+/// joined to its flag, so text that starts with `-` is never taken for a flag.
+pub fn queue(thread: &str, text: &str) -> Vec<OsString> {
+    vec!["queue".into(), format!("--thread={thread}").into(), format!("--message={text}").into()]
 }
 
 /// Why a Codex resident cannot start in `mode` with `effort`, if it cannot.

@@ -3,12 +3,12 @@ source: tests/render.rs
 expression: t.backend()
 ---
 "┌ gensokyo ─────────────┐┌ 2 Marisa · ~/dev/scratch_repo · Opus 5.5→⚖ Opus · hi┐"
-"│1 ● Reimu      Hai  12%││line 00                                              │"
+"│1 ● Reim haiku-4.5  12%││line 00                                              │"
 "│    ⎇ main             ││line 01     ~                                        │"
-"│2 ✦ Marisa     Opu   8%││line 02     ~~                                       │"
-"│3 · Cirno              ││line 03     ~~~                                      │"
-"│4 ✧ Sakuya             ││line 04     ~~~~                                     │"
-"│                       ││line 05     ~~~~~                                    │"
+"│2 ✦ Mari  opus-5.5   8%││line 02     ~~                                       │"
+"│    sa                 ││line 03     ~~~                                      │"
+"│3 · Cirno              ││line 04     ~~~~                                     │"
+"│4 ✧ Sakuya             ││line 05     ~~~~~                                    │"
 "│                       ││line 06     ~~~~~~                                   │"
 "│                       ││line 07     ~~~~~~~                                  │"
 "│                       ││line 08     ~~~~~~~~                                 │"

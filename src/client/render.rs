@@ -4,7 +4,7 @@
 
 use super::modal::{Modal, when_short};
 use crate::paths::tilde;
-use crate::proto::{CloudWatch, Resident, RitualInfo, State};
+use crate::proto::{Agent, CloudWatch, Resident, RitualInfo, State};
 use crate::tele;
 use crate::vt::{self, Frame, Modes};
 use ratatui::buffer::Buffer;
@@ -520,28 +520,25 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     let mut order = drawn(&m.residents);
     // Those with a helper below them: a lead with helpers, and each helper but the last.
     let held: Vec<usize> = order.windows(2).filter(|p| p[1].1).map(|p| p[0].0).collect();
-    // Each one's model at its right only while they are not all on the same one: the one on
-    // screen has its own on the box.
-    let mut models = m
-        .residents
-        .iter()
-        .filter(|r| r.state != State::Departed)
-        .filter_map(|r| r.telemetry.as_ref()?.model.as_deref())
-        .map(tele::model_short);
-    let first = models.next();
-    let model_col = models.any(|s| Some(&s) != first.as_ref());
+    // Each one's model while it runs: Claude's by the name it shows, Codex's by its id.
+    let model = |r: &Resident| {
+        let m = r.telemetry.as_ref().filter(|_| r.state != State::Departed)?.model.as_deref()?;
+        Some(match r.agent {
+            Agent::Claude => tele::model_name(m),
+            Agent::Codex => m.to_string(),
+        })
+    };
+    // As wide as the widest, so they line up.
+    let mw = m.residents.iter().filter_map(model).map(|s| width(&s) as usize).max().unwrap_or(0);
     // Model and context at the right, while it runs and has reported.
     let right = |r: &Resident| {
         let t = r.telemetry.as_ref().filter(|_| r.state != State::Departed);
         t.map_or(String::new(), |t| {
             let ctx = t.ctx.map_or(String::new(), |c| format!("{c}%"));
-            match (model_col, ctx.is_empty()) {
-                (true, _) => {
-                    let model = t.model.as_deref().map(tele::model_short).unwrap_or_default();
-                    format!(" {model:<3} {ctx:>4}")
-                }
-                (false, true) => String::new(),
-                (false, false) => format!(" {ctx:>4}"),
+            match (model(r), ctx.is_empty()) {
+                (Some(model), _) => format!(" {model:>mw$} {ctx:>4}"),
+                (None, true) => String::new(),
+                (None, false) => format!(" {ctx:>4}"),
             }
         })
     };

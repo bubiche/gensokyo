@@ -878,3 +878,11 @@ fn a_codex_patch_is_granted_by_its_own_call() {
     a.hook(&codex_hook("PostToolUse", patch, 11));
     assert_eq!((a.state(), a.pending), (State::Busy, None));
 }
+
+#[test]
+fn a_claude_model_is_named_lowercase_with_its_words_joined() {
+    assert_eq!(tele::model_name("Opus 4.7"), "opus-4.7");
+    assert_eq!(tele::model_name("Opus 4.7 (1M context)"), "opus-4.7");
+    assert_eq!(tele::model_name("Sonnet 4.6"), "sonnet-4.6");
+    assert_eq!(tele::model_name("  Claude  Haiku 4.5 "), "claude-haiku-4.5");
+}

@@ -860,8 +860,9 @@ fn whoever_needs_you_is_gold_across_the_sidebar() {
     let gold = |y: u16| {
         (1..render::SIDEBAR_W - 1).all(|x| buf[(x, y)].bg == ratatui::style::Color::Yellow)
     };
-    // Inside the box: Reimu busy and its branch, Marisa awaits, Cirno departed, Sakuya asked.
-    assert_eq!([1, 2, 3, 4, 5].map(gold), [false, false, true, false, true]);
+    // Inside the box: Reimu busy, its name's second row and its branch, Marisa awaits, Cirno
+    // departed, Sakuya asked.
+    assert_eq!([1, 2, 3, 4, 5, 6].map(gold), [false, false, false, true, false, true]);
 }
 
 #[test]
@@ -893,21 +894,32 @@ fn a_long_ritual_name_is_cut_with_an_ellipsis_in_the_timetable() {
 }
 
 #[test]
-fn the_model_column_shows_only_while_models_differ() {
-    // Haiku beside Opus: each row says which.
-    let (rows, _) = side(&aware(), AREA);
-    assert!(rows[1].ends_with("Hai  12%") && rows[3].ends_with("Opu   8%"), "{rows:#?}");
-    // One model among the living, Cirno's from before it left not counted: the name has its
-    // columns.
-    let mut m = uniform();
-    m.residents[1].name = "Marisa-Kirisame-of-the-Forest".into();
-    let t = Telemetry { model: Some("Sonnet 5".into()), at: NOW, ..Telemetry::default() };
-    m.residents[2].telemetry = Some(t);
+fn every_row_shows_its_model_at_the_right_lined_up() {
+    let mut m = shrine();
+    let t = |model: &str, ctx| Telemetry {
+        model: Some(model.into()),
+        ctx,
+        at: NOW,
+        ..Telemetry::default()
+    };
+    m.residents[0].telemetry = Some(t("Opus 4.7 (1M context)", Some(12)));
+    m.residents[1].agent = gensokyo::proto::Agent::Codex;
+    m.residents[1].telemetry = Some(t("gpt-5.5", None));
+    // From before it left: neither shown nor counted for the column's width.
+    m.residents[2].telemetry = Some(t("Sonnet 4.6", Some(40)));
+    // None known: nothing there.
+    m.residents.push(resident(4, "Sakuya", "work", None));
     let (rows, _) = side(&m, AREA);
-    let models = ["Hai", "Opu", "Son"];
-    assert!(!rows[1..].iter().any(|r| models.iter().any(|s| r.contains(s))), "{rows:#?}");
-    assert!(rows[1].starts_with("1 ● Reimu") && rows[1].ends_with(" 12%"), "{rows:#?}");
-    assert_eq!(rows[3], "2 ✦ Marisa-Kirisam   8%");
+    let top: Vec<&str> = rows[1..5].iter().map(|r| r.trim_end()).collect();
+    // Claude's name for it lowercase and joined, Codex's as given; the name cut, not the model.
+    let want = ["1 ○ Reimu opus-4.7  12%", "2 ○ Maris  gpt-5.5", "3 · Cirno", "4 ○ Sakuya"];
+    assert_eq!(top, want, "{rows:#?}");
+    // Both end in one column.
+    let end = |r: &str, m: &str| r.find(m).map(|b| r[..b].chars().count() + m.len());
+    assert_eq!(end(&rows[1], "opus-4.7"), end(&rows[2], "gpt-5.5"), "{rows:#?}");
+    // The same model on every row is still on every row.
+    let (rows, _) = side(&uniform(), AREA);
+    assert_eq!(rows.iter().filter(|r| r.contains("haiku-4.5")).count(), 2, "{rows:#?}");
 }
 
 #[test]
@@ -942,11 +954,11 @@ fn a_branch_that_repeats_the_name_is_left_off() {
 fn the_focused_name_wraps_over_rows_that_are_all_its() {
     let mut m = shrine();
     m.residents[0].name = "Reimu Hakurei of the Hakurei Shrine".into();
-    let t =
-        Telemetry { model: Some("Opus 5.5".into()), ctx: Some(12), at: NOW, ..Default::default() };
+    let t = Telemetry { ctx: Some(12), at: NOW, ..Default::default() };
     m.residents[0].telemetry = Some(t);
     let (rows, buf) = side(&m, AREA);
-    // One model, so the name has 14 columns beside the context, which stays on its first row.
+    // No model known, so the name has 14 columns beside the context, which stays on its first
+    // row.
     let top: Vec<&str> = rows[1..4].iter().map(|r| r.trim_end()).collect();
     assert_eq!(top, ["1 ○ Reimu Hakurei   12%", "    of the Hakurei", "    Shrine"], "{rows:#?}");
     assert!(rows[4].starts_with("2 ○ Marisa"), "{rows:#?}");

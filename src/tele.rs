@@ -140,9 +140,10 @@ fn model(t: &Telemetry) -> Option<String> {
     })
 }
 
-/// "Sonnet 5" -> "Son", for the sidebar.
-pub fn model_short(m: &str) -> String {
-    m.split_whitespace().next().unwrap_or("").chars().take(3).collect()
+/// "Opus 4.7 (1M context)" -> "opus-4.7", for the sidebar.
+pub fn model_name(m: &str) -> String {
+    let m = m.split('(').next().unwrap_or_default().to_lowercase();
+    m.split_whitespace().collect::<Vec<_>>().join("-")
 }
 
 /// A usage window as the freshest report has it, across every resident's: within a window use

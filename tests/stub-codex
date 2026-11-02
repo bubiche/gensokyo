@@ -10,12 +10,15 @@
 #                             that starts with `-` is refused as an argument, as codex's parser
 #                             does. With queue.fail there it queues nothing: its text goes to
 #                             stderr and it exits 1, as codex does while an app-server runs
-#   resume <thread> [flags]   starts on that thread: its first SessionStart says "resume"
+#   [flags] resume <thread>   starts on that thread, the flags before or after it: its first
+#                             SessionStart says "resume", and comes with its first prompt, as
+#                             Codex sends it, none while it waits for one
 #   interactive (default)     takes the prompt after `--` (or a bare word), swallows the other
 #                             launch flags, `-m` sets the hooks' model
 # Hooks: every `-c hooks.<Event>=[{hooks=[{type="command",command="..."}]}]` is run with `sh -c`
 # and Codex's JSON payload on stdin, but only with --dangerously-bypass-hook-trust, as Codex
-# runs flag hooks only then. SessionStart ("startup") fires with the first prompt, not at start;
+# runs flag hooks only then. SessionStart ("startup") fires with the first prompt, not at start,
+# and writes the thread's rollout, empty, where Codex keeps it: under $CODEX_HOME/sessions/;
 # every prompt fires UserPromptSubmit, works for $STUB_WORK seconds (default 1, tenths allowed),
 # then fires Stop with "echo: <prompt>". The prompt /perm opens an approval instead: PreToolUse
 # and PermissionRequest for a Bash command with a description, with three choices; y, or Enter on
@@ -77,9 +80,6 @@ res=${GENSOKYO_RESIDENT:-stub-$$}
 printf '%s\0' "$@" > "$STUB_STATE/$res.args"
 env > "$STUB_STATE/$res.env"
 thread='' source=startup
-if [ "${1:-}" = resume ]; then thread=${2:-}; source=resume; shift 2; fi
-[ -n "$thread" ] || thread=$(uuid)
-printf '%s\n' "$thread" > "$STUB_STATE/$res.thread"
 
 # A TOML basic string's escapes undone, as Codex reads a `-c` value.
 untoml() {
@@ -109,6 +109,7 @@ while [ $# -gt 0 ]; do
             case $ev in *[!A-Za-z]*) ;; *) eval "hook_$ev=\$(untoml \"\$cmd\")" ;; esac ;;
           tui.terminal_title=*) titled=1 ;;
         esac ;;
+    resume) shift; thread=${1:-}; source=resume ;;
     -m|--model) shift; model=${1:-} ;;
     -s|-a|-C|--cd|--add-dir|-p|--profile) shift ;;
     --dangerously-bypass-hook-trust) trusted=1 ;;
@@ -119,8 +120,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+[ -n "$thread" ] || thread=$(uuid)
+printf '%s\n' "$thread" > "$STUB_STATE/$res.thread"
+
 # What every payload says, quoted once.
-j_transcript=$(json "${CODEX_HOME:-$STUB_STATE/codex}/sessions/$(date +%Y/%m/%d)/rollout-$(date +%Y-%m-%dT%H-%M-%S)-$thread.jsonl")
+transcript=${CODEX_HOME:-$STUB_STATE/codex}/sessions/$(date +%Y/%m/%d)/rollout-$(date +%Y-%m-%dT%H-%M-%S)-$thread.jsonl
+j_transcript=$(json "$transcript")
 j_cwd=$(json "$PWD") j_model=$(json "$model")
 turn_id=''
 
@@ -165,7 +170,11 @@ pend="${esc}[201~"
 [ -f "$STUB_STATE/$thread.queue.taken" ] && taken=$(cat "$STUB_STATE/$thread.queue.taken")
 
 submit() {
-  [ -n "$started" ] || { started=1; fire SessionStart ",\"source\":\"$source\""; }
+  if [ -z "$started" ]; then
+    started=1
+    [ "$source" = resume ] || { mkdir -p "${transcript%/*}"; : >> "$transcript"; }
+    fire SessionStart ",\"source\":\"$source\""
+  fi
   turn_id=$(uuid) said=$1 spin='' glyph=0
   fire UserPromptSubmit ",\"prompt\":\"$(json "$1")\""
   printf '\n› %s\n' "$1"

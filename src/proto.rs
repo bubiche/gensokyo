@@ -57,7 +57,8 @@ pub enum Request {
     Close {
         who: String,
     },
-    /// A departed resident comes back: `claude --resume` with its old settings and name.
+    /// A departed resident comes back: `claude --resume`, or `codex resume` on its thread, with
+    /// its old settings and name.
     Recall {
         who: String,
     },

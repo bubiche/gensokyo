@@ -91,9 +91,10 @@ pub fn find(
     on_path(path, skip, "codex").or_else(|| executable(app).then(|| app.to_path_buf()))
 }
 
-/// The argv for a fresh start, or why there is none: a mode Codex has no flags for, or an effort
-/// that is not one word. The prompt goes last, after `--`, so one that starts with `-` stays
-/// whole. `notify` is the user's and left alone.
+/// The argv for a start, or why there is none: a mode Codex has no flags for, or an effort that
+/// is not one word. A fresh start's prompt goes last, after `--`, so one that starts with `-`
+/// stays whole; with `resume`, `resume <thread>` goes last instead, after the same flags, and
+/// no prompt. `notify` is the user's and left alone.
 pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     check(o.mode, o.effort)?;
     // gensokyo's hooks run unreviewed: Codex would otherwise hold each new one for the user.
@@ -121,7 +122,9 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     if let Some(e) = o.effort {
         a.extend(["-c".into(), format!("model_reasoning_effort={e}").into()]);
     }
-    if let Some(prompt) = o.prompt {
+    if o.resume {
+        a.extend(["resume".into(), o.session.into()]);
+    } else if let Some(prompt) = o.prompt {
         a.extend(["--".into(), prompt.into()]);
     }
     Ok(a)
@@ -247,6 +250,29 @@ pub fn home() -> Option<PathBuf> {
         Some(h) => Some(h.into()),
         None => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")),
     }
+}
+
+/// Whether Codex keeps `thread` in `home`, for `codex resume`: a rollout in
+/// `sessions/<year>/<month>/<day>/`, named `rollout-<YYYY-MM-DDThh-mm-ss>-<thread>.jsonl` as
+/// Codex writes one. Names only, at exactly that depth: nothing is opened, nothing deeper looked
+/// at.
+pub fn has_thread(home: &Path, thread: &str) -> bool {
+    if thread.is_empty() || thread.contains('/') {
+        return false;
+    }
+    let ours = |n: &str| {
+        let rest = n.strip_prefix("rollout-").and_then(|r| r.strip_suffix(".jsonl"));
+        let stamp = rest.and_then(|r| r.strip_suffix(thread)?.strip_suffix('-'));
+        stamp.is_some_and(|s| s.len() == 19)
+    };
+    let kids = |d: &Path, dir: bool| {
+        let all = std::fs::read_dir(d).into_iter().flatten().flatten();
+        all.filter(move |e| e.file_type().is_ok_and(|t| if dir { t.is_dir() } else { t.is_file() }))
+    };
+    let days = kids(&home.join("sessions"), true)
+        .flat_map(|y| kids(&y.path(), true))
+        .flat_map(|m| kids(&m.path(), true));
+    days.flat_map(|d| kids(&d.path(), false)).any(|f| ours(&f.file_name().to_string_lossy()))
 }
 
 /// The model a Codex launch runs: its `-m`, else the one the `config.toml` in `home` sets for

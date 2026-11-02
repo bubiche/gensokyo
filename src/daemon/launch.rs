@@ -1,6 +1,7 @@
 //! What a resident is started with: the `claude` argv, the injected `--settings`, and an
 //! environment built from scratch.
 
+use crate::proto::Agent;
 use serde_json::{Value, json};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -74,9 +75,13 @@ pub fn executable(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Whether Claude Code kept a conversation for `session`, which it writes only once a prompt is
-/// submitted: `--resume` of any other session exits 1 with "No conversation found".
-pub fn has_conversation(session: &str) -> bool {
+/// Whether `agent` kept a conversation for `session` to resume. Claude Code writes one only once
+/// a prompt is submitted: `--resume` of any other session exits 1 with "No conversation found".
+/// Codex's is its thread's rollout; a resident's own id, before Codex named its thread, has none.
+pub fn has_conversation(agent: Agent, session: &str) -> bool {
+    if agent == Agent::Codex {
+        return super::codex::home().is_some_and(|h| super::codex::has_thread(&h, session));
+    }
     let Some(projects) = crate::paths::claude_dir().map(|c| c.join("projects")) else {
         return false;
     };

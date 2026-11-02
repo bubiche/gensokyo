@@ -185,6 +185,56 @@ fn a_codex_argv_says_who_it_is_then_the_mode_model_effort_and_prompt_last() {
     assert!(value(&a, "model_reasoning_effort").is_none());
 }
 
+/// A resume is the same start, its flags first, then `resume <thread>` in place of a prompt.
+#[test]
+fn a_resumed_codex_argv_has_its_flags_then_resume_and_its_thread_and_no_prompt() {
+    let o = Options {
+        mode: Some("default"),
+        model: Some("gpt-5.6"),
+        effort: Some("high"),
+        lead: Some("Seiran"),
+        role: Some("Review."),
+        prompt: Some("brief"),
+        ..opts()
+    };
+    let first = argv("/g", &o);
+    let back = argv("/g", &Options { session: "019a-thread", resume: true, ..o });
+    let (n, m) = (first.len(), back.len());
+    assert_eq!(first[n - 2..], ["--", "brief"]);
+    assert_eq!(back[..m - 2], first[..n - 2]);
+    assert_eq!(back[m - 2..], ["resume", "019a-thread"]);
+    assert!(!back.iter().any(|w| w == "--" || w == "brief"), "{back:?}");
+    assert_eq!(codex::launched(&back), codex::launched(&first));
+}
+
+/// A thread is resumed only when Codex kept it: its rollout, by name, three levels down.
+#[test]
+fn a_codex_thread_is_found_by_its_rollouts_name_in_its_days_directory_only() {
+    let home = fresh("cx-rollout");
+    let t = "01a19cc5-82ba-7ba3-b403-76fbc00bb608";
+    let name = |t: &str| format!("rollout-2026-11-02T22-59-13-{t}.jsonl");
+    assert!(!codex::has_thread(&home, t), "no sessions at all");
+    let day = home.join("sessions/2026/11/02");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(day.join(name(t)), "").unwrap();
+    assert!(codex::has_thread(&home, t));
+    // A resident's own id, before Codex named its thread; part of the thread's id; none.
+    for not in ["5f0c1e9a-41d2-4c3b-9a8e-7d6c5b4a3f21", "76fbc00bb608", "b403-76fbc00bb608", ""] {
+        assert!(!codex::has_thread(&home, not), "{not:?}");
+    }
+    // One level too deep, one too shallow, and a directory by a rollout's name: none of them.
+    let deep = "0b1c2d3e-0000-4000-8000-000000000001";
+    std::fs::create_dir_all(day.join("x")).unwrap();
+    std::fs::write(day.join("x").join(name(deep)), "").unwrap();
+    let shallow = "0b1c2d3e-0000-4000-8000-000000000002";
+    std::fs::write(home.join("sessions/2026/11").join(name(shallow)), "").unwrap();
+    let dir = "0b1c2d3e-0000-4000-8000-000000000003";
+    std::fs::create_dir_all(day.join(name(dir))).unwrap();
+    for not in [deep, shallow, dir] {
+        assert!(!codex::has_thread(&home, not), "{not}");
+    }
+}
+
 #[test]
 fn each_mode_has_codex_flags_that_read_back_as_it() {
     let p = Paths { exe: Path::new("/g"), share: Path::new("/share"), socket: Path::new("/s") };
@@ -603,7 +653,7 @@ fn strings(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn a_codex_resident_is_started_listed_left_and_started_afresh() {
+fn a_codex_resident_is_started_listed_left_and_resumed_on_its_thread() {
     let d = daemon("a", false);
     let dir = d.dir.display().to_string();
     let o = d.cli(&[
@@ -658,14 +708,24 @@ fn a_codex_resident_is_started_listed_left_and_started_afresh() {
     let gone = me(&d, "Nitori");
     assert_eq!((&gone["exit"], &gone["agent"]), (&json!(0), &json!("codex")), "{gone}");
 
-    // Back as it was summoned, with no thread to resume and no prompt to say again.
+    // Back as it was summoned, on its own thread, with no prompt to say again.
+    let thread = d.stub(&r["id"], "thread").trim().to_string();
+    assert_eq!(record(&d, &r["id"])["session"], thread.as_str());
     std::fs::remove_file(d.dir.join(format!("stub/{}.ready", r["id"].as_str().unwrap()))).unwrap();
     let b = d.req(json!({"t": "recall", "id": 4, "who": "Nitori"}));
     assert_eq!(b["t"], "summoned", "{b}");
     let again = strings(&record(&d, &r["id"])["argv"]);
-    assert_eq!(again[..], argv[..argv.len() - 2]);
+    assert_eq!(again[..again.len() - 2], argv[..argv.len() - 2]);
+    assert_eq!(again[again.len() - 2..], ["resume", thread.as_str()]);
     assert_eq!(me(&d, "Nitori")["mode"], "acceptEdits");
     ready(&d, &r["id"]);
+    let got = d.stub(&r["id"], "args");
+    assert_eq!(got.split('\0').filter(|a| !a.is_empty()).collect::<Vec<_>>(), again);
+    assert_eq!(d.stub(&r["id"], "thread").trim(), thread);
+    assert_eq!(record(&d, &r["id"])["session"], thread.as_str());
+    // Up as a fresh boot is, by its titles, with no prompt.
+    common::wait_for(LONG, || me(&d, "Nitori")["blocked"].is_null(), "it to have started");
+    assert_eq!(me(&d, "Nitori")["state"], "resting");
     let c = d.req(json!({"t": "close", "id": 5, "who": "Nitori"}));
     assert_eq!(c["message"], "Nitori has left (/exit)", "{c}");
 }
@@ -798,6 +858,17 @@ fn a_promptless_codex_resident_starts_and_leaves_on_one_ctrl_c() {
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     assert!(!d.log().iter().any(|l| l["ev"] == "exit" && l["held"].is_string()), "asked twice");
     assert_eq!(me(&d, "Nitori")["exit"], 0);
+
+    // Never prompted, it has no thread to resume: back afresh, on its own id.
+    let id = &r["resident"]["id"];
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", id.as_str().unwrap()))).unwrap();
+    let b = d.req(json!({"t": "recall", "id": 4, "who": "Nitori"}));
+    assert_eq!(b["t"], "summoned", "{b}");
+    ready(&d, id);
+    let argv = strings(&record(&d, id)["argv"]);
+    assert!(!argv.iter().any(|a| a == "resume"), "{argv:?}");
+    assert_eq!(record(&d, id)["session"], *id);
+    assert!(!d.stub(id, "args").split('\0').any(|a| a == "resume"));
 }
 
 /// Codex has no status line: its model is the one it was launched with, or else its config's,
@@ -939,10 +1010,12 @@ fn a_lead_says_more_to_its_codex_helper_by_codex_queue_on_its_thread() {
     assert!(e.contains("Kappa is not one of your helpers"), "{e}");
     refused("Seiran", "hi", "Seiran is you");
 
-    // Gone, it hears nothing; back afresh, it is on no thread until its first prompt.
+    // Gone, it hears nothing; its thread gone from Codex too (`codex delete`), it is back
+    // afresh, on no thread until its first prompt.
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));
     refused("Kappa", "hi", "Kappa has departed");
+    std::fs::remove_dir_all(d.dir.join("codex/sessions")).unwrap();
     let named = record(&d, &h["id"])["session_at"].as_i64().unwrap();
     let b = d.req(json!({"t": "recall", "id": 4, "who": "Kappa"}));
     assert_eq!(b["t"], "summoned", "{b}");
@@ -1006,4 +1079,45 @@ fn a_codex_helper_whose_turn_was_interrupted_is_said_nothing_until_a_turn_begins
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: again")), "{l:?}");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: carry on")), "{l:?}");
+}
+
+/// Closed and recalled, a Codex helper resumes its own thread: the same session, its hooks say
+/// so at its next prompt, and an interrupted turn from before it left holds nothing back.
+#[test]
+fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_nothing() {
+    let d = daemon_with("resume", true, &[("STUB_TAIL", TAIL)]);
+    let lead = lead(&d);
+    let h = helper(&d, &lead, "Kappa", "/perm");
+    let (code, _) = waited(&d, &lead, &["Kappa", "--until", "needs", "--timeout", "60s"]);
+    assert_eq!(code, 0);
+    keys(&d, "Kappa", b"\x1b");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
+    let e = say(&d, &lead, "Kappa", "carry on").unwrap_err();
+    assert!(e.contains("Kappa's last turn was interrupted"), "{e}");
+    let thread = d.stub(&h["id"], "thread").trim().to_string();
+    let o = inside(&d, &lead, &["close", "Kappa"]);
+    assert!(o.status.success(), "{}", common::err(&o));
+
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", h["id"].as_str().unwrap()))).unwrap();
+    let b = d.req(json!({"t": "recall", "id": 4, "who": "Kappa"}));
+    assert_eq!(b["t"], "summoned", "{b}");
+    let args = d.stub(&h["id"], "args");
+    let args: Vec<&str> = args.split_terminator('\0').collect();
+    assert_eq!(args[args.len() - 2..], ["resume", thread.as_str()]);
+    assert_eq!(d.stub(&h["id"], "thread").trim(), thread);
+    common::wait_for(LONG, || me(&d, "Kappa")["blocked"].is_null(), "it to have started");
+    // A new Codex, which runs what is queued: the old interrupt is not in the way.
+    let said = say(&d, &lead, "Kappa", "carry on").unwrap();
+    assert!(said.contains("queued for Kappa"), "{said}");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: carry on")), "{l:?}");
+    let o = inside(&d, &lead, &["read", "Kappa"]);
+    assert!(common::out(&o).contains("echo: carry on"), "{}", common::out(&o));
+    // On the same thread all along, its SessionStart saying it was resumed.
+    let log = d.log();
+    let starts = log.iter().filter(|l| l["id"] == h["id"] && l["event"] == "SessionStart");
+    let kinds: Vec<&Value> = starts.map(|l| &l["kind"]).collect();
+    assert_eq!(kinds, [&json!("startup"), &json!("resume")]);
+    assert_eq!(record(&d, &h["id"])["session"], thread.as_str());
 }

@@ -32,10 +32,11 @@ fn alive(pid: i64) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-/// The running daemon's pid: the newest start in its log.
+/// The running daemon's pid: the newest start in its log (a Codex resident's has none).
 fn pid(d: &Daemon) -> i64 {
     let log = d.log();
-    log.iter().rev().find(|e| e["ev"] == "started").unwrap()["pid"].as_i64().unwrap()
+    let start = log.iter().rev().find(|e| e["ev"] == "started" && e["pid"].is_i64());
+    start.unwrap()["pid"].as_i64().unwrap()
 }
 
 /// Gone, with `sig` and nothing else.
@@ -102,6 +103,33 @@ fn a_crash_brings_everyone_back_once_and_one_soon_after_leaves_them_to_the_user(
     // By hand, it comes back.
     d.cli(&["resume", "Reimu"]);
     assert_eq!(names(&d), ["Reimu"]);
+}
+
+#[test]
+fn a_crash_brings_a_codex_resident_back_on_its_thread() {
+    let d = daemon("codex", &[]);
+    let nitori = summon(&d, json!({"name": "Nitori", "agent": "codex", "prompt": "hello"}));
+    let kappa = summon(&d, json!({"name": "Kappa", "agent": "codex"}));
+    let id = nitori["id"].as_str().unwrap();
+    let thread = d.stub(&nitori["id"], "thread").trim().to_string();
+    let rec = d.dir.join(format!("residents/{id}.json"));
+    let session = || {
+        let r: Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+        r["session"].as_str().unwrap().to_string()
+    };
+    wait(|| session() == thread, "its SessionStart to name its thread");
+    kill(&d, libc::SIGKILL);
+    std::fs::remove_file(d.dir.join(format!("stub/{id}.ready"))).unwrap();
+    d.cli(&["list"]);
+    assert_eq!(names(&d), ["Nitori"]);
+    let args = d.stub(&nitori["id"], "args");
+    assert!(args.ends_with(&format!("\0resume\0{thread}\0")), "{args:?}");
+    assert_eq!(session(), thread);
+    let said = notice(&d).expect("a notice");
+    assert!(said.contains("back in their conversations: Nitori"), "{said}");
+    assert!(said.contains("Kappa (no conversation to resume)"), "{said}");
+    let gone = d.dir.join(format!("departed/{}.json", kappa["id"].as_str().unwrap()));
+    assert!(gone.exists());
 }
 
 #[test]

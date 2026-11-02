@@ -233,6 +233,11 @@ fn a_codex_thread_is_found_by_its_rollouts_name_in_its_days_directory_only() {
     for not in [deep, shallow, dir] {
         assert!(!codex::has_thread(&home, not), "{not}");
     }
+    // Only a hex id with dashes, so none is ever a flag after `resume`, whatever is planted.
+    for flag in ["--foo", "--ab", "-a", "x-1", "ab cd", "ab/cd"] {
+        std::fs::write(day.join(name(flag)), "").unwrap_or_default();
+        assert!(!codex::has_thread(&home, flag), "{flag}");
+    }
 }
 
 #[test]

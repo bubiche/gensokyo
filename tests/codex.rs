@@ -9,7 +9,7 @@ use gensokyo::daemon::launch::{self, Options, Paths};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -225,8 +225,10 @@ fn a_codex_resident_hears_its_name_and_a_helper_how_to_report_and_ask() {
     }
     let ledger = codex::paragraph("Nitori", None, Some(Path::new("/l/proj.md")), false);
     assert!(ledger.contains("ledger is `/l/proj.md`"));
-    // Nothing a Codex resident has no use for.
-    for p in [plain, helper, ledger] {
+    // Nothing a Codex resident has no use for, in Codex's sandbox or out of it.
+    let boxed = codex::paragraph("Nitori", None, None, true);
+    let boxed_helper = codex::paragraph("Nitori", Some("Seiran"), None, true);
+    for p in [plain, helper, ledger, boxed, boxed_helper] {
         for not in ["SendMessage", "skill", "Agent tool", "Edit tool", "claude agents"] {
             assert!(!p.contains(not), "{not}: {p}");
         }
@@ -487,19 +489,6 @@ fn repo_and_worktree(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let tree = repo.join(".claude/worktrees/w");
     git(&repo, &["worktree", "add", "-q", "-b", "w", tree.to_str().unwrap()]);
     (std::fs::canonicalize(repo).unwrap(), std::fs::canonicalize(tree).unwrap())
-}
-
-/// A fresh directory outside any repository, wherever the target directory is: none when even
-/// the system's temporary directory is inside one.
-fn outside_git(name: &str) -> Option<PathBuf> {
-    let tmp = std::fs::canonicalize(std::env::temp_dir()).ok()?;
-    let d = tmp.join(format!("{name}-{}", std::process::id()));
-    if d.ancestors().any(|a| a.join(".git").exists()) {
-        return None;
-    }
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    Some(d)
 }
 
 /// A `.git` file's gitdir and a gitdir's `commondir` may each be relative, to the one naming it.
@@ -852,15 +841,11 @@ fn a_codex_residents_model_and_context_are_listed() {
 }
 
 /// A sandboxed Codex keeps git's files read-only, and gensokyo opens none of them: a resident in
-/// a linked worktree is started exactly as one outside any repository, in every mode and none.
+/// a linked worktree is started exactly as one in its main checkout, in every mode and none.
 #[test]
 fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
     let d = daemon("wt", false);
-    let (_, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
-    let Some(outside) = outside_git("gk-nogit") else {
-        eprintln!("the temporary directory is in a repository: nothing to compare with");
-        return;
-    };
+    let (repo, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
     let modes = codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]);
     for (i, mode) in modes.enumerate() {
         // Its argv, its name taken out of it.
@@ -872,8 +857,7 @@ fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
             a.into_iter().map(|w| w.replace(name, "<name>")).collect::<Vec<_>>()
         };
         let here = argv(&format!("Kappa{i}"), &tree);
-        assert_eq!(here, argv(&format!("Kogasa{i}"), &outside), "{mode:?}");
+        assert_eq!(here, argv(&format!("Kogasa{i}"), &repo), "{mode:?}");
         assert!(!here.iter().any(|w| w == "--add-dir" || w.contains("writable_roots")), "{here:?}");
     }
-    std::fs::remove_dir_all(outside).unwrap();
 }

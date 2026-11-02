@@ -88,10 +88,10 @@ pub fn find(
     on_path(path, skip, "codex").or_else(|| executable(app).then(|| app.to_path_buf()))
 }
 
-/// The argv for a fresh start in `cwd`, or why there is none: a mode Codex has no flags for, or
-/// an effort that is not one word. The prompt goes last, after `--`, so one that starts with `-`
-/// stays whole. `notify` is the user's and left alone.
-pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String> {
+/// The argv for a fresh start, or why there is none: a mode Codex has no flags for, or an effort
+/// that is not one word. The prompt goes last, after `--`, so one that starts with `-` stays
+/// whole. `notify` is the user's and left alone.
+pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     check(o.mode, o.effort)?;
     // gensokyo's hooks run unreviewed: Codex would otherwise hold each new one for the user.
     let mut a: Vec<OsString> = vec!["--dangerously-bypass-hook-trust".into()];
@@ -111,15 +111,6 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String>
         r#"tui.terminal_title=["run-state","thread-id","context-used"]"#.into(),
     ]);
     a.extend(o.mode.and_then(mode_flags).into_iter().flatten().map(OsString::from));
-    // A linked worktree keeps its index, objects and refs under the common git dir, outside the
-    // workspace: git adds and commits there only with those writable too. The common dir's own
-    // files (hooks, config, packed-refs) stay read-only, so a resident cannot plant a hook that
-    // runs outside the sandbox; deleting a ref or packing refs fails there.
-    if writes_workspace(o.mode) {
-        for d in worktree_dirs(cwd) {
-            a.extend(["--add-dir".into(), d.into_os_string()]);
-        }
-    }
     if let Some(m) = o.model {
         a.extend(["-m".into(), m.into()]);
     }
@@ -130,12 +121,6 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String>
         a.extend(["--".into(), prompt.into()]);
     }
     Ok(a)
-}
-
-/// Whether Codex runs in `mode` in its workspace-write sandbox, where only the workspace is
-/// writable: none is Codex's own default, which is that in a trusted project.
-fn writes_workspace(mode: Option<&str>) -> bool {
-    mode.is_none_or(|m| ["acceptEdits", "auto"].contains(&m))
 }
 
 /// Why a Codex resident cannot start in `mode` with `effort`, if it cannot.
@@ -390,27 +375,10 @@ fn project_header(line: &str) -> Option<String> {
     (rest.is_empty() || rest.starts_with('#')).then_some(dir)
 }
 
-/// The main checkout `dir` belongs to: the directory holding the common git dir.
+/// The main checkout `dir` belongs to: the directory holding the common git dir, read from the
+/// files as git leaves them (a worktree's `.git` names its gitdir, whose `commondir` names the
+/// repository's own) rather than by running git.
 pub fn main_root(dir: &Path) -> Option<PathBuf> {
-    git_dirs(dir)?.1.parent().map(Path::to_path_buf)
-}
-
-/// What git writes outside the linked worktree `dir` is in, real paths: the worktree's own git
-/// dir, then the common git dir's objects, refs and logs, those that exist. None in a main
-/// checkout, whose git dir is its common one, or outside a repository.
-fn worktree_dirs(dir: &Path) -> Vec<PathBuf> {
-    let Some((git, common)) = git_dirs(dir).filter(|(g, c)| g != c) else {
-        return Vec::new();
-    };
-    let shared = ["objects", "refs", "logs"].map(|d| common.join(d));
-    let dirs = std::iter::once(git).chain(shared).filter(|d| d.is_dir());
-    dirs.filter_map(|d| std::fs::canonicalize(d).ok()).collect()
-}
-
-/// The git dir and the common git dir of the repository `dir` is in, their real paths, read
-/// from the files as git leaves them (a worktree's `.git` names its gitdir, whose `commondir`
-/// names the repository's own, either relative to the one naming it) rather than by running git.
-fn git_dirs(dir: &Path) -> Option<(PathBuf, PathBuf)> {
     let top = dir.ancestors().find(|d| d.join(".git").exists())?;
     let dot = top.join(".git");
     let git = match std::fs::read_to_string(&dot) {
@@ -419,7 +387,7 @@ fn git_dirs(dir: &Path) -> Option<(PathBuf, PathBuf)> {
     };
     let common = match std::fs::read_to_string(git.join("commondir")) {
         Ok(c) => git.join(c.trim()),
-        Err(_) => git.clone(),
+        Err(_) => git,
     };
-    Some((std::fs::canonicalize(git).ok()?, std::fs::canonicalize(common).ok()?))
+    std::fs::canonicalize(common).ok()?.parent().map(Path::to_path_buf)
 }

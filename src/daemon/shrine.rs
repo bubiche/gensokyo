@@ -288,7 +288,7 @@ fn launch(
             let (program, env) = sh
                 .codex(o.id)
                 .ok_or("codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app")?;
-            (program, env, codex::argv(&paths, o, cwd)?)
+            (program, env, codex::argv(&paths, o)?)
         }
     };
     let (cols, rows) = sh.size;

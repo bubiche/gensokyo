@@ -34,13 +34,8 @@ fn opts<'a>() -> Options<'a> {
 }
 
 fn argv(exe: &str, o: &Options) -> Vec<String> {
-    argv_in(exe, o, Path::new("/"))
-}
-
-/// The same, started in `cwd`.
-fn argv_in(exe: &str, o: &Options, cwd: &Path) -> Vec<String> {
     let p = Paths { exe: Path::new(exe), share: Path::new("/share"), socket: Path::new("/s") };
-    let a = codex::argv(&p, o, cwd).unwrap();
+    let a = codex::argv(&p, o).unwrap();
     a.into_iter().map(|a| a.into_string().unwrap()).collect()
 }
 
@@ -209,11 +204,9 @@ fn each_mode_has_codex_flags_that_read_back_as_it() {
     let a: Vec<String> = ["--", "--approve-for-me"].map(String::from).into();
     assert_eq!(codex::mode_of(&a), None);
     // A mode Codex has no flags for, or an effort that is not one word, starts nothing.
-    let e =
-        codex::argv(&p, &Options { mode: Some("dontAsk"), ..opts() }, Path::new("/")).unwrap_err();
+    let e = codex::argv(&p, &Options { mode: Some("dontAsk"), ..opts() }).unwrap_err();
     assert!(e.contains("Codex has no dontAsk mode"), "{e}");
-    let e = codex::argv(&p, &Options { effort: Some("high x=1"), ..opts() }, Path::new("/"))
-        .unwrap_err();
+    let e = codex::argv(&p, &Options { effort: Some("high x=1"), ..opts() }).unwrap_err();
     assert!(e.contains("effort high x=1"), "{e}");
 }
 
@@ -470,18 +463,6 @@ fn repo_and_worktree(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     (std::fs::canonicalize(repo).unwrap(), std::fs::canonicalize(tree).unwrap())
 }
 
-/// What a resident in worktree `tree` of the repository at `repo` may write besides it, each
-/// after `--add-dir`: the worktree's own git dir, then the common git dir's objects, refs and
-/// logs. Never the common git dir itself, whose hooks would run outside the sandbox.
-fn add_dirs(repo: &Path, tree: &Path) -> Vec<String> {
-    let common = repo.join(".git");
-    let own = common.join("worktrees").join(tree.file_name().unwrap());
-    [own, common.join("objects"), common.join("refs"), common.join("logs")]
-        .iter()
-        .flat_map(|d| ["--add-dir".to_string(), d.to_str().unwrap().to_string()])
-        .collect()
-}
-
 /// A fresh directory outside any repository, wherever the target directory is: none when even
 /// the system's temporary directory is inside one.
 fn outside_git(name: &str) -> Option<PathBuf> {
@@ -495,51 +476,9 @@ fn outside_git(name: &str) -> Option<PathBuf> {
     Some(d)
 }
 
-/// In a linked worktree, the modes that write in Codex's workspace, and no mode, which is
-/// Codex's own workspace-write in a trusted project, may write what git writes there too, right
-/// after the mode's flags; the others, a main checkout and a directory outside any repository
-/// get nothing more.
+/// A `.git` file's gitdir and a gitdir's `commondir` may each be relative, to the one naming it.
 #[test]
-fn a_linked_worktree_lets_git_write_where_codex_writes() {
-    let dir = std::fs::canonicalize(fresh("codex-roots")).unwrap();
-    let (repo, tree) = repo_and_worktree(&dir);
-    let want = add_dirs(&repo, &tree);
-    std::fs::create_dir_all(tree.join("sub")).unwrap();
-    let outside = outside_git("gk-nogit");
-    if outside.is_none() {
-        eprintln!("the temporary directory is in a repository: not tried outside one");
-    }
-    let modes = codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]);
-    for mode in modes {
-        let o = Options { mode, model: Some("m"), prompt: Some("go"), ..opts() };
-        let bare = argv("/g", &o);
-        for cwd in [tree.clone(), tree.join("sub")] {
-            let a = argv_in("/g", &o, &cwd);
-            if [None, Some("acceptEdits"), Some("auto")].contains(&mode) {
-                let at = bare.iter().position(|w| w == "-m").unwrap();
-                assert_eq!(a[..at], bare[..at], "{mode:?}");
-                assert_eq!(a.get(at..at + want.len()), Some(&want[..]), "{mode:?}: {a:?}");
-                assert_eq!(a[at + want.len()..], bare[at..], "{mode:?}");
-            } else {
-                assert_eq!(a, bare, "{mode:?}");
-            }
-            // Read back as launched, with the dirs or without.
-            assert_eq!(codex::launched(&a), codex::launched(&bare), "{mode:?}");
-            assert_eq!(codex::mode_of(&a), codex::mode_of(&bare), "{mode:?}");
-        }
-        for cwd in [Some(&repo), outside.as_ref()].into_iter().flatten() {
-            assert_eq!(argv_in("/g", &o, cwd), bare, "{mode:?} in {}", cwd.display());
-        }
-    }
-    if let Some(d) = outside {
-        std::fs::remove_dir_all(d).unwrap();
-    }
-}
-
-/// A `.git` file's gitdir and a gitdir's `commondir` may each be relative, to the one naming it;
-/// only the dirs that exist are given.
-#[test]
-fn a_relative_gitdir_and_commondir_are_followed_from_where_they_are_written() {
+fn a_relative_gitdir_and_commondir_lead_to_the_main_checkout() {
     let dir = std::fs::canonicalize(fresh("codex-rel")).unwrap();
     let (common, tree) = (dir.join("main/.git"), dir.join("tree"));
     let git = common.join("worktrees/t");
@@ -548,20 +487,6 @@ fn a_relative_gitdir_and_commondir_are_followed_from_where_they_are_written() {
     std::fs::write(tree.join(".git"), "gitdir: ../main/.git/worktrees/t\n").unwrap();
     std::fs::write(git.join("commondir"), "../..\n").unwrap();
     assert_eq!(codex::main_root(&tree), Some(dir.join("main")));
-    let dirs = || {
-        let a = argv_in("/g", &Options { mode: Some("auto"), ..opts() }, &tree);
-        let at = a.iter().position(|w| w == "--approve-for-me").unwrap() + 1;
-        let given: Vec<String> =
-            a[at..].chunks(2).take_while(|w| w[0] == "--add-dir").map(|w| w[1].clone()).collect();
-        assert_eq!(a.iter().filter(|w| *w == "--add-dir").count(), given.len(), "{a:?}");
-        given
-    };
-    assert_eq!(dirs(), [git.to_str().unwrap()]);
-    std::fs::create_dir_all(common.join("refs")).unwrap();
-    assert_eq!(dirs(), [git.to_str().unwrap(), common.join("refs").to_str().unwrap()]);
-    // A `.git` file with no `commondir` behind it, as a submodule has, is its own common dir.
-    std::fs::remove_file(git.join("commondir")).unwrap();
-    assert!(dirs().is_empty());
 }
 
 /// A daemon whose Codex residents are tests/stub-codex, with Codex trusting its directory or
@@ -900,57 +825,29 @@ fn a_codex_residents_model_and_context_are_listed() {
     assert!(line.contains("gpt-5.5 · ctx 2%"), "{line}");
 }
 
-/// A Codex resident in a linked worktree, where it writes, may write what git writes there:
-/// summoned by the user with a mode or none, in its lead's mode, and when it comes back; one in
-/// the main checkout gets nothing more.
+/// A sandboxed Codex keeps git's files read-only, and gensokyo opens none of them: a resident in
+/// a linked worktree is started exactly as one outside any repository, in every mode and none.
 #[test]
-fn a_codex_resident_in_a_worktree_may_write_what_git_writes_there() {
+fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
     let d = daemon("wt", false);
-    let (repo, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
-    let want = add_dirs(&repo, &tree);
-    let summon = |name: &str, cwd: &Path, mode: Option<&str>| {
-        let r = d.req(json!({"t": "summon", "id": 7, "cwd": cwd, "agent": "codex", "name": name,
-                             "mode": mode}));
-        assert_eq!(r["t"], "summoned", "{r}");
-        r["resident"].clone()
+    let (_, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
+    let Some(outside) = outside_git("gk-nogit") else {
+        eprintln!("the temporary directory is in a repository: nothing to compare with");
+        return;
     };
-    // What the stand-in was started with, which is what its record says.
-    let args = |r: &Value| {
-        let got: Vec<String> = d.stub(&r["id"], "args").split('\0').map(String::from).collect();
-        let got = got[..got.len() - 1].to_vec();
-        assert_eq!(got, strings(&record(&d, &r["id"])["argv"]));
-        got
-    };
-    let has = |a: &[String]| a.windows(want.len()).any(|w| w == want);
-
-    let r = summon("Nitori", &tree, Some("acceptEdits"));
-    assert!(has(&args(&r)), "{:?}", args(&r));
-    let n = summon("Momiji", &tree, None);
-    assert!(has(&args(&n)), "{:?}", args(&n));
-    let m = summon("Takane", &repo, Some("acceptEdits"));
-    assert!(!args(&m).iter().any(|a| a == "--add-dir"), "{:?}", args(&m));
-    // Back, it has it again.
-    common::wait_for(LONG, || me(&d, "Nitori")["blocked"].is_null(), "it to have started");
-    let c = d.req(json!({"t": "close", "id": 3, "who": "Nitori"}));
-    assert_eq!(c["message"], "Nitori has left (/exit)", "{c}");
-    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", r["id"].as_str().unwrap()))).unwrap();
-    let b = d.req(json!({"t": "recall", "id": 4, "who": "Nitori"}));
-    assert_eq!(b["t"], "summoned", "{b}");
-    assert!(has(&args(&r)), "{:?}", args(&r));
-
-    // A helper in its lead's mode, in a worktree Codex trusts through its main checkout.
-    let config = format!(
-        "[projects.{}]\ntrust_level = \"trusted\"\n",
-        codex::toml_str(repo.to_str().unwrap())
-    );
-    std::fs::write(d.dir.join("codex/config.toml"), config).unwrap();
-    let lead = lead(&d);
-    let h = d.req_as(
-        lead["id"].as_str().unwrap(),
-        json!({"t": "summon", "id": 8, "cwd": tree, "agent": "codex", "name": "Kappa",
-               "prompt": "brief"}),
-    );
-    assert_eq!(h["t"], "summoned", "{h}");
-    assert_eq!(h["resident"]["mode"], "acceptEdits");
-    assert!(has(&args(&h["resident"])), "{:?}", args(&h["resident"]));
+    let modes = codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]);
+    for (i, mode) in modes.enumerate() {
+        // Its argv, its name taken out of it.
+        let argv = |name: &str, cwd: &Path| {
+            let r = d.req(json!({"t": "summon", "id": 7, "cwd": cwd, "agent": "codex",
+                                 "name": name, "mode": mode}));
+            assert_eq!(r["t"], "summoned", "{r}");
+            let a = strings(&record(&d, &r["resident"]["id"])["argv"]);
+            a.into_iter().map(|w| w.replace(name, "<name>")).collect::<Vec<_>>()
+        };
+        let here = argv(&format!("Kappa{i}"), &tree);
+        assert_eq!(here, argv(&format!("Kogasa{i}"), &outside), "{mode:?}");
+        assert!(!here.iter().any(|w| w == "--add-dir" || w.contains("writable_roots")), "{here:?}");
+    }
+    std::fs::remove_dir_all(outside).unwrap();
 }

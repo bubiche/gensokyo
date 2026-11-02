@@ -35,9 +35,6 @@ pub fn mode_flags(mode: &str) -> Option<&'static [&'static str]> {
     MODES.iter().find(|(m, _)| *m == mode).map(|(_, f)| *f)
 }
 
-/// The modes Codex runs in its workspace-write sandbox, where only the workspace is writable.
-const WORKSPACE_WRITE: [&str; 2] = ["acceptEdits", "auto"];
-
 /// The mode a launch argv runs in, by its flags before any `--`: plan's are default's, so it
 /// reads back as default.
 pub fn mode_of(argv: &[String]) -> Option<&'static str> {
@@ -114,12 +111,14 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String>
         r#"tui.terminal_title=["run-state","thread-id","context-used"]"#.into(),
     ]);
     a.extend(o.mode.and_then(mode_flags).into_iter().flatten().map(OsString::from));
-    // A linked worktree keeps its index and objects in the common git dir, outside the
-    // workspace: git adds and commits there only with that dir writable too.
-    let common = o.mode.filter(|m| WORKSPACE_WRITE.contains(m)).and_then(|_| worktree_common(cwd));
-    if let Some(c) = common.as_deref().and_then(Path::to_str) {
-        let roots = format!("sandbox_workspace_write.writable_roots=[{}]", toml_str(c));
-        a.extend(["-c".into(), roots.into()]);
+    // A linked worktree keeps its index, objects and refs under the common git dir, outside the
+    // workspace: git adds and commits there only with those writable too. The common dir's own
+    // files (hooks, config, packed-refs) stay read-only, so a resident cannot plant a hook that
+    // runs outside the sandbox; deleting a ref or packing refs fails there.
+    if writes_workspace(o.mode) {
+        for d in worktree_dirs(cwd) {
+            a.extend(["--add-dir".into(), d.into_os_string()]);
+        }
     }
     if let Some(m) = o.model {
         a.extend(["-m".into(), m.into()]);
@@ -131,6 +130,12 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String>
         a.extend(["--".into(), prompt.into()]);
     }
     Ok(a)
+}
+
+/// Whether Codex runs in `mode` in its workspace-write sandbox, where only the workspace is
+/// writable: none is Codex's own default, which is that in a trusted project.
+fn writes_workspace(mode: Option<&str>) -> bool {
+    mode.is_none_or(|m| ["acceptEdits", "auto"].contains(&m))
 }
 
 /// Why a Codex resident cannot start in `mode` with `effort`, if it cannot.
@@ -390,11 +395,16 @@ pub fn main_root(dir: &Path) -> Option<PathBuf> {
     git_dirs(dir)?.1.parent().map(Path::to_path_buf)
 }
 
-/// The common git dir of the linked worktree `dir` is in, its real path: none in a main
+/// What git writes outside the linked worktree `dir` is in, real paths: the worktree's own git
+/// dir, then the common git dir's objects, refs and logs, those that exist. None in a main
 /// checkout, whose git dir is its common one, or outside a repository.
-pub fn worktree_common(dir: &Path) -> Option<PathBuf> {
-    let (git, common) = git_dirs(dir)?;
-    (git != common).then_some(common)
+fn worktree_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Some((git, common)) = git_dirs(dir).filter(|(g, c)| g != c) else {
+        return Vec::new();
+    };
+    let shared = ["objects", "refs", "logs"].map(|d| common.join(d));
+    let dirs = std::iter::once(git).chain(shared).filter(|d| d.is_dir());
+    dirs.filter_map(|d| std::fs::canonicalize(d).ok()).collect()
 }
 
 /// The git dir and the common git dir of the repository `dir` is in, their real paths, read

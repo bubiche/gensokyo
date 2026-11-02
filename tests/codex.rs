@@ -9,7 +9,7 @@ use gensokyo::daemon::launch::{self, Options, Paths};
 use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -470,54 +470,74 @@ fn repo_and_worktree(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     (std::fs::canonicalize(repo).unwrap(), std::fs::canonicalize(tree).unwrap())
 }
 
-/// The `-c` that makes `common` writable, as Codex reads it.
-fn writable(common: &Path) -> String {
-    let c = common.to_str().unwrap().replace('\\', r"\\").replace('"', "\\\"");
-    format!("sandbox_workspace_write.writable_roots=[\"{c}\"]")
+/// What a resident in worktree `tree` of the repository at `repo` may write besides it, each
+/// after `--add-dir`: the worktree's own git dir, then the common git dir's objects, refs and
+/// logs. Never the common git dir itself, whose hooks would run outside the sandbox.
+fn add_dirs(repo: &Path, tree: &Path) -> Vec<String> {
+    let common = repo.join(".git");
+    let own = common.join("worktrees").join(tree.file_name().unwrap());
+    [own, common.join("objects"), common.join("refs"), common.join("logs")]
+        .iter()
+        .flat_map(|d| ["--add-dir".to_string(), d.to_str().unwrap().to_string()])
+        .collect()
 }
 
-/// In a linked worktree, the modes that write in Codex's workspace get its common git dir as a
-/// writable root, so git can add and commit; the others, a main checkout and a directory outside
-/// any repository get none.
+/// A fresh directory outside any repository, wherever the target directory is: none when even
+/// the system's temporary directory is inside one.
+fn outside_git(name: &str) -> Option<PathBuf> {
+    let tmp = std::fs::canonicalize(std::env::temp_dir()).ok()?;
+    let d = tmp.join(format!("{name}-{}", std::process::id()));
+    if d.ancestors().any(|a| a.join(".git").exists()) {
+        return None;
+    }
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    Some(d)
+}
+
+/// In a linked worktree, the modes that write in Codex's workspace, and no mode, which is
+/// Codex's own workspace-write in a trusted project, may write what git writes there too, right
+/// after the mode's flags; the others, a main checkout and a directory outside any repository
+/// get nothing more.
 #[test]
-fn a_linked_worktree_gets_its_common_git_dir_writable_where_codex_writes() {
+fn a_linked_worktree_lets_git_write_where_codex_writes() {
     let dir = std::fs::canonicalize(fresh("codex-roots")).unwrap();
     let (repo, tree) = repo_and_worktree(&dir);
-    let common = repo.join(".git");
-    assert_eq!(codex::worktree_common(&tree), Some(common.clone()));
+    let want = add_dirs(&repo, &tree);
     std::fs::create_dir_all(tree.join("sub")).unwrap();
-    assert_eq!(codex::worktree_common(&tree.join("sub")), Some(common.clone()));
-    assert_eq!(codex::worktree_common(&repo), None);
-    assert_eq!(codex::worktree_common(&dir), None);
-    let want = writable(&common);
-    assert!(want.ends_with(r#"my \"odd\\ repo/.git"]"#), "{want}");
-    let unquoted = want.strip_prefix("sandbox_workspace_write.writable_roots=[").unwrap();
-    assert_eq!(codex::toml_unquote(unquoted).unwrap(), (common.to_str().unwrap().into(), "]"));
-
-    for (mode, flags) in codex::MODES {
-        let o = Options { mode: Some(mode), model: Some("m"), prompt: Some("go"), ..opts() };
-        let a = argv_in("/g", &o, &tree);
-        let roots = a.iter().filter(|w| w.starts_with("sandbox_workspace_write")).count();
-        if ["acceptEdits", "auto"].contains(&mode) {
-            let at = a.windows(flags.len()).position(|w| w == flags).unwrap();
-            assert_eq!(a[at + flags.len()..at + flags.len() + 2], ["-c", want.as_str()], "{mode}");
-            assert_eq!(roots, 1, "{mode}");
-        } else {
-            assert_eq!(roots, 0, "{mode}: {a:?}");
+    let outside = outside_git("gk-nogit");
+    if outside.is_none() {
+        eprintln!("the temporary directory is in a repository: not tried outside one");
+    }
+    let modes = codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]);
+    for mode in modes {
+        let o = Options { mode, model: Some("m"), prompt: Some("go"), ..opts() };
+        let bare = argv("/g", &o);
+        for cwd in [tree.clone(), tree.join("sub")] {
+            let a = argv_in("/g", &o, &cwd);
+            if [None, Some("acceptEdits"), Some("auto")].contains(&mode) {
+                let at = bare.iter().position(|w| w == "-m").unwrap();
+                assert_eq!(a[..at], bare[..at], "{mode:?}");
+                assert_eq!(a.get(at..at + want.len()), Some(&want[..]), "{mode:?}: {a:?}");
+                assert_eq!(a[at + want.len()..], bare[at..], "{mode:?}");
+            } else {
+                assert_eq!(a, bare, "{mode:?}");
+            }
+            // Read back as launched, with the dirs or without.
+            assert_eq!(codex::launched(&a), codex::launched(&bare), "{mode:?}");
+            assert_eq!(codex::mode_of(&a), codex::mode_of(&bare), "{mode:?}");
         }
-        // Read back as launched, the root or none.
-        let back = codex::launched(&a);
-        assert_eq!(back.mode.as_deref(), codex::mode_of(&argv("/g", &o)), "{mode}");
-        assert_eq!(back.model.as_deref(), Some("m"));
-        for cwd in [&repo, &dir] {
-            assert_eq!(argv_in("/g", &o, cwd), argv("/g", &o), "{mode} in {}", cwd.display());
+        for cwd in [Some(&repo), outside.as_ref()].into_iter().flatten() {
+            assert_eq!(argv_in("/g", &o, cwd), bare, "{mode:?} in {}", cwd.display());
         }
     }
-    // No mode, no root.
-    assert!(!argv_in("/g", &opts(), &tree).iter().any(|w| w.contains("writable_roots")));
+    if let Some(d) = outside {
+        std::fs::remove_dir_all(d).unwrap();
+    }
 }
 
-/// A `.git` file's gitdir and a gitdir's `commondir` may each be relative, to the one naming it.
+/// A `.git` file's gitdir and a gitdir's `commondir` may each be relative, to the one naming it;
+/// only the dirs that exist are given.
 #[test]
 fn a_relative_gitdir_and_commondir_are_followed_from_where_they_are_written() {
     let dir = std::fs::canonicalize(fresh("codex-rel")).unwrap();
@@ -527,13 +547,21 @@ fn a_relative_gitdir_and_commondir_are_followed_from_where_they_are_written() {
     std::fs::create_dir_all(&tree).unwrap();
     std::fs::write(tree.join(".git"), "gitdir: ../main/.git/worktrees/t\n").unwrap();
     std::fs::write(git.join("commondir"), "../..\n").unwrap();
-    assert_eq!(codex::worktree_common(&tree), Some(common.clone()));
     assert_eq!(codex::main_root(&tree), Some(dir.join("main")));
-    let a = argv_in("/g", &Options { mode: Some("auto"), ..opts() }, &tree);
-    assert!(a.windows(2).any(|w| w == ["-c", writable(&common).as_str()]), "{a:?}");
+    let dirs = || {
+        let a = argv_in("/g", &Options { mode: Some("auto"), ..opts() }, &tree);
+        let at = a.iter().position(|w| w == "--approve-for-me").unwrap() + 1;
+        let given: Vec<String> =
+            a[at..].chunks(2).take_while(|w| w[0] == "--add-dir").map(|w| w[1].clone()).collect();
+        assert_eq!(a.iter().filter(|w| *w == "--add-dir").count(), given.len(), "{a:?}");
+        given
+    };
+    assert_eq!(dirs(), [git.to_str().unwrap()]);
+    std::fs::create_dir_all(common.join("refs")).unwrap();
+    assert_eq!(dirs(), [git.to_str().unwrap(), common.join("refs").to_str().unwrap()]);
     // A `.git` file with no `commondir` behind it, as a submodule has, is its own common dir.
     std::fs::remove_file(git.join("commondir")).unwrap();
-    assert_eq!(codex::worktree_common(&tree), None);
+    assert!(dirs().is_empty());
 }
 
 /// A daemon whose Codex residents are tests/stub-codex, with Codex trusting its directory or
@@ -872,17 +900,17 @@ fn a_codex_residents_model_and_context_are_listed() {
     assert!(line.contains("gpt-5.5 · ctx 2%"), "{line}");
 }
 
-/// A Codex resident in a linked worktree, where it writes, gets its repository's common git dir
-/// writable: summoned by the user, in its lead's mode, and when it comes back; one in the main
-/// checkout gets none.
+/// A Codex resident in a linked worktree, where it writes, may write what git writes there:
+/// summoned by the user with a mode or none, in its lead's mode, and when it comes back; one in
+/// the main checkout gets nothing more.
 #[test]
-fn a_codex_resident_in_a_worktree_gets_its_common_git_dir_writable() {
+fn a_codex_resident_in_a_worktree_may_write_what_git_writes_there() {
     let d = daemon("wt", false);
     let (repo, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
-    let want = writable(&repo.join(".git"));
-    let summon = |name: &str, cwd: &Path| {
+    let want = add_dirs(&repo, &tree);
+    let summon = |name: &str, cwd: &Path, mode: Option<&str>| {
         let r = d.req(json!({"t": "summon", "id": 7, "cwd": cwd, "agent": "codex", "name": name,
-                             "mode": "acceptEdits"}));
+                             "mode": mode}));
         assert_eq!(r["t"], "summoned", "{r}");
         r["resident"].clone()
     };
@@ -893,13 +921,14 @@ fn a_codex_resident_in_a_worktree_gets_its_common_git_dir_writable() {
         assert_eq!(got, strings(&record(&d, &r["id"])["argv"]));
         got
     };
-    let has = |a: &[String]| a.windows(2).any(|w| w == ["-c", want.as_str()]);
+    let has = |a: &[String]| a.windows(want.len()).any(|w| w == want);
 
-    let r = summon("Nitori", &tree);
+    let r = summon("Nitori", &tree, Some("acceptEdits"));
     assert!(has(&args(&r)), "{:?}", args(&r));
-    let m = summon("Takane", &repo);
-    assert!(!args(&m).iter().any(|a| a.contains("writable_roots")), "{:?}", args(&m));
-
+    let n = summon("Momiji", &tree, None);
+    assert!(has(&args(&n)), "{:?}", args(&n));
+    let m = summon("Takane", &repo, Some("acceptEdits"));
+    assert!(!args(&m).iter().any(|a| a == "--add-dir"), "{:?}", args(&m));
     // Back, it has it again.
     common::wait_for(LONG, || me(&d, "Nitori")["blocked"].is_null(), "it to have started");
     let c = d.req(json!({"t": "close", "id": 3, "who": "Nitori"}));

@@ -327,8 +327,9 @@ A resident keeps the system prompt it started with: Claude Code records it with 
 conversation, so a recall brings the same one back even if the file has changed since, until
 the conversation is compacted. The role file is looked up again at a recall; if it has gone, a
 conversation still comes back with the prompt it recorded, and one with nothing to resume is
-refused. A lead can summon its helpers in a role, and a
-ritual's runs take one with `role:` (below).
+refused. A Codex resident is given its role's words again at every start, its thread resumed
+or not, so it takes the file as it reads then and is refused without it. A lead can summon its
+helpers in a role, and a ritual's runs take one with `role:` (below).
 
 ## Rituals
 

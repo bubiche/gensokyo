@@ -56,6 +56,8 @@ pub struct Aware {
     typing: Option<Typing>,
     marks: u64,
     news: News,
+    /// How its newest turn since this start ended.
+    last: Option<Ended>,
     /// What it runs. For Codex the hooks alone say what it waits for.
     pub agent: Agent,
     /// Launched in auto mode, where Codex's reviewer answers its permission requests.
@@ -609,6 +611,13 @@ impl Aware {
     fn end(&mut self, how: Ended) {
         self.news.ends += 1;
         self.news.ended = Some(how);
+        self.last = Some(how);
+    }
+
+    /// Its newest turn since this start was interrupted, and none has begun since: a Codex one
+    /// holds what is queued for it then. One cut off before this start is not.
+    pub fn interrupted(&self) -> bool {
+        !self.running && self.last == Some(Ended::Interrupted)
     }
 
     /// Typed to by gensokyo (a spell card, a ritual): whatever it waited to be told, it was.

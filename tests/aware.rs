@@ -774,6 +774,21 @@ fn a_codex_interrupt_ends_the_turn_with_no_answer() {
     assert_eq!((a.pending, a.take().ends), (Some(Pending::Stopped), 0));
 }
 
+/// Codex holds what is queued for it after an interrupted turn, until a turn begins: known of
+/// this start only, which is all a recall's or a crash comeback's new Codex has.
+#[test]
+fn a_codex_turn_interrupted_in_this_start_holds_until_a_turn_begins() {
+    let mut a = codex_at_work(false);
+    assert!(!a.interrupted());
+    a.hook(&codex_hook("Interrupt", json!({}), 10));
+    assert!(a.interrupted());
+    a.hook(&codex_hook("UserPromptSubmit", json!({}), 20));
+    assert!(!a.interrupted(), "a turn began");
+    a.hook(&codex_hook("Stop", json!({}), 30));
+    assert!(!a.interrupted());
+    assert!(!Aware::new(Agent::Codex, false).interrupted());
+}
+
 #[test]
 fn codex_titles_and_snapshots_after_a_hook_leave_its_flag_alone() {
     // A finished turn, with spinner frames stamped after its Stop.

@@ -1087,7 +1087,8 @@ fn a_codex_helper_whose_turn_was_interrupted_is_said_nothing_until_a_turn_begins
 }
 
 /// Closed and recalled, a Codex helper resumes its own thread: the same session, its hooks say
-/// so at its next prompt, and an interrupted turn from before it left holds nothing back.
+/// so at its next prompt, and an interrupted turn from before it left holds nothing back. What
+/// was queued for its thread while it was gone runs as a turn once it is back.
 #[test]
 fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_nothing() {
     let d = daemon_with("resume", true, &[("STUB_TAIL", TAIL)]);
@@ -1125,4 +1126,22 @@ fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_no
     let kinds: Vec<&Value> = starts.map(|l| &l["kind"]).collect();
     assert_eq!(kinds, [&json!("startup"), &json!("resume")]);
     assert_eq!(record(&d, &h["id"])["session"], thread.as_str());
+
+    // Gone again, its thread is queued to by `codex queue`, as Codex itself takes it.
+    let o = inside(&d, &lead, &["close", "Kappa"]);
+    assert!(o.status.success(), "{}", common::err(&o));
+    let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-codex");
+    let q = Command::new(stub)
+        .args(["queue", &format!("--thread={thread}"), "--message=while you were gone"])
+        .env("STUB_STATE", d.dir.join("stub"))
+        .output()
+        .unwrap();
+    assert!(q.status.success(), "{}", common::err(&q));
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", h["id"].as_str().unwrap()))).unwrap();
+    let b = d.req(json!({"t": "recall", "id": 5, "who": "Kappa"}));
+    assert_eq!(b["t"], "summoned", "{b}");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: while you were gone")), "{l:?}");
+    // Nothing was typed into its pane for it.
+    assert!(!d.stub(&h["id"], "input").contains("while you were gone"));
 }

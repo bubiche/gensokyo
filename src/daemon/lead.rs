@@ -420,11 +420,12 @@ async fn queue(shrine: &Shared, rec: &Record, text: &str) -> Result<String, Stri
         ));
     }
     // After an interrupted turn Codex runs nothing queued until its pane is typed into: the
-    // words would wait unseen. A turn begun since lifts it, and so does a new start: a resumed
-    // Codex runs what is queued once it is up, whatever its last turn before was.
+    // words would wait unseen. A turn begun since lifts it; a resume does not, nor can a turn
+    // a crash cut off be told from one interrupted in Codex.
     let held = {
         let sh = shrine.borrow();
-        sh.entries.iter().any(|e| e.rec.id == rec.id && e.aware.interrupted())
+        let running = sh.entries.iter().any(|e| e.rec.id == rec.id && e.aware.running());
+        !running && answer(&sh.store, &rec.id).is_some_and(|a| a.ended == Ended::Interrupted)
     };
     if held {
         return Err(format!(

@@ -1087,10 +1087,11 @@ fn a_codex_helper_whose_turn_was_interrupted_is_said_nothing_until_a_turn_begins
 }
 
 /// Closed and recalled, a Codex helper resumes its own thread: the same session, its hooks say
-/// so at its next prompt, and an interrupted turn from before it left holds nothing back. What
-/// was queued for its thread while it was gone runs as a turn once it is back.
+/// so at its next prompt. An interrupted turn holds what is queued on the thread through the
+/// resume, so `say` is refused until a turn begins; then what was queued for its thread while
+/// it was gone, its last turn over, runs as a turn once it is back.
 #[test]
-fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_nothing() {
+fn a_recalled_codex_helper_resumes_its_thread_and_an_interrupt_before_still_holds_its_queue() {
     let d = daemon_with("resume", true, &[("STUB_TAIL", TAIL)]);
     let lead = lead(&d);
     let h = helper(&d, &lead, "Kappa", "/perm");
@@ -1099,8 +1100,6 @@ fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_no
     keys(&d, "Kappa", b"\x1b");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
-    let e = say(&d, &lead, "Kappa", "carry on").unwrap_err();
-    assert!(e.contains("Kappa's last turn was interrupted"), "{e}");
     let thread = d.stub(&h["id"], "thread").trim().to_string();
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));
@@ -1113,9 +1112,17 @@ fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_no
     assert_eq!(args[args.len() - 2..], ["resume", thread.as_str()]);
     assert_eq!(d.stub(&h["id"], "thread").trim(), thread);
     common::wait_for(LONG, || me(&d, "Kappa")["blocked"].is_null(), "it to have started");
-    // A new Codex, which runs what is queued: the old interrupt is not in the way.
+    // Resumed, the thread still holds what is queued after its interrupted turn.
+    let e = say(&d, &lead, "Kappa", "carry on").unwrap_err();
+    assert!(e.contains("Kappa's last turn was interrupted"), "{e}");
+    assert!(!d.dir.join("stub/queue.args").exists());
+    // Typed into by the user: a new turn, and the words go in behind it.
+    keys(&d, "Kappa", b"again\r");
+    common::wait_for(LONG, || me(&d, "Kappa")["state"] == "busy", "its new turn");
     let said = say(&d, &lead, "Kappa", "carry on").unwrap();
     assert!(said.contains("queued for Kappa"), "{said}");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: again")), "{l:?}");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: carry on")), "{l:?}");
     let o = inside(&d, &lead, &["read", "Kappa"]);
@@ -1127,7 +1134,7 @@ fn a_recalled_codex_helper_resumes_its_thread_and_a_turn_cut_off_before_holds_no
     assert_eq!(kinds, [&json!("startup"), &json!("resume")]);
     assert_eq!(record(&d, &h["id"])["session"], thread.as_str());
 
-    // Gone again, its thread is queued to by `codex queue`, as Codex itself takes it.
+    // Gone again after a turn that ended, its thread is queued to by `codex queue`.
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));
     let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-codex");

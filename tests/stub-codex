@@ -4,8 +4,9 @@
 #   --version                 prints codex-cli 0.154.0-alpha.6.2
 #   queue --thread <id> --message <text>
 #                             queues <text> for the interactive stub on that thread, which runs
-#                             it as a prompt once it is idle; prints "Queued message ..." as
-#                             codex does. Its argv, each arg ended by a NUL, is queue.args.
+#                             it as a prompt once it is idle, but not after an interrupted turn
+#                             until a prompt typed in starts one (<thread>.held, so a resume
+#                             holds it too); prints "Queued message ..." as codex does. Its argv, each arg ended by a NUL, is queue.args.
 #                             --thread=<id> and --message=<text> too; a value after its flag
 #                             that starts with `-` is refused as an argument, as codex's parser
 #                             does. With queue.fail there it queues nothing: its text goes to
@@ -202,6 +203,7 @@ finish() {
 }
 interrupt() {
   turn='' ctx=$((ctx + 2)) spin=1
+  : > "$STUB_STATE/$thread.held"
   fire Interrupt
   printf '\n■ Conversation interrupted\n› '
   state Working "${glyphs[glyph]}"; sleep "${STUB_TAIL:-0.2}"
@@ -213,9 +215,10 @@ quit() {
   exit 0
 }
 
-# The next message queued for this thread and not yet run, in $msg.
+# The next message queued for this thread and not yet run, in $msg; none while it is held.
 queued() {
   local n=0
+  [ ! -f "$STUB_STATE/$thread.held" ] || return 1
   [ -s "$STUB_STATE/$thread.queue" ] || return 1
   while IFS= read -r -d '' msg; do
     n=$((n + 1))
@@ -258,6 +261,7 @@ key_enter() {
     *) [ -n "$d" ] || return 0
        draft=''
        [ "$d" = /exit ] && quit
+       rm -f "$STUB_STATE/$thread.held"
        submit "$d" ;;
   esac
 }

@@ -1637,6 +1637,7 @@ fn a_release_whose_selection_went_says_so_and_a_resident_cannot_select() {
     let back = raw(&d, &format!("{me}\n{release}\n"));
     let e = back.iter().find(|v| v["id"] == 2).unwrap();
     assert!(e["error"].as_str().unwrap().starts_with("the screens and keyboards"), "{e}");
+    assert!(e["error"].as_str().unwrap().contains("gensokyo say reaches a helper"), "{e}");
 }
 
 #[test]

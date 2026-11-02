@@ -383,7 +383,8 @@ fn helper_run(sh: &Shrine, lead: &str, who: &str) -> Result<String, String> {
         return Err(format!("{} is not one of your helpers; only the user can do that", r.name));
     }
     if r.cloud.is_none() {
-        return Err(format!("{} works here, not on claude.ai: SendMessage reaches it", r.name));
+        let n = &r.name;
+        return Err(format!("{n} works here, not on claude.ai: gensokyo say {n} \"<words>\""));
     }
     let here = sh.entries.iter().any(|e| e.rec.id == r.id && super::shrine::cloud_here(e));
     match (here, r.cloud) {

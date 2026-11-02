@@ -1031,7 +1031,8 @@ fn a_lead_says_more_only_to_a_cloud_helper_of_its_own_that_is_still_here() {
     let said = || std::fs::read_to_string(d.dir.join("stub/cloud.args")).is_ok();
     let say = |me: &Value, who: &str| err(&inside(&d, me, &["cloud", "say", who, "more"]));
     assert!(say(&sanae, "Aya").contains("Aya is not one of your helpers"));
-    assert!(say(&reimu, "Patchouli").contains("Patchouli works here, not on claude.ai"));
+    let e = say(&reimu, "Patchouli");
+    assert!(e.contains("Patchouli works here, not on claude.ai: gensokyo say Patchouli"), "{e}");
     // Not a session of its own: a routine's run by name or id, a session's link.
     for who in ["morning", "cse_01NewStub", LINK] {
         let e = say(&reimu, who);

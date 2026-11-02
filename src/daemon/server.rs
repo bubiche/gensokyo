@@ -686,7 +686,7 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
         | Request::Shown { .. }
         | Request::Resize { .. } => Some(
             "the screens and keyboards are the user's: a resident does not type into, show or \
-             size them (SendMessage reaches another resident)"
+             size them (gensokyo say reaches a helper of its own, SendMessage a Claude Code peer)"
                 .into(),
         ),
         Request::Ritual { verb: proto::RitualVerb::Run | proto::RitualVerb::Enable, name } => {
@@ -724,8 +724,8 @@ fn refuse(shrine: &Shared, caller: &str, r: &Request) -> Option<String> {
     }
 }
 
-/// Whether resident `caller` may close, banish, recall, read, say to or wait on `who`: only one it leads
-/// may be, here or departed.
+/// Whether resident `caller` may close, banish, recall, read, say to or wait on `who`: only one
+/// it leads may be, here or departed.
 fn mine(sh: &Shrine, caller: &str, who: &str) -> Result<(), String> {
     match lead::record(sh, who) {
         Some(r) if r.owner.as_deref() == Some(caller) => Ok(()),

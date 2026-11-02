@@ -35,6 +35,9 @@ pub fn mode_flags(mode: &str) -> Option<&'static [&'static str]> {
     MODES.iter().find(|(m, _)| *m == mode).map(|(_, f)| *f)
 }
 
+/// The modes Codex runs in its workspace-write sandbox, where only the workspace is writable.
+const WORKSPACE_WRITE: [&str; 2] = ["acceptEdits", "auto"];
+
 /// The mode a launch argv runs in, by its flags before any `--`: plan's are default's, so it
 /// reads back as default.
 pub fn mode_of(argv: &[String]) -> Option<&'static str> {
@@ -88,10 +91,10 @@ pub fn find(
     on_path(path, skip, "codex").or_else(|| executable(app).then(|| app.to_path_buf()))
 }
 
-/// The argv for a fresh start, or why there is none: a mode Codex has no flags for, or an effort
-/// that is not one word. The prompt goes last, after `--`, so one that starts with `-` stays
-/// whole. `notify` is the user's and left alone.
-pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
+/// The argv for a fresh start in `cwd`, or why there is none: a mode Codex has no flags for, or
+/// an effort that is not one word. The prompt goes last, after `--`, so one that starts with `-`
+/// stays whole. `notify` is the user's and left alone.
+pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Result<Vec<OsString>, String> {
     check(o.mode, o.effort)?;
     // gensokyo's hooks run unreviewed: Codex would otherwise hold each new one for the user.
     let mut a: Vec<OsString> = vec!["--dangerously-bypass-hook-trust".into()];
@@ -111,6 +114,13 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
         r#"tui.terminal_title=["run-state","thread-id","context-used"]"#.into(),
     ]);
     a.extend(o.mode.and_then(mode_flags).into_iter().flatten().map(OsString::from));
+    // A linked worktree keeps its index and objects in the common git dir, outside the
+    // workspace: git adds and commits there only with that dir writable too.
+    let common = o.mode.filter(|m| WORKSPACE_WRITE.contains(m)).and_then(|_| worktree_common(cwd));
+    if let Some(c) = common.as_deref().and_then(Path::to_str) {
+        let roots = format!("sandbox_workspace_write.writable_roots=[{}]", toml_str(c));
+        a.extend(["-c".into(), roots.into()]);
+    }
     if let Some(m) = o.model {
         a.extend(["-m".into(), m.into()]);
     }
@@ -375,10 +385,22 @@ fn project_header(line: &str) -> Option<String> {
     (rest.is_empty() || rest.starts_with('#')).then_some(dir)
 }
 
-/// The main checkout `dir` belongs to: the directory holding the common git dir, read from the
-/// files as git leaves them (a worktree's `.git` names its gitdir, whose `commondir` names the
-/// repository's own) rather than by running git.
+/// The main checkout `dir` belongs to: the directory holding the common git dir.
 pub fn main_root(dir: &Path) -> Option<PathBuf> {
+    git_dirs(dir)?.1.parent().map(Path::to_path_buf)
+}
+
+/// The common git dir of the linked worktree `dir` is in, its real path: none in a main
+/// checkout, whose git dir is its common one, or outside a repository.
+pub fn worktree_common(dir: &Path) -> Option<PathBuf> {
+    let (git, common) = git_dirs(dir)?;
+    (git != common).then_some(common)
+}
+
+/// The git dir and the common git dir of the repository `dir` is in, their real paths, read
+/// from the files as git leaves them (a worktree's `.git` names its gitdir, whose `commondir`
+/// names the repository's own, either relative to the one naming it) rather than by running git.
+fn git_dirs(dir: &Path) -> Option<(PathBuf, PathBuf)> {
     let top = dir.ancestors().find(|d| d.join(".git").exists())?;
     let dot = top.join(".git");
     let git = match std::fs::read_to_string(&dot) {
@@ -387,7 +409,7 @@ pub fn main_root(dir: &Path) -> Option<PathBuf> {
     };
     let common = match std::fs::read_to_string(git.join("commondir")) {
         Ok(c) => git.join(c.trim()),
-        Err(_) => git,
+        Err(_) => git.clone(),
     };
-    std::fs::canonicalize(common).ok()?.parent().map(Path::to_path_buf)
+    Some((std::fs::canonicalize(git).ok()?, std::fs::canonicalize(common).ok()?))
 }

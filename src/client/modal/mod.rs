@@ -187,16 +187,20 @@ impl App {
 /// lines of at most `w`: a row too wide is wrapped, never cut.
 fn help(w: usize) -> (String, Vec<Row>) {
     let w = w.max(1);
-    let mut rows = vec![Row::text("Ctrl-] then a key:")];
-    for p in CHORDS.chunks(2) {
-        let right = p.get(1).map_or(String::new(), |(k, v)| format!("{k:>3}  {v}"));
-        let row = format!("{:>5}  {:<14}{right}", p[0].0, p[0].1);
-        if width(&row) as usize <= w {
-            rows.push(Row::text(&row));
-            continue;
-        }
-        // Too narrow for two a row: one each.
-        for (k, v) in p {
+    let mut rows: Vec<Row> =
+        wrap("Ctrl-] then a key:", w, usize::MAX).iter().map(|l| Row::text(l)).collect();
+    let pairs: Vec<String> = CHORDS
+        .chunks(2)
+        .map(|p| {
+            let right = p.get(1).map_or(String::new(), |(k, v)| format!("{k:>3}  {v}"));
+            format!("{:>5}  {:<14}{right}", p[0].0, p[0].1)
+        })
+        .collect();
+    // Two a row while every pair fits, so they stay in columns; else one each.
+    if pairs.iter().all(|r| width(r) as usize <= w) {
+        rows.extend(pairs.iter().map(|r| Row::text(r)));
+    } else {
+        for (k, v) in CHORDS {
             rows.extend(keyed(&format!("{k:>5}  "), v, w, Style::new()));
         }
     }
@@ -250,8 +254,17 @@ fn packed(items: &[(&str, &str)], w: usize) -> Vec<Row> {
 }
 
 /// `key`, then `what` wrapped to the rest of `w`, each row it wraps onto starting under it.
+/// With no room beside the key for `what`'s widest word, `what` goes under the key instead,
+/// as wide as `w`.
 fn keyed(key: &str, what: &str, w: usize, style: Style) -> Vec<Row> {
     let indent = width(key) as usize;
+    let widest = what.split(' ').map(|word| width(word) as usize).max().unwrap_or(0);
+    if indent + widest > w {
+        let key = key.trim_end();
+        let key = if width(key) as usize > w { key.trim_start() } else { key };
+        let under = wrap(what, w, usize::MAX).into_iter().map(|l| Row::Text(l, style));
+        return std::iter::once(Row::Text(key.into(), style)).chain(under).collect();
+    }
     let lines = wrap(what, w.saturating_sub(indent).max(1), usize::MAX);
     let pad = " ".repeat(indent);
     let row = |(i, l): (usize, &String)| {

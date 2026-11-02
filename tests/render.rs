@@ -770,6 +770,44 @@ fn help_box(top: usize, w: u16, h: u16) -> (Vec<String>, String, String) {
     (rows.collect(), line(r.x, r.right(), r.y), line(r.x, r.right(), r.bottom() - 1))
 }
 
+/// Whether `rows` has `pair` one after the other.
+fn adjacent(rows: &[String], pair: [&str; 2]) -> bool {
+    rows.windows(2).any(|w| w[0] == pair[0] && w[1] == pair[1])
+}
+
+#[test]
+fn a_help_too_narrow_beside_its_keys_puts_each_description_under_its_key() {
+    // 44 columns leave the help 6: less than the keys' indent.
+    let rows = help_rows(44, 200);
+    for pair in [["    n", "summon"], ["    c", "cast"], ["    y", "copy"], ["  1-9", "slot"]] {
+        assert!(adjacent(&rows, pair), "{pair:?}\n{rows:#?}");
+    }
+    assert!(!rows.iter().any(|r| r.starts_with("       ")), "{rows:#?}");
+    // 51 leave 13: beside the key where its words fit, under it where they do not.
+    let rows = help_rows(51, 200);
+    assert!(rows.iter().any(|r| r == "    n  summon"), "{rows:#?}");
+    assert!(adjacent(&rows, ["    t", "timetable"]), "{rows:#?}");
+}
+
+#[test]
+fn the_helps_first_line_wraps_as_its_others_do() {
+    // 50 columns leave the help 12.
+    let rows = help_rows(50, 200);
+    assert_eq!(rows[..2], ["Ctrl-] then", "a key:"], "{rows:#?}");
+}
+
+#[test]
+fn the_chords_are_two_a_row_only_while_every_pair_fits() {
+    // 70 columns leave the help 32: wider than some pairs, not all.
+    let rows = help_rows(70, 200);
+    assert!(adjacent(&rows, ["    n  summon", "    c  cast"]), "{rows:#?}");
+    assert!(adjacent(&rows, ["    k  previous", "    a  needs you"]), "{rows:#?}");
+    // 80 leave 42: every pair fits.
+    let rows = help_rows(80, 24);
+    assert_eq!(rows[1], "    n  summon          c  cast", "{rows:#?}");
+    assert_eq!(rows[5], "    k  previous        a  needs you", "{rows:#?}");
+}
+
 #[test]
 fn a_help_taller_than_the_screen_scrolls_to_its_end_and_says_where_more_is() {
     // At its top: more below, and a hint at the bottom saying so.

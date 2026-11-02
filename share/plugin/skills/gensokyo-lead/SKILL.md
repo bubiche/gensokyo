@@ -34,8 +34,8 @@ End every brief with these, in your words:
   cannot message anyone, so its last message is the only report it has;
 - it leaves **no background task running** when it finishes: a background task ends a turn too,
   and you would read a report from halfway through;
-- it does not commit or push unless you say so. A Codex helper cannot commit (its sandbox
-  keeps git's files read-only), so you commit its work.
+- it does not commit or push unless you say so. In its sandbox (every mode but
+  `bypassPermissions`) a Codex helper cannot commit, so you commit its work.
 
 ```bash
 gensokyo new /abs/path/to/repo --json --name Patchouli --model sonnet --prompt-file - <<'BRIEF'

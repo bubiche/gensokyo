@@ -682,9 +682,8 @@ Run from inside a resident, these have a resident's rights rather than yours. Re
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
 It can close, banish, recall, renew, `wait` on, `read` or `say` anything to only its own
-helpers, tag only itself
-and its helpers, and it can't
-`quit`, `restart` or turn keeping awake on or off. A helper it summons works in its permission mode or a narrower one, and may be let
+helpers, tag only itself and its helpers, and it can't `quit`, `restart` or turn keeping awake
+on or off. A helper it summons works in its permission mode or a narrower one, and may be let
 use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds
 arrives paused, and only you resume, run or `ritual edit` one; its MCP config must already be
 in the config dir. Its file tools are refused in the config dir, where rituals, probes and MCP

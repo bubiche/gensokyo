@@ -55,7 +55,7 @@ fn names(v: &[String]) -> String {
 /// why, in one line; an error when nobody did. A resident casting (`caller`) is never typed
 /// into itself: it is mid-turn, in the Bash call that cast.
 pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Result<String, String> {
-    let (card, (claude, env)) = {
+    let card = {
         let sh = shrine.borrow();
         if sh.quitting {
             return Err("the daemon is stopping".into());
@@ -71,14 +71,9 @@ pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Resu
         if c.targets.is_empty() {
             return Err("name who gets it: all, awaiting, idle, or a resident".into());
         }
-        (card, sh.claude("").ok_or("claude not found on PATH")?)
+        card
     };
-    // Fresh, for the dialog guard: the last poll may be seconds old.
-    let at = hooks::now_ms();
-    let list = registry::fetch(&claude, &env)
-        .await
-        .ok_or("the registry could not be read, so a dialog cannot be ruled out")?;
-    registry::seen(shrine, &list, at);
+    look(shrine).await?;
     let (targets, mut notes) = aim(&shrine.borrow(), &card, &c, caller)?;
     let runs: Vec<_> = targets
         .into_iter()
@@ -105,6 +100,18 @@ pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Resu
         1 | 2 => Ok(format!("cast {} on {}{notes}", card.title, names(&sent))),
         n => Ok(format!("cast {} on {n} residents{notes}", card.title)),
     }
+}
+
+/// The registry read afresh, for the dialog guard before typing: the last poll may be seconds
+/// old.
+pub(super) async fn look(shrine: &Shared) -> Result<(), String> {
+    let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
+    let at = hooks::now_ms();
+    let list = registry::fetch(&claude, &env)
+        .await
+        .ok_or("the registry could not be read, so a dialog cannot be ruled out")?;
+    registry::seen(shrine, &list, at);
+    Ok(())
 }
 
 /// Who gets the card and what it says to each, and a note on everyone left out, all before

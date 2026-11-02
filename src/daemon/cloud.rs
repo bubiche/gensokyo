@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 /// A fire not seen this long after its time is no longer waited for: the hourly list finds it.
@@ -706,31 +705,8 @@ async fn claude_p(
     let (claude, env) = shrine.borrow().claude("").ok_or("claude not found on PATH")?;
     let cwd = dir().join("courier");
     std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
-    let mut cmd = tokio::process::Command::new(claude);
-    cmd.args(args)
-        .env_clear()
-        .envs(env)
-        .current_dir(&cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .kill_on_drop(true);
-    let child =
-        super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
-    let pid = child.id().map_or(0, |p| p as i32);
-    let out = tokio::time::timeout(COURIER_LIMIT, child.wait_with_output()).await;
-    // What it started and left behind goes with it, as a headless run's does.
-    if pid > 0 {
-        // SAFETY: plain killpg on its own group (`process_group(0)`).
-        unsafe { libc::killpg(pid, libc::SIGKILL) };
-    }
-    let out = match out {
-        Ok(o) => o.map_err(|e| format!("claude: {e}"))?,
-        Err(_) => return Err(format!("claude took over {}s", COURIER_LIMIT.as_secs())),
-    };
-    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    Ok((text(&out.stdout), out.status.code(), text(&out.stderr)))
+    let args: Vec<OsString> = args.into_iter().map(OsString::from).collect();
+    super::pty::output(&claude, &args, &env, &cwd, COURIER_LIMIT, "claude").await
 }
 
 /// The environment a cloud session is asked for, else the configured one.

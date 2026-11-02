@@ -58,6 +58,42 @@ pub fn locked<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// `program` run with no tty to its end, or for `limit` at the most: its stdout, exit code and
+/// stderr. `name` names it in the errors. It runs in a process group of its own, and what it
+/// started and left behind goes with it, as a headless run's does.
+pub async fn output(
+    program: &Path,
+    args: &[OsString],
+    env: &[(OsString, OsString)],
+    cwd: &Path,
+    limit: Duration,
+    name: &str,
+) -> Result<(String, Option<i32>, String), String> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+    let child = locked(|| cmd.spawn()).map_err(|e| format!("could not start {name}: {e}"))?;
+    let pid = child.id().map_or(0, |p| p as i32);
+    let out = tokio::time::timeout(limit, child.wait_with_output()).await;
+    if pid > 0 {
+        // SAFETY: plain killpg on its own group (`process_group(0)`).
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+    }
+    let out = match out {
+        Ok(o) => o.map_err(|e| format!("{name}: {e}"))?,
+        Err(_) => return Err(format!("{name} took over {}s", limit.as_secs())),
+    };
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    Ok((text(&out.stdout), out.status.code(), text(&out.stderr)))
+}
+
 pub fn spawn(s: Spawn) -> pty_process::Result<(Pty, tokio::process::Child)> {
     let _g = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (pty, pts) = pty_process::open()?;

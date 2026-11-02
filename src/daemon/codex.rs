@@ -257,8 +257,8 @@ pub fn home() -> Option<PathBuf> {
 /// `sessions/<year>/<month>/<day>/`, named `rollout-<YYYY-MM-DDThh-mm-ss>-<thread>.jsonl` as
 /// Codex writes one. Names only, at exactly that depth: nothing is opened, nothing deeper looked
 /// at. A symlinked year, month or day directory, or rollout, is skipped: the resident starts
-/// afresh. A thread is a hex id with dashes, starting with a digit, so it never goes into the
-/// argv as a flag.
+/// afresh. A thread is a hex id with dashes, starting with a hex digit, so it never goes into
+/// the argv as a flag.
 pub fn has_thread(home: &Path, thread: &str) -> bool {
     let hex = thread.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
     if !(hex && thread.starts_with(|c: char| c.is_ascii_hexdigit())) {

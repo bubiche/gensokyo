@@ -233,6 +233,10 @@ fn a_codex_thread_is_found_by_its_rollouts_name_in_its_days_directory_only() {
     for not in [deep, shallow, dir] {
         assert!(!codex::has_thread(&home, not), "{not}");
     }
+    // A hex id may start with a letter.
+    let letter = "a1b2c3d4-0000-4000-8000-000000000004";
+    std::fs::write(day.join(name(letter)), "").unwrap();
+    assert!(codex::has_thread(&home, letter));
     // Only a hex id with dashes, so none is ever a flag after `resume`, whatever is planted.
     for flag in ["--foo", "--ab", "-a", "x-1", "ab cd", "ab/cd"] {
         std::fs::write(day.join(name(flag)), "").unwrap_or_default();

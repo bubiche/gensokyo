@@ -846,9 +846,8 @@ pub(super) fn come_back(
     let mode = mode.or(launched);
     // The session its hooks last named, which /clear moves on, or a Codex resident's thread.
     // One that never got a prompt has nothing to resume: it starts afresh on that session, with
-    // the same name. A Codex thread resumed runs what was queued for it while it was gone as a
-    // turn once it is up, unless its last turn was interrupted: that turn is the lead's to wait
-    // on.
+    // the same name. A Codex thread resumed runs what was queued for it while it was gone, once
+    // it is up, as a turn the lead can wait on, unless its last turn was interrupted.
     let resume = launch::has_conversation(rec.agent, &rec.session);
     // Taken over from a cloud run, while still on the session the run was copied into (one
     // `/clear` started is gensokyo's from its first prompt): copied when there is nothing yet,

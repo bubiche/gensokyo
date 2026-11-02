@@ -420,8 +420,9 @@ async fn queue(shrine: &Shared, rec: &Record, text: &str) -> Result<String, Stri
         ));
     }
     // After an interrupted turn Codex runs nothing queued until its pane is typed into: the
-    // words would wait unseen. A turn begun since lifts it; a resume does not, nor can a turn
-    // a crash cut off be told from one interrupted in Codex.
+    // words would wait unseen. A turn begun since lifts it; a resume does not. A turn cut off
+    // as its codex died, or by a stop or `restart`, is kept as interrupted too, and so refused
+    // the same; one the daemon's own crash cut off is not, and `say` is taken after it.
     let held = {
         let sh = shrine.borrow();
         let running = sh.entries.iter().any(|e| e.rec.id == rec.id && e.aware.running());

@@ -6,7 +6,8 @@
 #                             queues <text> for the interactive stub on that thread, which runs
 #                             it as a prompt once it is idle, but not after an interrupted turn
 #                             until a prompt typed in starts one (<thread>.held, so a resume
-#                             holds it too); prints "Queued message ..." as codex does. Its argv, each arg ended by a NUL, is queue.args.
+#                             holds it too); prints "Queued message ..." as codex does. Its
+#                             argv, each arg ended by a NUL, is queue.args.
 #                             --thread=<id> and --message=<text> too; a value after its flag
 #                             that starts with `-` is refused as an argument, as codex's parser
 #                             does. With queue.fail there it queues nothing: its text goes to

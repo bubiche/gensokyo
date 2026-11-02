@@ -980,3 +980,30 @@ fn a_lead_says_more_to_its_claude_helper_in_one_paste() {
     let e = say(&d, &lead, "Mima", "more").unwrap_err();
     assert!(e.contains("Mima has a prompt half typed into it"), "{e}");
 }
+
+/// After an interrupted turn Codex runs nothing queued until its pane is typed into: `say` is
+/// refused until a turn begins again.
+#[test]
+fn a_codex_helper_whose_turn_was_interrupted_is_said_nothing_until_a_turn_begins() {
+    let d = daemon_with("sayi", true, &[("STUB_WORK", "3")]);
+    let lead = lead(&d);
+    helper(&d, &lead, "Kappa", "/perm");
+    let (code, _) = waited(&d, &lead, &["Kappa", "--until", "needs", "--timeout", "60s"]);
+    assert_eq!(code, 0);
+    keys(&d, "Kappa", b"\x1b");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
+    let e = say(&d, &lead, "Kappa", "carry on").unwrap_err();
+    assert!(e.contains("Kappa's last turn was interrupted"), "{e}");
+    assert!(!d.dir.join("stub/queue.args").exists());
+
+    // Typed into by the user: a new turn, and the words go in behind it.
+    keys(&d, "Kappa", b"again\r");
+    common::wait_for(LONG, || me(&d, "Kappa")["state"] == "busy", "its new turn");
+    let said = say(&d, &lead, "Kappa", "carry on").unwrap();
+    assert!(said.contains("queued for Kappa"), "{said}");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: again")), "{l:?}");
+    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
+    assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: carry on")), "{l:?}");
+}

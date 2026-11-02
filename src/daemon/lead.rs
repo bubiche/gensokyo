@@ -419,6 +419,19 @@ async fn queue(shrine: &Shared, rec: &Record, text: &str) -> Result<String, Stri
             "{name} has not started yet: Codex names its thread at its first prompt"
         ));
     }
+    // After an interrupted turn Codex runs nothing queued until its pane is typed into: the
+    // words would wait unseen. A turn begun since lifts it.
+    let held = {
+        let sh = shrine.borrow();
+        let running = sh.entries.iter().any(|e| e.rec.id == rec.id && e.aware.running());
+        !running && answer(&sh.store, &rec.id).is_some_and(|a| a.ended == Ended::Interrupted)
+    };
+    if held {
+        return Err(format!(
+            "{name}'s last turn was interrupted, and Codex holds queued words until someone \
+             types in its pane"
+        ));
+    }
     let (codex, env) = shrine.borrow().codex(&rec.id).ok_or(super::codex::MISSING)?;
     let cwd = Some(Path::new(&rec.cwd)).filter(|d| d.is_dir()).unwrap_or(Path::new("/"));
     // As a card's: no escape or other control character, but newlines and tabs.

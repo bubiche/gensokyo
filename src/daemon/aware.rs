@@ -616,6 +616,11 @@ impl Aware {
         self.set(None, None);
     }
 
+    /// In a turn, by its hooks: from its prompt until its Stop, or its Interrupt.
+    pub fn running(&self) -> bool {
+        self.running
+    }
+
     pub fn state(&self) -> State {
         if self.pending == Some(Pending::Asked) {
             return State::Asked;

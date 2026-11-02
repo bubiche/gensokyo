@@ -782,9 +782,10 @@ pub(super) fn recall(
             let back = come_back(shrine, &sh, &rec, None)?;
             (rec.program, rec.argv, rec.ledger) = (back.program, back.argv, back.ledger);
             // Started afresh, a Codex resident is on a thread its SessionStart has yet to name:
-            // the old one would take a `say` that nothing reads.
+            // the old one would take a `say` that nothing reads, and a SessionStart of the old
+            // process's, come late, does not bring it back.
             if !rec.agent.is_claude() && !back.resumed {
-                rec.session = rec.id.clone();
+                (rec.session, rec.session_at) = (rec.id.clone(), crate::hooks::now_ms());
             }
             (Some(back.handle), back.resumed)
         }

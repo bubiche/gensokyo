@@ -935,9 +935,14 @@ fn a_lead_says_more_to_its_codex_helper_by_codex_queue_on_its_thread() {
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));
     refused("Kappa", "hi", "Kappa has departed");
+    let named = record(&d, &h["id"])["session_at"].as_i64().unwrap();
     let b = d.req(json!({"t": "recall", "id": 4, "who": "Kappa"}));
     assert_eq!(b["t"], "summoned", "{b}");
     refused("Kappa", "hi", "Kappa has not started yet");
+    // Later than the old thread's SessionStart, which, come late, would not bring it back.
+    let rec = record(&d, &h["id"]);
+    assert_eq!(rec["session"], h["id"]);
+    assert!(rec["session_at"].as_i64().unwrap() > named, "{rec}");
     // Its old thread got the one message said to it, and nothing since.
     let q = std::fs::read_to_string(d.dir.join(format!("stub/{thread}.queue"))).unwrap();
     assert_eq!(q.split_terminator('\0').collect::<Vec<_>>(), [text]);

@@ -109,6 +109,7 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     for s in [o.role, o.system_prompt].into_iter().flatten() {
         words = format!("{words}\n\n{s}");
     }
+    // A resumed thread keeps those it started with, whatever these say.
     a.extend(["-c".into(), format!("developer_instructions={}", toml_str(&words)).into()]);
     // Idle or busy, and the thread once there is one, for the daemon to read.
     a.extend([

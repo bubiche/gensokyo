@@ -661,6 +661,9 @@ fn strings(v: &Value) -> Vec<String> {
 fn a_codex_resident_is_started_listed_left_and_resumed_on_its_thread() {
     let d = daemon("a", false);
     let dir = d.dir.display().to_string();
+    let own = d.dir.join("mine.md");
+    std::fs::write(&own, "Only read.").unwrap();
+    let role = own.display().to_string();
     let o = d.cli(&[
         "new",
         "--agent",
@@ -674,6 +677,8 @@ fn a_codex_resident_is_started_listed_left_and_resumed_on_its_thread() {
         "gpt-x",
         "-e",
         "high",
+        "--role",
+        &role,
         "--prompt",
         "hi",
         &dir,
@@ -713,15 +718,24 @@ fn a_codex_resident_is_started_listed_left_and_resumed_on_its_thread() {
     let gone = me(&d, "Nitori");
     assert_eq!((&gone["exit"], &gone["agent"]), (&json!(0), &json!("codex")), "{gone}");
 
-    // Back as it was summoned, on its own thread, with no prompt to say again.
+    // Back as it was summoned, on its own thread, with no prompt to say again. Its role file
+    // gone, it still comes back: the thread keeps the instructions it started with.
+    let words =
+        |a: &[String]| codex::toml_unquote(value(a, "developer_instructions").unwrap()).unwrap().0;
+    assert!(words(&argv).ends_with("\n\nOnly read."), "{argv:?}");
+    std::fs::remove_file(&own).unwrap();
     let thread = d.stub(&r["id"], "thread").trim().to_string();
     assert_eq!(record(&d, &r["id"])["session"], thread.as_str());
     std::fs::remove_file(d.dir.join(format!("stub/{}.ready", r["id"].as_str().unwrap()))).unwrap();
     let b = d.req(json!({"t": "recall", "id": 4, "who": "Nitori"}));
     assert_eq!(b["t"], "summoned", "{b}");
     let again = strings(&record(&d, &r["id"])["argv"]);
-    assert_eq!(again[..again.len() - 2], argv[..argv.len() - 2]);
     assert_eq!(again[again.len() - 2..], ["resume", thread.as_str()]);
+    assert!(!words(&again).contains("Only read."), "{again:?}");
+    let unworded = |a: &[String]| {
+        a.iter().filter(|w| !w.starts_with("developer_instructions=")).cloned().collect::<Vec<_>>()
+    };
+    assert_eq!(unworded(&again[..again.len() - 2]), unworded(&argv[..argv.len() - 2]));
     assert_eq!(me(&d, "Nitori")["mode"], "acceptEdits");
     ready(&d, &r["id"]);
     let got = d.stub(&r["id"], "args");

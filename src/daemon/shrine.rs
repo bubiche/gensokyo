@@ -846,20 +846,21 @@ pub(super) fn come_back(
     let mode = mode.or(launched);
     // The session its hooks last named, which /clear moves on, or a Codex resident's thread.
     // One that never got a prompt has nothing to resume: it starts afresh on that session, with
-    // the same name. A Codex thread resumed runs what was queued for it while it was gone (a
-    // `say` taken before it left) as a turn once it is up: that turn is the lead's to wait on.
+    // the same name. A Codex thread resumed runs what was queued for it while it was gone as a
+    // turn once it is up, unless its last turn was interrupted: that turn is the lead's to wait
+    // on.
     let resume = launch::has_conversation(rec.agent, &rec.session);
     // Taken over from a cloud run, while still on the session the run was copied into (one
     // `/clear` started is gensokyo's from its first prompt): copied when there is nothing yet,
     // and its prompt built afresh at every start.
     let teleport = rec.teleport.as_deref().filter(|_| rec.session == rec.id);
-    // A resumed conversation keeps the system prompt Claude Code recorded, the role's words in
-    // it, so a role file gone since does not keep it away; a fresh start would go without, as
-    // would one taken over, and a Codex one, whose words are given again at every start.
+    // A resumed conversation keeps the system prompt Claude Code recorded, or the developer
+    // instructions a Codex thread started with, the role's words in it, so a role file gone
+    // since does not keep it away; a fresh start would go without, as would one taken over.
     let found = |r: &str| role::read(&role::find(r, sh.share.as_deref())?);
     let role = match rec.role.as_deref().map(found).transpose() {
         Ok(found) => found,
-        Err(e) if !resume || teleport.is_some() || !rec.agent.is_claude() => {
+        Err(e) if !resume || teleport.is_some() => {
             return Err(format!("{} cannot come back: {e}", rec.name));
         }
         Err(e) => {

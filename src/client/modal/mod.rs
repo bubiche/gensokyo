@@ -16,6 +16,7 @@ pub use timetable::{Timetable, opened, timetable_order, when_short};
 
 use super::app::App;
 use super::framer::Chunk;
+use super::keys::{self, Scrollback};
 use super::render::{CHORDS, DIM, Model, Row, width, wrap};
 use crate::proto::{Request, Resident, State};
 use ratatui::style::Style;
@@ -40,7 +41,10 @@ pub enum Modal {
     Quit,
     /// Everyone behind the installed claude, by name, to be renewed.
     Renew(Vec<String>),
-    Help,
+    /// The keys and glyphs, from its row `top` while it is taller than the screen.
+    Help {
+        top: usize,
+    },
     /// What was said, newest first.
     History(History),
     /// Words for a cloud session, its next turn.
@@ -96,7 +100,7 @@ impl Modal {
                     Row::yes_no("[renew y]", "[cancel n]"),
                 ],
             ),
-            Modal::Help => help(w),
+            Modal::Help { top } => help_page(*top, w, h),
             Modal::History(hs) => hs.view(m, w, h),
             Modal::Say { name, text, .. } => (
                 " say ".into(),
@@ -108,6 +112,74 @@ impl Modal {
                 ],
             ),
         }
+    }
+}
+
+impl Modal {
+    /// Whether there is more of it above and below what fits in `h` rows, the box's included.
+    pub(super) fn more(&self, w: usize, h: usize) -> (bool, bool) {
+        match self {
+            Modal::Help { top } => {
+                let (n, page) = (help(w).1.len(), help_rows(h));
+                let top = (*top).min(n.saturating_sub(page));
+                (top > 0, top + page < n)
+            }
+            _ => (false, false),
+        }
+    }
+}
+
+/// Rows of the help that fit in `h`, under the box's edges.
+fn help_rows(h: usize) -> usize {
+    h.saturating_sub(2).max(1)
+}
+
+/// The help from its row `top`, as much as fits in `h`. Taller than that, each row is as wide
+/// as its widest, so the box keeps its width as it scrolls.
+fn help_page(top: usize, w: usize, h: usize) -> (String, Vec<Row>) {
+    let (title, all) = help(w);
+    let (n, page) = (all.len(), help_rows(h));
+    if n <= page {
+        return (title, all);
+    }
+    let widest = all.iter().filter_map(|r| match r {
+        Row::Text(s, _) => Some(width(s) as usize),
+        _ => None,
+    });
+    let widest = widest.max().unwrap_or(0);
+    let top = top.min(n - page);
+    let rows = all.into_iter().skip(top).take(page).map(|r| match r {
+        Row::Text(s, st) => {
+            let pad = " ".repeat(widest.saturating_sub(width(&s) as usize));
+            Row::Text(format!("{s}{pad}"), st)
+        }
+        r => r,
+    });
+    (title, rows.collect())
+}
+
+impl App {
+    /// Rows and pages as the scrollback takes them, while it is taller than the screen; `q`
+    /// and any other key close it, as before.
+    fn help_key(&mut self, c: &Chunk) {
+        // As `render` lays it out for the grid last drawn.
+        let w = self.size.0.min(72).saturating_sub(4) as usize;
+        let (n, page) = (help(w).1.len(), help_rows(self.size.1 as usize));
+        let last = n.saturating_sub(page);
+        let Some(Modal::Help { top }) = &mut self.m.modal else { return };
+        let by = |rows: i32| (*top).min(last).saturating_add_signed(rows as isize);
+        *top = match keys::scrollback(c) {
+            Some(Scrollback::By(r)) => by(r),
+            Some(Scrollback::Pages(p)) => by(p * page as i32),
+            Some(Scrollback::Top) => 0,
+            Some(Scrollback::Live) if !matches!(Key::of(c), Key::Text('q')) => last,
+            Some(Scrollback::Stay) => return,
+            _ => {
+                self.m.modal = None;
+                return;
+            }
+        }
+        .min(last);
     }
 }
 
@@ -233,7 +305,7 @@ impl App {
             return self.go_back();
         }
         match &mut self.m.modal {
-            Some(Modal::Help) => self.m.modal = None,
+            Some(Modal::Help { .. }) => self.help_key(c),
             Some(Modal::Quit | Modal::Banish { .. } | Modal::Close { .. } | Modal::Renew(_)) => {
                 match k {
                     Key::Enter | Key::Text('y') if self.answer() => self.confirm(),
@@ -356,7 +428,7 @@ impl App {
             Modal::Say { id, text, .. } => {
                 self.send(Request::CloudSay { who: id, text });
             }
-            Modal::Help | Modal::History(_) => {}
+            Modal::Help { .. } | Modal::History(_) => {}
         }
     }
 

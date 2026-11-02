@@ -1354,6 +1354,61 @@ fn the_wheel_while_a_drag_is_held_scrolls_and_the_selection_follows_the_pointer(
 }
 
 #[test]
+fn the_help_scrolls_while_it_is_taller_than_the_screen_and_opens_at_its_top() {
+    let mut a = shrine();
+    let paint = |a: &mut App, w, h| {
+        let area = Rect::new(0, 0, w, h);
+        a.paint(area, &mut Buffer::empty(area));
+    };
+    paint(&mut a, 80, 24);
+    let top = |a: &App| match &a.m.modal {
+        Some(Modal::Help { top }) => Some(*top),
+        _ => None,
+    };
+    host(&mut a, b"\x1d?");
+    assert_eq!(top(&a), Some(0));
+    // A row at a time, and never above its top.
+    for (keys, want) in [(&b"k"[..], 0), (b"j", 1), (b"\x1b[B", 2), (b"\x1b[A", 1), (b"k", 0)] {
+        host(&mut a, keys);
+        assert_eq!(top(&a), Some(want), "{keys:?}");
+    }
+    // Its end, and never past it.
+    host(&mut a, b"G");
+    let last = top(&a).unwrap();
+    assert!(last > 0);
+    for keys in [&b"j"[..], b"\x1b[B", b" ", b"\x1b[6~", b"G"] {
+        host(&mut a, keys);
+        assert_eq!(top(&a), Some(last), "{keys:?}");
+    }
+    // A page at a time: twenty rows show at 80x24.
+    for (keys, want) in
+        [(&b"g"[..], 0), (b" ", last.min(20)), (b"b", 0), (b"\x1b[6~", last.min(20))]
+    {
+        host(&mut a, keys);
+        assert_eq!(top(&a), Some(want), "{keys:?}");
+    }
+    host(&mut a, b"\x1b[5~");
+    assert_eq!(top(&a), Some(0));
+    // Any other key closes it, as before, and it opens again at its top.
+    host(&mut a, b"G");
+    host(&mut a, b"x");
+    assert_eq!(top(&a), None);
+    host(&mut a, b"\x1d?");
+    assert_eq!(top(&a), Some(0));
+    host(&mut a, b"G");
+    host(&mut a, b"q");
+    assert_eq!(top(&a), None);
+    host(&mut a, b"\x1d?");
+    host(&mut a, b"\x1b");
+    assert_eq!(top(&a), None);
+    // Where it all fits, there is nowhere to go.
+    paint(&mut a, 120, 40);
+    host(&mut a, b"\x1d?");
+    host(&mut a, b"j");
+    assert_eq!(top(&a), Some(0));
+}
+
+#[test]
 fn leader_y_copies_the_last_answer_or_says_why_it_cannot() {
     let mut a = shrine();
     host(&mut a, b"\x1dy");

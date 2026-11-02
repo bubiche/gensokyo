@@ -943,7 +943,16 @@ fn modal(m: &Model, md: &Modal, g: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     use Row::*;
     let (r, inner, title, rows) = modal_layout(m, md, g);
     Clear.render(r, buf);
-    Block::bordered().title(title).border_style(Style::new().fg(Color::Yellow)).render(r, buf);
+    let mut block = Block::bordered().title(title).border_style(Style::new().fg(Color::Yellow));
+    // Where there is more of it to scroll to.
+    let (above, below) = md.more(g.width.min(72).saturating_sub(4) as usize, g.height as usize);
+    if above {
+        block = block.title(Line::from(" ↑ ").style(DIM).right_aligned());
+    }
+    if below {
+        block = block.title_bottom(Line::from(" ↓ more ").style(DIM).right_aligned());
+    }
+    block.render(r, buf);
     hits.push(r, Hit::Modal);
     for (i, row) in rows.iter().enumerate() {
         let y = inner.y + i as u16;

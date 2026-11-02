@@ -1305,7 +1305,7 @@ impl App {
                 self.send(Request::Rituals);
             }
             Chord::Quit => self.m.modal = Some(Modal::Quit),
-            Chord::Help => self.m.modal = Some(Modal::Help),
+            Chord::Help => self.m.modal = Some(Modal::Help { top: 0 }),
             Chord::History => self.m.modal = Some(Modal::History(History::default())),
             Chord::Capture => {
                 self.m.capture = !self.m.capture;

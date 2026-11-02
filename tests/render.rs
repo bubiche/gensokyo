@@ -412,7 +412,7 @@ fn screens() -> Vec<(&'static str, Model)> {
             }),
         ),
         ("quit", with(&|m| m.modal = Some(Modal::Quit))),
-        ("help", with(&|m| m.modal = Some(Modal::Help))),
+        ("help", with(&|m| m.modal = Some(Modal::Help { top: 0 }))),
         (
             "capture-off",
             with(&|m| {
@@ -738,7 +738,7 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
     let mut m = shrine();
     let g = render::grid_rect(AREA);
     assert_eq!(render::cursor(&m, AREA), Some((g.x + 2, g.y + 3)));
-    m.modal = Some(Modal::Help);
+    m.modal = Some(Modal::Help { top: 0 });
     assert_eq!(render::cursor(&m, AREA), None);
     // Scrolled back, the resident's cursor is somewhere below what is shown.
     m.modal = None;
@@ -756,12 +756,44 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
 /// The help box's rows at `w` by `h`, as drawn inside its border and margin, trailing blanks
 /// dropped.
 fn help_rows(w: u16, h: u16) -> Vec<String> {
-    let m = Model { modal: Some(Modal::Help), ..shrine() };
+    help_box(0, w, h).0
+}
+
+/// The same from its row `top`, and its top and bottom edges.
+fn help_box(top: usize, w: u16, h: u16) -> (Vec<String>, String, String) {
+    let m = Model { modal: Some(Modal::Help { top }), ..shrine() };
     let (t, map) = draw(&m, w, h);
     let (r, _) = *map.0.iter().find(|(_, h)| *h == Hit::Modal).expect("a modal");
     let buf = t.backend().buffer();
-    let row = |y| (r.x + 2..r.right() - 2).map(|x| buf[(x, y)].symbol()).collect::<String>();
-    (r.y + 1..r.bottom() - 1).map(|y| row(y).trim_end().to_string()).collect()
+    let line = |x0, x1, y| (x0..x1).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    let rows = (r.y + 1..r.bottom() - 1).map(|y| line(r.x + 2, r.right() - 2, y).trim_end().into());
+    (rows.collect(), line(r.x, r.right(), r.y), line(r.x, r.right(), r.bottom() - 1))
+}
+
+#[test]
+fn a_help_taller_than_the_screen_scrolls_to_its_end_and_says_where_more_is() {
+    // At its top: more below, and a hint at the bottom saying so.
+    let (rows, top, bottom) = help_box(0, 80, 24);
+    assert_eq!(rows.len(), 20, "{rows:#?}");
+    assert_eq!(rows[0], "Ctrl-] then a key:");
+    assert!(bottom.contains("↓ more") && !top.contains('↑'), "{top}\n{bottom}");
+    assert!(!rows.iter().any(|r| r.starts_with("● busy") || r == "[close esc]"), "{rows:#?}");
+    // Scrolled past its end, it stops there: the legend and the close button in view.
+    let (rows, top, bottom) = help_box(usize::MAX, 80, 24);
+    assert_eq!(rows.len(), 20, "{rows:#?}");
+    assert!(rows.iter().any(|r| r.starts_with("● busy")), "{rows:#?}");
+    assert_eq!(rows.last().map(String::as_str), Some("[close esc]"), "{rows:#?}");
+    assert!(top.contains('↑') && !bottom.contains('↓'), "{top}\n{bottom}");
+    // A row in: more both ways.
+    let (_, top, bottom) = help_box(1, 80, 24);
+    assert!(top.contains('↑') && bottom.contains("↓ more"), "{top}\n{bottom}");
+    // Where it all fits, no hint, wherever it was left.
+    for at in [0, 5] {
+        let (rows, top, bottom) = help_box(at, 120, 40);
+        assert_eq!(rows[0], "Ctrl-] then a key:");
+        assert_eq!(rows.last().map(String::as_str), Some("[close esc]"), "{rows:#?}");
+        assert!(!top.contains('↑') && !bottom.contains('↓'), "{top}\n{bottom}");
+    }
 }
 
 #[test]

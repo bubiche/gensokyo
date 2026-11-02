@@ -332,6 +332,24 @@ fn the_model_is_read_from_the_top_level_of_the_config_only() {
 }
 
 #[test]
+fn a_codex_model_is_made_fit_to_show_as_claudes_is() {
+    let home = fresh("cx-clean");
+    let h = Some(home.as_path());
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // Its first line, control characters blanked.
+    let m = codex::model(&argv(&["-m", "gpt\x1b[31m-5.5\nmore", "--", "hi"]), h);
+    assert_eq!(m.as_deref(), Some("gpt [31m-5.5"));
+    // At most 40.
+    let m = codex::model(&argv(&["-m", &"x".repeat(60)]), h).unwrap();
+    assert_eq!(m, "x".repeat(40));
+    // Nothing to show is none.
+    assert_eq!(codex::model(&argv(&["-m", " \n\t"]), h), None);
+    // From the config too.
+    std::fs::write(home.join("config.toml"), "model = \"o4\\u0007-mini\"\n").unwrap();
+    assert_eq!(codex::model(&argv(&["--", "hi"]), h).as_deref(), Some("o4 -mini"));
+}
+
+#[test]
 fn the_context_used_is_read_from_the_titles_last_part() {
     assert_eq!(codex::context("Ready | Context 0% used"), Some(0));
     assert_eq!(

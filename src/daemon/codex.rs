@@ -227,12 +227,13 @@ pub fn home() -> Option<PathBuf> {
 }
 
 /// The model a Codex launch runs: its `-m`, else the one the `config.toml` in `home` sets, read
-/// only.
+/// only. Made fit to show as Claude's is: one line, no control characters, at most 40.
 pub fn model(argv: &[String], home: Option<&Path>) -> Option<String> {
-    launched(argv).model.or_else(|| {
+    let m = launched(argv).model.or_else(|| {
         let config = std::fs::read_to_string(home?.join("config.toml")).ok()?;
         config_model(&config)
-    })
+    })?;
+    Some(crate::tele::clean(&m, 40)).filter(|m| !m.is_empty())
 }
 
 /// The `model = "…"` at `config`'s top level, before any table: the one Codex runs when not told

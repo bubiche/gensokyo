@@ -100,7 +100,8 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
         a.push("-c".into());
         a.push(format!("hooks.{e}=[{{hooks=[{{type=\"command\",command={cmd}}}]}}]").into());
     }
-    let mut words = paragraph(o.name, o.lead, o.ledger);
+    let sandboxed = o.mode != Some("bypassPermissions");
+    let mut words = paragraph(o.name, o.lead, o.ledger, sandboxed);
     for s in [o.role, o.system_prompt].into_iter().flatten() {
         words = format!("{words}\n\n{s}");
     }
@@ -140,9 +141,18 @@ fn one_word(s: &str) -> bool {
 }
 
 /// gensokyo's paragraph for a Codex resident, before the role's words and the user's: its name;
-/// a helper hears who leads it and how its report and its questions reach them. A role that
-/// keeps a ledger hears where it is.
-pub fn paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -> String {
+/// a helper hears who leads it and how its report and its questions reach them. One in Codex's
+/// sandbox, which keeps git's files read-only, hears to leave its changes uncommitted, and a
+/// helper to tell its lead what they are. A role that keeps a ledger hears where it is.
+pub fn paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>, sandboxed: bool) -> String {
+    let tell = lead.map_or("", |_| ", and say in your report what you changed");
+    let git = match sandboxed {
+        true => format!(
+            " Your sandbox keeps git's own files read-only, so `git add` and `git commit` fail \
+             in it: leave your changes uncommitted{tell}."
+        ),
+        false => String::new(),
+    };
     let lead = lead.map_or(String::new(), |lead| {
         format!(
             " You are a helper: the resident {lead} summoned you and gave you your task. When it \
@@ -161,7 +171,7 @@ pub fn paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -> Strin
     });
     format!(
         "You are running inside gensokyo, which runs several coding agents (residents) side by \
-         side on this machine; your resident name is {name}.{lead}{ledger}"
+         side on this machine; your resident name is {name}.{lead}{git}{ledger}"
     )
 }
 

@@ -140,7 +140,7 @@ fn a_codex_argv_says_who_it_is_then_the_mode_model_effort_and_prompt_last() {
     };
     let a = argv("/g", &o);
     let words = codex::toml_unquote(value(&a, "developer_instructions").unwrap()).unwrap().0;
-    let para = codex::paragraph("Nitori", Some("Seiran"), None);
+    let para = codex::paragraph("Nitori", Some("Seiran"), None, true);
     assert_eq!(words, format!("{para}\n\nReview \"carefully\".\n\tTabbed.\n\nBe brief \\ terse."));
     assert_eq!(
         value(&a, "tui.terminal_title"),
@@ -212,10 +212,10 @@ fn each_mode_has_codex_flags_that_read_back_as_it() {
 
 #[test]
 fn a_codex_resident_hears_its_name_and_a_helper_how_to_report_and_ask() {
-    let plain = codex::paragraph("Nitori", None, None);
+    let plain = codex::paragraph("Nitori", None, None, false);
     assert!(plain.contains("inside gensokyo") && plain.contains("resident name is Nitori"));
     assert!(!plain.contains("helper"));
-    let helper = codex::paragraph("Nitori", Some("Seiran"), None);
+    let helper = codex::paragraph("Nitori", Some("Seiran"), None, false);
     for says in [
         "the resident Seiran summoned you",
         "your last message is your report to Seiran",
@@ -223,13 +223,39 @@ fn a_codex_resident_hears_its_name_and_a_helper_how_to_report_and_ask() {
     ] {
         assert!(helper.contains(says), "{says}");
     }
-    let ledger = codex::paragraph("Nitori", None, Some(Path::new("/l/proj.md")));
+    let ledger = codex::paragraph("Nitori", None, Some(Path::new("/l/proj.md")), false);
     assert!(ledger.contains("ledger is `/l/proj.md`"));
     // Nothing a Codex resident has no use for.
     for p in [plain, helper, ledger] {
         for not in ["SendMessage", "skill", "Agent tool", "Edit tool", "claude agents"] {
             assert!(!p.contains(not), "{not}: {p}");
         }
+    }
+}
+
+/// Codex's sandbox keeps git's files read-only: in every mode but bypassPermissions, and in
+/// none, a resident hears that it cannot commit, and a helper to say in its report what it
+/// changed.
+#[test]
+fn a_sandboxed_codex_resident_hears_it_cannot_commit() {
+    let words = |mode, lead| {
+        let a = argv("/g", &Options { mode, lead, ..opts() });
+        codex::toml_unquote(value(&a, "developer_instructions").unwrap()).unwrap().0
+    };
+    let line = "Your sandbox keeps git's own files read-only, so `git add` and `git commit` fail \
+                in it: leave your changes uncommitted";
+    for mode in codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]) {
+        let (plain, helper) = (words(mode, None), words(mode, Some("Seiran")));
+        if mode == Some("bypassPermissions") {
+            for w in [plain, helper] {
+                assert!(!w.contains("git commit"), "{w}");
+            }
+            continue;
+        }
+        assert!(plain.contains(&format!(" {line}.")), "{mode:?}: {plain}");
+        assert!(!plain.contains("report"), "{mode:?}: {plain}");
+        let report = format!(" {line}, and say in your report what you changed.");
+        assert!(helper.contains(&report), "{mode:?}: {helper}");
     }
 }
 

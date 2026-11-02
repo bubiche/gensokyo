@@ -659,8 +659,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         // The context, warm or hot as it fills, unless the line is already gold.
         if let Some(c) = t.and_then(|t| t.ctx).filter(|_| !r.state.needs_you()) {
             let pct = format!("{c}%");
-            let x = inner.x + w as u16 - width(&pct);
+            // Only where it fits whole: a sidebar narrower than it has no place for it.
             if rw >= pct.len() {
+                let x = inner.x + (w - pct.len()) as u16;
                 buf.set_stringn(x, y, &pct, pct.len(), heated(tele::heat(c, 0), style));
             }
         }

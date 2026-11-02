@@ -806,6 +806,17 @@ fn tiny_screens_do_not_panic() {
 }
 
 #[test]
+fn a_sidebar_narrower_than_a_context_does_not_panic() {
+    let mut m = aware();
+    m.residents[0].telemetry.as_mut().unwrap().ctx = Some(100);
+    // Its inside from nothing to a few columns wider than `100%`.
+    for w in 0..10 {
+        let area = Rect::new(0, 0, w, 24);
+        render::render(&m, area, &mut Buffer::empty(area));
+    }
+}
+
+#[test]
 fn the_sidebar_shows_the_freshest_usage_and_none_past_its_reset() {
     let mut m = aware();
     let sidebar = |m: &Model| -> Vec<String> {

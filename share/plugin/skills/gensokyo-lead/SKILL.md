@@ -5,11 +5,12 @@ description: Required when the user wants work split across other Claude Code se
 
 # Leading helpers
 
-A **helper** is a resident you summon: a Claude Code session of its own in the shrine, in a
-directory you choose, that the user can see, watch and type into. You are its **lead**: you
-brief it, wait for it, read what it reports, follow up, and close it when it is done. Only you
-and the user may close, banish, recall, wait on or read your helpers. After a `/compact` or
-`/clear`, gensokyo lists your helpers back to you; `gensokyo list --json` has them any time.
+A **helper** is a resident you summon: a Claude Code (or Codex) session of its own in the
+shrine, in a directory you choose, that the user can see, watch and type into. You are its
+**lead**: you brief it, wait for it, read what it reports, follow up, and close it when it is
+done. Only you and the user may close, banish, recall, wait on, read or say anything to your
+helpers. After a `/compact` or `/clear`, gensokyo lists your helpers back to you; `gensokyo list
+--json` has them any time.
 
 ## Helper or subagent
 
@@ -29,10 +30,12 @@ End every brief with these, in your words:
 
 - **its last message is its report to you**, read as it stands: what it did, what it found,
   what is left. A report is kept up to 64 KB; a longer one goes in a file outside the
-  repository, even from a read-only role, and its last message names the path;
+  repository, even from a read-only role, and its last message names the path. A Codex helper
+  cannot message anyone, so its last message is the only report it has;
 - it leaves **no background task running** when it finishes: a background task ends a turn too,
   and you would read a report from halfway through;
-- it does not commit or push unless you say so.
+- it does not commit or push unless you say so. A Codex helper cannot commit (its sandbox
+  keeps git's files read-only), so you commit its work.
 
 ```bash
 gensokyo new /abs/path/to/repo --json --name Patchouli --model sonnet --prompt-file - <<'BRIEF'
@@ -52,6 +55,11 @@ lets it use only `Read`, `Glob`, `Grep`, `WebSearch` or `WebFetch` without askin
 user for anything else. Wider is refused, and so is a summon past your `HELPERS` limit, from a
 helper, or in a directory Claude Code was never trusted in:
 tell the user to open Claude Code there once and accept, or pick a directory they trust.
+
+**A Codex helper.** `--agent codex` summons OpenAI's Codex instead, briefed, waited on, read and
+closed the same way. `--model` goes to whichever agent it is unchanged, so name a model that
+agent has (`gpt-5.5` for Codex, `sonnet` for Claude Code); with none it uses its own default.
+It takes no `--allowed-tools`, and needs a directory Codex trusts, as Claude Code does.
 
 **Separate checkouts.** Two helpers editing one working tree collide. Give each its own:
 `gensokyo new <repo dir> --worktree <name> --name <helper>` makes (or reuses)
@@ -107,10 +115,14 @@ to act on, as you would a colleague's.
 
 ## Follow-ups
 
-Send them with `SendMessage` to the helper by name; never type into its pane. The
-`gensokyo-peers` skill's rules hold: name yourself, say what you want and that the answer comes
-as its last message. Then `wait` on it again. That skill's round cap does not: follow up with
-your own helper as many times as the work needs.
+`gensokyo say <name> "<words>"`, to every helper here, Claude Code or Codex alike; not
+SendMessage, and never by typing into its pane. Claude Code gets the words typed in as its next
+prompt, refused while something is in the way (a dialog, or a prompt the user has half typed:
+`say` says which); Codex runs them once its turn is over, and takes none before its first prompt
+is in. They arrive as a prompt, much as the user's would: start with your name, say what you
+want, and that the answer comes as its last message. Then `wait` on it again, as many rounds as
+the work needs. A helper asks you something by ending its turn with the question: `read` it and
+answer with `say`. A cloud helper's follow-ups go by `gensokyo cloud say` instead.
 
 ## When a helper needs the user
 

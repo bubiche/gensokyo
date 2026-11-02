@@ -521,9 +521,9 @@ gensokyo new --cloud --env env_01… --prompt "…"           # another environm
 - **By name.** `gensokyo cloud say NAME "…"` is its next turn, `gensokyo cloud log NAME` a page
   of its log, `gensokyo new --teleport NAME` takes it over here.
 - **As a helper.** A lead in `auto` or `bypassPermissions` mode (a cloud session runs its tools
-  unasked) may start one as its helper, counted with its others. It waits on it, reads it (with
-  its link) and says more to it with `cloud say`, as for any helper; it can say nothing to anyone
-  else's session or a routine's run. Its log and taking it over stay yours.
+  unasked) may start one as its helper, counted with its others. It waits on it and reads it (with
+  its link) as any helper, and says more to it with `cloud say`, not `say`; it can say nothing to
+  anyone else's session or a routine's run. Its log and taking it over stay yours.
 
 ## Cloud routines
 
@@ -580,7 +580,8 @@ gensokyo new --teleport digest       # its newest run's conversation, as a resid
 
 Ask a resident to *"get a couple of helpers to …"* and its `gensokyo-lead` skill summons other
 residents for the parts, briefs each, waits on them in the background, reads their reports and
-closes them. A resident it summons is its **helper**, and it the helper's **lead**; the sidebar
+closes them; a follow-up is `gensokyo say <helper> "<words>"`, for a Claude Code helper and a
+Codex one alike. A resident it summons is its **helper**, and it the helper's **lead**; the sidebar
 draws helpers under their lead on a tree line (`├`, `└`), and `j`/`k` go through them in that
 order.
 
@@ -646,6 +647,7 @@ gensokyo renew [Marisa …]               # start again on the installed claude,
 gensokyo broadcast status-report all    # cast a spell card
 gensokyo wait Marisa Sanae --any        # until they have news: a turn ended, a dialog, gone
 gensokyo read Marisa [--screen]         # its last answer, kept after it leaves; or its screen
+gensokyo say Marisa "and the tests too" # its next prompt: typed into Claude Code, queued for Codex
 gensokyo ritual …                       # the rituals (above)
 gensokyo cloud …                        # the routines on claude.ai (above)
 gensokyo quit                           # everyone /exit, then the daemon stops
@@ -679,7 +681,8 @@ error; `wait` exits 3 on its timeout and 4 when the daemon went away (a restart:
 Run from inside a resident, these have a resident's rights rather than yours. Residents get
 `GENSOKYO_RESIDENT` (their id) and `GENSOKYO_SOCKET` in their environment, and that is how the
 daemon tells them apart. A resident can list, summon, cast and keep rituals as its skills do.
-It can close, banish, recall, renew, `wait` on or `read` only its own helpers, tag only itself
+It can close, banish, recall, renew, `wait` on, `read` or `say` anything to only its own
+helpers, tag only itself
 and its helpers, and it can't
 `quit`, `restart` or turn keeping awake on or off. A helper it summons works in its permission mode or a narrower one, and may be let
 use only `Read`, `Glob`, `Grep`, `WebSearch` and `WebFetch` without asking. A ritual it adds

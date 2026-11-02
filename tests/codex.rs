@@ -174,6 +174,7 @@ fn a_codex_argv_says_who_it_is_then_the_mode_model_effort_and_prompt_last() {
         model: Some("gpt-5.6".into()),
         effort: Some("high".into()),
         mode: Some("acceptEdits".into()),
+        profile: None,
     };
     assert_eq!(back, want);
 
@@ -311,15 +312,15 @@ trust_level = "trusted"
 }
 
 #[test]
-fn the_model_is_read_from_the_top_level_of_the_config_only() {
-    assert_eq!(codex::config_model("model = \"gpt-5.5\"\n").as_deref(), Some("gpt-5.5"));
+fn without_a_profile_the_model_is_read_from_the_configs_top_level() {
+    assert_eq!(codex::config_model("model = \"gpt-5.5\"\n", None).as_deref(), Some("gpt-5.5"));
     let c = "# mine\nmodel_provider = \"x\"\nmodel='o4' # set by hand\n[tui]\nmodel = \"no\"\n";
-    assert_eq!(codex::config_model(c).as_deref(), Some("o4"));
+    assert_eq!(codex::config_model(c, None).as_deref(), Some("o4"));
     // In a table, or a multi-line string, it is not the one Codex runs.
-    assert_eq!(codex::config_model("[profiles.a]\nmodel = \"gpt-5.5\"\n"), None);
-    assert_eq!(codex::config_model("x = \"\"\"\nmodel = \"no\"\n\"\"\"\n"), None);
-    assert_eq!(codex::config_model("model_reasoning_effort = \"high\"\n"), None);
-    assert_eq!(codex::config_model("model = \"gpt-5.5\" trailing\n"), None);
+    assert_eq!(codex::config_model("[profiles.a]\nmodel = \"gpt-5.5\"\n", None), None);
+    assert_eq!(codex::config_model("x = \"\"\"\nmodel = \"no\"\n\"\"\"\n", None), None);
+    assert_eq!(codex::config_model("model_reasoning_effort = \"high\"\n", None), None);
+    assert_eq!(codex::config_model("model = \"gpt-5.5\" trailing\n", None), None);
     // `-m` first, then the config in `home`, read only.
     let home = fresh("cx-model");
     let h = Some(home.as_path());
@@ -329,6 +330,48 @@ fn the_model_is_read_from_the_top_level_of_the_config_only() {
     std::fs::write(home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
     assert_eq!(codex::model(&argv(&["--", "-m"]), h).as_deref(), Some("gpt-5.4"));
     assert_eq!(codex::model(&argv(&["--", "hi"]), None), None);
+}
+
+#[test]
+fn the_model_of_the_profile_launched_is_read_before_the_top_levels() {
+    let config = r#"
+model = "top"
+profile = "quiet"
+
+[profiles.quiet]
+"model" = "o4-mini" # quoted key
+[profiles."deep"]
+model = 'gpt-5.5'
+[profiles.deep.tools]
+model = "no"
+[profiles.empty]
+approval_policy = "never"
+"#;
+    let cm = |p| codex::config_model(config, p);
+    // The profile named at the top, else the one launched.
+    assert_eq!(cm(None).as_deref(), Some("o4-mini"));
+    assert_eq!(cm(Some("deep")).as_deref(), Some("gpt-5.5"));
+    // One with no model, or none of that name: the top level's.
+    assert_eq!(cm(Some("empty")).as_deref(), Some("top"));
+    assert_eq!(cm(Some("missing")).as_deref(), Some("top"));
+    assert_eq!(
+        codex::config_model("[profiles.a]\nmodel = \"x\"\n", Some("a")).as_deref(),
+        Some("x")
+    );
+    // A dotted key is not read.
+    assert_eq!(codex::config_model("profiles.a.model = \"x\"\n", Some("a")), None);
+    // `-p`, `--profile` and `--profile=` pick it, before the config's; `-m` before them all.
+    let home = fresh("cx-profile");
+    std::fs::write(home.join("config.toml"), config).unwrap();
+    let h = Some(home.as_path());
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    for a in [&["-p", "deep"][..], &["--profile", "deep"], &["--profile=deep"]] {
+        assert_eq!(codex::launched(&argv(a)).profile.as_deref(), Some("deep"), "{a:?}");
+        assert_eq!(codex::model(&argv(a), h).as_deref(), Some("gpt-5.5"), "{a:?}");
+    }
+    assert_eq!(codex::model(&argv(&["--", "-p", "deep"]), h).as_deref(), Some("o4-mini"));
+    assert_eq!(codex::model(&argv(&["-p", "deep", "-m", "mine"]), h).as_deref(), Some("mine"));
+    assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), config);
 }
 
 #[test]

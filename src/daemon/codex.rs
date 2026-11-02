@@ -45,12 +45,13 @@ pub fn mode_of(argv: &[String]) -> Option<&'static str> {
         .find_map(|(m, f)| flags.windows(f.len()).any(|w| w == *f).then_some(*m))
 }
 
-/// Model, effort and mode, as a launch argv has them.
+/// Model, effort, mode and config profile, as a launch argv has them.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Launched {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub mode: Option<String>,
+    pub profile: Option<String>,
 }
 
 pub fn launched(argv: &[String]) -> Launched {
@@ -58,10 +59,13 @@ pub fn launched(argv: &[String]) -> Launched {
     let pairs = || flags.windows(2).map(|w| (w[0], w[1]));
     let effort =
         pairs().find_map(|(f, v)| v.strip_prefix("model_reasoning_effort=").filter(|_| f == "-c"));
+    let profile = pairs().find(|(f, _)| ["-p", "--profile"].contains(f)).map(|(_, v)| v);
+    let profile = profile.or_else(|| flags.iter().find_map(|f| f.strip_prefix("--profile=")));
     Launched {
         model: pairs().find(|(f, _)| *f == "-m").map(|(_, v)| v.into()),
         effort: effort.map(Into::into),
         mode: mode_of(argv).map(String::from),
+        profile: profile.map(Into::into),
     }
 }
 
@@ -226,31 +230,74 @@ pub fn home() -> Option<PathBuf> {
     }
 }
 
-/// The model a Codex launch runs: its `-m`, else the one the `config.toml` in `home` sets, read
-/// only. Made fit to show as Claude's is: one line, no control characters, at most 40.
+/// The model a Codex launch runs: its `-m`, else the one the `config.toml` in `home` sets for
+/// it, read only. Only that user config is read: a project's `.codex/` and any managed layer are
+/// not, so a model set there is not known. Made fit to show as Claude's is: one line, no
+/// control characters, at most 40.
 pub fn model(argv: &[String], home: Option<&Path>) -> Option<String> {
-    let m = launched(argv).model.or_else(|| {
+    let launch = launched(argv);
+    let m = launch.model.or_else(|| {
         let config = std::fs::read_to_string(home?.join("config.toml")).ok()?;
-        config_model(&config)
+        config_model(&config, launch.profile.as_deref())
     })?;
     Some(crate::tele::clean(&m, 40)).filter(|m| !m.is_empty())
 }
 
-/// The `model = "…"` at `config`'s top level, before any table: the one Codex runs when not told
-/// otherwise. A small scan, as `projects` is.
-pub fn config_model(config: &str) -> Option<String> {
+/// The model `config` sets: its `[profiles.<name>]` table's, for `profile` or else the
+/// `profile = "…"` at its top level, then the `model = "…"` at its top level. A small scan, as
+/// `projects` is: dotted keys and inline tables are not read.
+pub fn config_model(config: &str, profile: Option<&str>) -> Option<String> {
+    // The table each line is in: none at the top, a profile's name, or `Some(None)` for another.
+    let mut table = None::<Option<String>>;
+    let (mut top, mut chosen, mut theirs) = (None, None, Vec::new());
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            return None;
-        }
-        let Some((_, v)) = line.split_once('=').filter(|(k, _)| k.trim() == "model") else {
+            table = Some(profile_header(line));
             continue;
-        };
-        let (v, rest) = toml_unquote(v.trim())?;
+        }
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((v, rest)) = toml_unquote(v.trim()) else { continue };
         let rest = rest.trim();
-        return (rest.is_empty() || rest.starts_with('#')).then_some(v);
+        if !(rest.is_empty() || rest.starts_with('#')) {
+            continue;
+        }
+        match (&table, bare_key(k).as_deref()) {
+            (None, Some("model")) => top = top.or(Some(v)),
+            (None, Some("profile")) => chosen = chosen.or(Some(v)),
+            (Some(Some(p)), Some("model")) => theirs.push((p.clone(), v)),
+            _ => {}
+        }
     }
-    None
+    let profile = profile.map(String::from).or(chosen);
+    let mine = profile.and_then(|p| theirs.into_iter().find(|(n, _)| *n == p).map(|(_, m)| m));
+    mine.or(top)
+}
+
+/// A key as written, `model` or `"model"`; none for a dotted one.
+fn bare_key(k: &str) -> Option<String> {
+    let k = k.trim();
+    match toml_unquote(k) {
+        Some((k, rest)) => rest.trim().is_empty().then_some(k),
+        None => {
+            k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-').then(|| k.into())
+        }
+    }
+}
+
+/// The name a `[profiles.<name>]` header gives, bare or quoted; none for any other header.
+fn profile_header(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('[')?.trim_start();
+    let rest = rest.strip_prefix("profiles")?.trim_start().strip_prefix('.')?.trim_start();
+    let (name, rest) = match toml_unquote(rest) {
+        Some(q) => q,
+        None => {
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+            let (name, rest) = rest.split_at(end.unwrap_or(rest.len()));
+            (name.to_string(), rest)
+        }
+    };
+    let rest = rest.trim_start().strip_prefix(']')?.trim();
+    (!name.is_empty() && (rest.is_empty() || rest.starts_with('#'))).then_some(name)
 }
 
 /// The context used, percent, as the last part of its title says: `Context 12% used`.

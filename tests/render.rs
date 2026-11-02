@@ -753,6 +753,51 @@ fn the_cursor_is_the_residents_unless_a_modal_is_open() {
     assert!(row.ends_with("└ /nee"), "{row:?}");
 }
 
+/// The help box's rows at `w` by `h`, as drawn inside its border and margin, trailing blanks
+/// dropped.
+fn help_rows(w: u16, h: u16) -> Vec<String> {
+    let m = Model { modal: Some(Modal::Help), ..shrine() };
+    let (t, map) = draw(&m, w, h);
+    let (r, _) = *map.0.iter().find(|(_, h)| *h == Hit::Modal).expect("a modal");
+    let buf = t.backend().buffer();
+    let row = |y| (r.x + 2..r.right() - 2).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    (r.y + 1..r.bottom() - 1).map(|y| row(y).trim_end().to_string()).collect()
+}
+
+#[test]
+fn the_help_wraps_its_long_lines_at_words_rather_than_cut_them() {
+    let rows = help_rows(80, 24);
+    // The chords as they were: they fit.
+    assert_eq!(rows[1], "    n  summon          c  cast", "{rows:#?}");
+    // Each long line whole, over rows that each end at a word.
+    let joined = rows.iter().map(|r| r.trim()).collect::<Vec<_>>().join(" ");
+    for line in [
+        "Nobody on screen, or a departed one: the keys alone.",
+        "Scrolled back: j k a row, b f a screen, g the top, q home.",
+        "Search: / back, ? on, then n more the same way, N the other.",
+        "Drag to copy, past an edge to scroll; double-click a word.",
+    ] {
+        assert!(joined.contains(line), "{line}\n{rows:#?}");
+        let first = rows.iter().position(|r| line.starts_with(r.as_str())).expect(line);
+        assert!(rows[first].len() < line.len(), "wrapped: {rows:#?}");
+    }
+}
+
+#[test]
+fn a_wrapped_help_row_goes_on_under_what_it_describes() {
+    // Too narrow for two chords a row, and tall enough for all of it.
+    let rows = help_rows(60, 80);
+    for chord in ["    n  summon", "    c  cast", "  1-9  slot", "   ^]  send ^]"] {
+        assert!(rows.iter().any(|r| r == chord), "{chord}\n{rows:#?}");
+    }
+    let at = rows.iter().position(|r| r.starts_with("⇡ ")).expect("the renew mark");
+    assert_eq!(rows[at], "⇡ behind the installed", "{rows:#?}");
+    assert_eq!(rows[at + 1], "  claude (u renews)", "{rows:#?}");
+    assert_eq!(rows[at + 2], "↻ renewing", "{rows:#?}");
+    assert!(rows.iter().any(|r| r == "● busy  ✦ needs you"), "{rows:#?}");
+    assert_eq!(rows.last().map(String::as_str), Some("[close esc]"), "{rows:#?}");
+}
+
 #[test]
 fn a_text_field_has_the_cursor_after_what_is_typed() {
     let fields = [

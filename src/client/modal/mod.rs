@@ -16,7 +16,7 @@ pub use timetable::{Timetable, opened, timetable_order, when_short};
 
 use super::app::App;
 use super::framer::Chunk;
-use super::render::{CHORDS, Model, Row};
+use super::render::{CHORDS, DIM, Model, Row, width, wrap};
 use crate::proto::{Request, Resident, State};
 use ratatui::style::Style;
 
@@ -96,7 +96,7 @@ impl Modal {
                     Row::yes_no("[renew y]", "[cancel n]"),
                 ],
             ),
-            Modal::Help => help(),
+            Modal::Help => help(w),
             Modal::History(hs) => hs.view(m, w, h),
             Modal::Say { name, text, .. } => (
                 " say ".into(),
@@ -111,33 +111,81 @@ impl Modal {
     }
 }
 
-/// The chords, what a scrolled-back resident takes, and what the sidebar's glyphs mean.
-fn help() -> (String, Vec<Row>) {
+/// The chords, what a scrolled-back resident takes, and what the sidebar's glyphs mean, in
+/// lines of at most `w`: a row too wide is wrapped, never cut.
+fn help(w: usize) -> (String, Vec<Row>) {
+    let w = w.max(1);
     let mut rows = vec![Row::text("Ctrl-] then a key:")];
-    rows.extend(CHORDS.chunks(2).map(|p| {
+    for p in CHORDS.chunks(2) {
         let right = p.get(1).map_or(String::new(), |(k, v)| format!("{k:>3}  {v}"));
-        Row::text(&format!("{:>5}  {:<14}{right}", p[0].0, p[0].1))
-    }));
-    rows.push(Row::text("Nobody on screen, or a departed one: the keys alone."));
-    rows.push(Row::text("Scrolled back: j k a row, b f a screen, g the top, q home."));
-    rows.push(Row::text("Search: / back, ? on, then n more the same way, N the other."));
-    rows.push(Row::text("Drag to copy, past an edge to scroll; double-click a word."));
-    rows.push(Row::text("y copies the last answer of the resident on screen."));
-    rows.push(Row::text("A cloud session: ⏎ opens it, s says something to it."));
-    let legend: Vec<String> = [
+        let row = format!("{:>5}  {:<14}{right}", p[0].0, p[0].1);
+        if width(&row) as usize <= w {
+            rows.push(Row::text(&row));
+            continue;
+        }
+        // Too narrow for two a row: one each.
+        for (k, v) in p {
+            rows.extend(keyed(&format!("{k:>5}  "), v, w, Style::new()));
+        }
+    }
+    for s in [
+        "Nobody on screen, or a departed one: the keys alone.",
+        "Scrolled back: j k a row, b f a screen, g the top, q home.",
+        "Search: / back, ? on, then n more the same way, N the other.",
+        "Drag to copy, past an edge to scroll; double-click a word.",
+        "y copies the last answer of the resident on screen.",
+        "A cloud session: ⏎ opens it, s says something to it.",
+    ] {
+        rows.extend(wrap(s, w, usize::MAX).iter().map(|l| Row::text(l)));
+    }
+    let legend = [
         (State::Busy, "busy"),
         (State::Awaits, "needs you"),
         (State::Asked, "asked you"),
         (State::Resting, "resting"),
         (State::Departed, "departed"),
     ]
-    .iter()
-    .map(|(s, what)| format!("{} {what}", s.glyph()))
-    .collect();
-    rows.push(Row::dim(&legend.join("  ")));
-    rows.push(Row::dim("⇡ behind the installed claude (u renews)  ↻ renewing"));
+    .map(|(s, what)| (s.glyph(), what));
+    rows.extend(packed(&legend, w));
+    rows.extend(packed(&[("⇡", "behind the installed claude (u renews)"), ("↻", "renewing")], w));
     rows.push(Row::close());
     (" help ".into(), rows)
+}
+
+/// `key` and then `what`, in dim rows of at most `w`, as many to a row as fit, two spaces apart.
+fn packed(items: &[(&str, &str)], w: usize) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let mut line = String::new();
+    for (key, what) in items {
+        let item = format!("{key} {what}");
+        let sep = if line.is_empty() { 0 } else { 2 };
+        if width(&line) as usize + sep + width(&item) as usize <= w {
+            line = if line.is_empty() { item } else { format!("{line}  {item}") };
+            continue;
+        }
+        if !line.is_empty() {
+            rows.push(Row::dim(&std::mem::take(&mut line)));
+        }
+        match width(&item) as usize <= w {
+            true => line = item,
+            false => rows.extend(keyed(&format!("{key} "), what, w, DIM)),
+        }
+    }
+    if !line.is_empty() {
+        rows.push(Row::dim(&line));
+    }
+    rows
+}
+
+/// `key`, then `what` wrapped to the rest of `w`, each row it wraps onto starting under it.
+fn keyed(key: &str, what: &str, w: usize, style: Style) -> Vec<Row> {
+    let indent = width(key) as usize;
+    let lines = wrap(what, w.saturating_sub(indent).max(1), usize::MAX);
+    let pad = " ".repeat(indent);
+    let row = |(i, l): (usize, &String)| {
+        Row::Text(format!("{}{l}", if i == 0 { key } else { &pad }), style)
+    };
+    lines.iter().enumerate().map(row).collect()
 }
 
 /// A host chunk as a modal reads it.

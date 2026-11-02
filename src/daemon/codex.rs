@@ -226,6 +226,38 @@ pub fn home() -> Option<PathBuf> {
     }
 }
 
+/// The model a Codex launch runs: its `-m`, else the one the `config.toml` in `home` sets, read
+/// only.
+pub fn model(argv: &[String], home: Option<&Path>) -> Option<String> {
+    launched(argv).model.or_else(|| {
+        let config = std::fs::read_to_string(home?.join("config.toml")).ok()?;
+        config_model(&config)
+    })
+}
+
+/// The `model = "…"` at `config`'s top level, before any table: the one Codex runs when not told
+/// otherwise. A small scan, as `projects` is.
+pub fn config_model(config: &str) -> Option<String> {
+    for line in plain_lines(config) {
+        if line.starts_with('[') {
+            return None;
+        }
+        let Some((_, v)) = line.split_once('=').filter(|(k, _)| k.trim() == "model") else {
+            continue;
+        };
+        let (v, rest) = toml_unquote(v.trim())?;
+        let rest = rest.trim();
+        return (rest.is_empty() || rest.starts_with('#')).then_some(v);
+    }
+    None
+}
+
+/// The context used, percent, as the last part of its title says: `Context 12% used`.
+pub fn context(title: &str) -> Option<u32> {
+    let last = title.rsplit(" | ").next()?;
+    last.strip_prefix("Context ")?.strip_suffix("% used")?.parse().ok()
+}
+
 /// Whether Codex starts in `dir` with no trust prompt, by its `config.toml` in `home`, read only.
 pub fn trusted(home: &Path, dir: &Path) -> bool {
     let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
@@ -247,19 +279,8 @@ pub fn trusted_in(config: &str, cwd: &Path, root: Option<&Path>) -> bool {
 /// how Codex writes a trust it was given. A small scan, not a TOML parser: any other table
 /// (`[projects."<dir>".x]` too) ends the one before it, and multi-line strings are skipped.
 pub fn projects(config: &str) -> Vec<PathBuf> {
-    let (mut found, mut table, mut long) = (Vec::new(), None::<String>, None::<&str>);
-    for line in config.lines() {
-        if let Some(q) = long {
-            if line.matches(q).count() % 2 == 1 {
-                long = None;
-            }
-            continue;
-        }
-        if let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| line.matches(q).count() % 2 == 1) {
-            long = Some(q);
-            continue;
-        }
-        let line = line.trim();
+    let (mut found, mut table) = (Vec::new(), None::<String>);
+    for line in plain_lines(config) {
         if line.starts_with('[') {
             table = project_header(line);
             continue;
@@ -274,6 +295,24 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// `config`'s lines, trimmed, but those inside a multi-line string.
+fn plain_lines(config: &str) -> impl Iterator<Item = &str> {
+    let mut long = None::<&str>;
+    config.lines().filter_map(move |line| {
+        if let Some(q) = long {
+            if line.matches(q).count() % 2 == 1 {
+                long = None;
+            }
+            return None;
+        }
+        if let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| line.matches(q).count() % 2 == 1) {
+            long = Some(q);
+            return None;
+        }
+        Some(line.trim())
+    })
 }
 
 /// The directory a `[projects."<dir>"]` header names; none for any other header.

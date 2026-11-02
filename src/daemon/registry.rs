@@ -10,9 +10,10 @@ use super::ingest::replay;
 use super::log::log;
 use super::notify::after;
 use super::pty;
-use super::shrine::{Shared, taken, touch};
+use super::shrine::{Entry, Shared, taken, touch};
+use super::{codex, store};
 use crate::hooks;
-use crate::proto::{State, valid_name};
+use crate::proto::{State, Telemetry, valid_name};
 use serde::Deserialize;
 use serde_json::json;
 use std::ffi::OsString;
@@ -191,20 +192,41 @@ async fn version(claude: &Path, env: &[(OsString, OsString)]) -> Option<String> 
 }
 
 /// Each Codex resident's terminal title, every beat, whether or not `claude` is there to ask:
-/// whether it has started.
+/// whether it has started, and the context it has used.
 fn titles(shrine: &Shared) {
     let mut sh = shrine.borrow_mut();
     let sh = &mut *sh;
+    let mut changed = false;
     for i in 0..sh.entries.len() {
         let e = &mut sh.entries[i];
         let Some(title) = e.handle.as_ref().filter(|_| !e.rec.agent.is_claude()) else { continue };
         let title = title.modes().title;
+        changed |= codex_tele(e, &title);
         let before = e.aware.state();
         if e.aware.title(&title) {
             log(json!({"ev": "started", "id": e.rec.id}));
             after(sh, i, before);
         }
     }
+    if changed {
+        touch(sh);
+    }
+}
+
+/// What Claude's status line tells, as far as Codex shows it: the model, worked out once as
+/// Codex reads it at its start, and the context from `title`, kept through a title without it.
+/// Whether either changed.
+fn codex_tele(e: &mut Entry, title: &str) -> bool {
+    let fresh = e.tele.is_none();
+    let t = e.tele.get_or_insert_with(|| Telemetry {
+        model: codex::model(&e.rec.argv, codex::home().as_deref()),
+        ..Telemetry::default()
+    });
+    t.at = store::now();
+    let ctx = codex::context(title).or(t.ctx);
+    let changed = fresh || ctx != t.ctx;
+    t.ctx = ctx;
+    changed
 }
 
 /// A registry snapshot: each Claude resident's status, and the name it was renamed to inside.

@@ -310,6 +310,38 @@ trust_level = "trusted"
     assert!(!codex::trusted_in(&config, &real(&c), Some(&real(&a))));
 }
 
+#[test]
+fn the_model_is_read_from_the_top_level_of_the_config_only() {
+    assert_eq!(codex::config_model("model = \"gpt-5.5\"\n").as_deref(), Some("gpt-5.5"));
+    let c = "# mine\nmodel_provider = \"x\"\nmodel='o4' # set by hand\n[tui]\nmodel = \"no\"\n";
+    assert_eq!(codex::config_model(c).as_deref(), Some("o4"));
+    // In a table, or a multi-line string, it is not the one Codex runs.
+    assert_eq!(codex::config_model("[profiles.a]\nmodel = \"gpt-5.5\"\n"), None);
+    assert_eq!(codex::config_model("x = \"\"\"\nmodel = \"no\"\n\"\"\"\n"), None);
+    assert_eq!(codex::config_model("model_reasoning_effort = \"high\"\n"), None);
+    assert_eq!(codex::config_model("model = \"gpt-5.5\" trailing\n"), None);
+    // `-m` first, then the config in `home`, read only.
+    let home = fresh("cx-model");
+    let h = Some(home.as_path());
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(codex::model(&argv(&["-m", "gpt-x", "--", "hi"]), h).as_deref(), Some("gpt-x"));
+    assert_eq!(codex::model(&argv(&["--", "hi"]), h), None);
+    std::fs::write(home.join("config.toml"), "model = \"gpt-5.4\"\n").unwrap();
+    assert_eq!(codex::model(&argv(&["--", "-m"]), h).as_deref(), Some("gpt-5.4"));
+    assert_eq!(codex::model(&argv(&["--", "hi"]), None), None);
+}
+
+#[test]
+fn the_context_used_is_read_from_the_titles_last_part() {
+    assert_eq!(codex::context("Ready | Context 0% used"), Some(0));
+    assert_eq!(
+        codex::context("Working ⠋ | 01a18db1-0831-77e0-b80c-4b71d... | Context 42% used"),
+        Some(42)
+    );
+    assert_eq!(codex::context("Ready | 01a18db1-0831-77e0-b80c-4b71d..."), None);
+    assert_eq!(codex::context(""), None);
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
@@ -652,4 +684,43 @@ fn a_promptless_codex_resident_starts_and_leaves_on_one_ctrl_c() {
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     assert!(!d.log().iter().any(|l| l["ev"] == "exit" && l["held"].is_string()), "asked twice");
     assert_eq!(me(&d, "Nitori")["exit"], 0);
+}
+
+/// Codex has no status line: its model is the one it was launched with, or else its config's,
+/// and its context comes from its title, for the sidebar, the box and `list` alike.
+#[test]
+fn a_codex_residents_model_and_context_are_listed() {
+    let d = daemon("tele", true);
+    let config = d.dir.join("codex/config.toml");
+    let trust = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("model = \"gpt-5.4-mini\"\n{trust}")).unwrap();
+    let dir = d.dir.display().to_string();
+    let new = |name: &str, model: &[&str]| {
+        let args = [&["new", "--agent", "codex", "--json", "--name", name][..], model]
+            .concat()
+            .into_iter()
+            .chain(["--prompt", "hi", dir.as_str()])
+            .collect::<Vec<_>>();
+        let o = d.cli(&args);
+        assert!(o.status.success(), "{}", common::err(&o));
+    };
+    new("Nitori", &["-m", "gpt-5.5"]);
+    new("Takane", &[]);
+    let listed = |name: &str| {
+        let o = d.cli(&["list", "--json"]);
+        let l: Vec<Value> = serde_json::from_slice(&o.stdout).unwrap();
+        l.into_iter().find(|r| r["name"] == name).map(|r| r["telemetry"].clone())
+    };
+    // Its first turn over, its title says 2% used.
+    for (name, model) in [("Nitori", "gpt-5.5"), ("Takane", "gpt-5.4-mini")] {
+        let want = json!({"model": model, "ctx": 2});
+        let seen = |t: &Value| json!({"model": t["model"], "ctx": t["ctx"]}) == want;
+        common::wait_for(LONG, || listed(name).is_some_and(|t| seen(&t)), name);
+        let t = listed(name).unwrap();
+        assert!(t["effort"].is_null() && t["cost"].is_null(), "{t}");
+    }
+    // The config was only read.
+    assert!(std::fs::read_to_string(&config).unwrap().starts_with("model = \"gpt-5.4-mini\"\n"));
+    let line = common::out(&d.cli(&["list"]));
+    assert!(line.contains("gpt-5.5 · ctx 2%"), "{line}");
 }

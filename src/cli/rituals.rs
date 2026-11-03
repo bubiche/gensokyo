@@ -90,6 +90,9 @@ pub struct Add {
     /// new (a fresh resident per run), persistent, or a resident's name
     #[arg(long)]
     target: Option<String>,
+    /// What a run of its own starts: claude (the default) or codex
+    #[arg(long)]
+    agent: Option<String>,
     /// How long a finished run stays before it is asked to leave (2h, or forever)
     #[arg(long)]
     keep: Option<String>,
@@ -244,6 +247,7 @@ fn add(o: Add) -> Result<(), String> {
     (a.mcp_config, a.target, a.keep, a.overlap) = (o.mcp_config, o.target, o.keep, o.overlap);
     (a.catch_up, a.headless, a.disabled) = (o.catch_up, o.headless, o.disabled);
     (a.when, a.quiet, a.deliver, a.worktree) = (o.when, o.quiet, o.deliver, o.worktree);
+    a.agent = o.agent;
     a.allowed_tools = o.allowed_tools.iter().flat_map(|v| crate::frontmatter::items(v)).collect();
     a.role = o.role.map(|r| super::role_here(&here, r));
     // A resident's ritual waits for the user to read what it may do and resume it.

@@ -663,3 +663,82 @@ fn info_is_what_the_timetable_shows() {
     let i = ritual::info(&rit(&broken), now, &tz, &trust, &dir);
     assert!(i.problem.is_some() && i.next_fire.is_none());
 }
+
+#[test]
+fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
+    use gensokyo::proto::Agent;
+    let tz = ny();
+    let now = at(2026, 9, 27, 12, 0);
+    let root = std::fs::canonicalize(tmp("codex")).unwrap();
+    let (cwd, home) = (root.join("work"), root.join("codex-home"));
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let claude = || {
+        Trust::from_json(Some(
+            &json!({"projects": {cwd.to_string_lossy(): {"hasTrustDialogAccepted": true}}}),
+        ))
+    };
+    // Claude Code's trust is no answer for Codex, which has its own.
+    let trust = |toml: &str| {
+        std::fs::write(home.join("config.toml"), toml).unwrap();
+        claude().with_codex(&home)
+    };
+    let good =
+        format!("---\nschedule: \"@daily\"\ncwd: {}\nagent: codex\n---\nhi\n", cwd.display());
+    assert_eq!(rit(&good).agent(), Agent::Codex);
+    assert_eq!(rit("---\n---\nhi").agent(), Agent::Claude, "claude by default");
+    let yes = trust(&format!("[projects.\"{}\"]\ntrust_level = \"trusted\"\n", cwd.display()));
+    assert_eq!(ritual::problem(&rit(&good), now, &tz, &yes), None);
+    assert_eq!(ritual::problem(&rit(&good), now, &tz, &claude()), None, "no home, no answer");
+    let no = trust("");
+    let p = ritual::problem(&rit(&good), now, &tz, &no).unwrap();
+    assert!(p.starts_with("cwd: Codex does not trust "), "{p}");
+    let headless = good.replacen("---\nhi", "headless: true\n---\nhi", 1);
+    assert_eq!(ritual::problem(&rit(&headless), now, &tz, &no), None, "exec has no prompt");
+    let i = ritual::info(&rit(&good), now, &tz, &yes, &Dir::at(&root, "morning"));
+    assert_eq!(i.agent, Agent::Codex);
+    for (line, want) in [
+        ("agent: gemini\n", "agent: gemini is neither claude nor codex"),
+        ("allowed_tools: Read\n", "allowed_tools: Codex has no tools allowed without asking"),
+        ("mcp_config: /m.json\n", "mcp_config: Codex takes its MCP servers from its own config"),
+        ("mode: dontAsk\n", "Codex has no dontAsk mode"),
+        ("effort: \"very high\"\n", "effort very high: Codex takes one word"),
+        ("target: Sakuya\n", "agent: codex is for a run that starts a session"),
+    ] {
+        let text = good.replacen("---\nhi", &format!("{line}---\nhi"), 1);
+        let p = ritual::problem(&rit(&text), now, &tz, &yes).unwrap_or_default();
+        assert!(p.contains(want), "{line:?}: {p}");
+    }
+    // Its flags are what its start takes out, and the ritual's own directory: no Claude rules.
+    let r = rit("---\nagent: codex\nmodel: gpt-5\neffort: high\nmode: acceptEdits\n---\nDo it.");
+    assert_eq!(
+        ritual::args(&r, Path::new("/s/rituals/morning")),
+        [
+            "--model",
+            "gpt-5",
+            "--effort",
+            "high",
+            "--permission-mode",
+            "acceptEdits",
+            "--add-dir",
+            "/s/rituals/morning"
+        ]
+    );
+    // `ritual add` writes it, and warns of Codex's trust, not Claude Code's.
+    let a = Add {
+        name: "cx".into(),
+        schedule: "@daily".into(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        agent: Some("codex".into()),
+        prompt: "hi".into(),
+        ..Add::default()
+    };
+    let mine = root.join("rituals");
+    let (path, lines) = ritual::add(&a, now, &tz, &no, &mine, None).unwrap();
+    let r = ritual::parse("cx", &path, false, &std::fs::read_to_string(&path).unwrap());
+    assert_eq!(r.agent(), Agent::Codex);
+    assert!(lines.iter().any(|l| l.starts_with("warning: cwd: Codex does not trust")), "{lines:?}");
+    let bad = Add { name: "cy".into(), allowed_tools: vec!["Read".into()], ..a.clone() };
+    let e = ritual::add(&bad, now, &tz, &yes, &mine, None).unwrap_err();
+    assert!(e.contains("Codex has no tools allowed"), "{e}");
+}

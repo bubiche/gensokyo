@@ -21,6 +21,7 @@ pub struct Add {
     pub mcp_config: Option<String>,
     pub role: Option<String>,
     pub target: Option<String>,
+    pub agent: Option<String>,
     pub keep: Option<String>,
     pub overlap: Option<String>,
     pub deliver: Option<String>,
@@ -92,6 +93,9 @@ pub fn add(
     if let Some(t) = &a.target {
         f += &format!("target: {}\n", word("target", t)?);
     }
+    if let Some(g) = &a.agent {
+        f += &format!("agent: {}\n", word("agent", g)?);
+    }
     f += &format!("cwd: {}\n", quote(&cwd)?);
     for (k, v) in [("model", &a.model), ("effort", &a.effort), ("mode", &a.mode)] {
         if let Some(v) = v {
@@ -139,7 +143,7 @@ pub fn add(
     let s = check(&r, now, tz, &Trust::from_json(None))
         .map_err(|p| format!("{p}\nnothing was written"))?;
     let own = matches!(r.target(), Target::New | Target::Persistent);
-    let untrusted = own && !r.headless() && !trust.trusted(Path::new(&cwd));
+    let untrusted = own && !r.headless() && !trust.trusts(r.agent(), Path::new(&cwd));
     std::fs::create_dir_all(rituals).map_err(|e| format!("{}: {e}", rituals.display()))?;
     write_atomic(&path, f.as_bytes())
         .map_err(|e| format!("could not write {}: {e}", path.display()))?;

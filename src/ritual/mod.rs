@@ -15,7 +15,7 @@ pub use journal::{Dir, Entry};
 use crate::cron::Schedule;
 use crate::frontmatter::{self, NAME_RULE};
 use crate::paths;
-use crate::proto::RitualInfo;
+use crate::proto::{Agent, RitualInfo};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
@@ -36,6 +36,8 @@ pub struct Ritual {
     pub description: Option<String>,
     pub schedule: String,
     pub target: String,
+    /// `claude` or `codex`, as written: what a run of its own starts.
+    pub agent: String,
     /// With `~` expanded.
     pub cwd: Option<String>,
     pub model: Option<String>,
@@ -136,6 +138,11 @@ impl Ritual {
         keep_len(&self.keep).ok().flatten()
     }
 
+    /// Codex for `agent: codex`, else Claude.
+    pub fn agent(&self) -> Agent {
+        if self.agent == "codex" { Agent::Codex } else { Agent::Claude }
+    }
+
     pub fn target(&self) -> Target {
         match self.target.as_str() {
             "new" => Target::New,
@@ -193,6 +200,7 @@ const KEYS: &[&str] = &[
     "description",
     "schedule",
     "target",
+    "agent",
     "cwd",
     "model",
     "effort",
@@ -225,6 +233,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
         description: None,
         schedule: String::new(),
         target: "new".into(),
+        agent: "claude".into(),
         cwd: None,
         model: None,
         effort: None,
@@ -253,6 +262,7 @@ pub fn parse(slug: &str, path: &Path, shipped: bool, text: &str) -> Ritual {
             "description" => r.description = some(v),
             "schedule" => r.schedule = v,
             "target" => r.target = v,
+            "agent" => r.agent = v,
             "cwd" => r.cwd = some(crate::paths::expand(&v)),
             "model" => r.model = some(v),
             "effort" => r.effort = some(v),
@@ -296,6 +306,8 @@ pub fn find<'a>(rs: &'a [Ritual], want: &str) -> Result<&'a Ritual, String> {
 /// Which directories Claude Code has been trusted in, from its `.claude.json`.
 pub struct Trust {
     projects: Option<serde_json::Map<String, Value>>,
+    /// Codex's home, whose `config.toml` says where Codex is trusted; none answers nothing.
+    codex: Option<PathBuf>,
 }
 
 impl Trust {
@@ -307,13 +319,47 @@ impl Trust {
     /// Read once per use: it is large.
     pub fn load() -> Trust {
         let v = std::fs::read(Trust::path()).ok().and_then(|b| serde_json::from_slice(&b).ok());
-        Trust::from_json(v.as_ref())
+        Trust::from_json(v.as_ref()).with_codex_home(crate::daemon::codex::home())
     }
 
     /// None: no file gensokyo can read, which answers nothing and so counts as trusted.
     pub fn from_json(v: Option<&Value>) -> Trust {
         let projects = v.map(|v| v.get("projects").and_then(Value::as_object).cloned());
-        Trust { projects: projects.map(Option::unwrap_or_default) }
+        Trust { projects: projects.map(Option::unwrap_or_default), codex: None }
+    }
+
+    /// Codex's trust read from `home`'s `config.toml`, afresh at every ask.
+    pub fn with_codex(self, home: &Path) -> Trust {
+        self.with_codex_home(Some(home.into()))
+    }
+
+    fn with_codex_home(self, codex: Option<PathBuf>) -> Trust {
+        Trust { codex, ..self }
+    }
+
+    /// Whether `agent` starts in `dir` with no trust prompt to stall at.
+    pub fn trusts(&self, agent: Agent, dir: &Path) -> bool {
+        match (agent, &self.codex) {
+            (Agent::Claude, _) => self.trusted(dir),
+            (Agent::Codex, home) => {
+                home.as_ref().is_none_or(|h| crate::daemon::codex::trusted(h, dir))
+            }
+        }
+    }
+
+    /// Why `agent` would stall in `dir`, for the user to fix.
+    pub fn untrusted(agent: Agent, dir: &str) -> String {
+        let dir = crate::paths::short(dir);
+        match agent {
+            Agent::Claude => format!(
+                "nothing has answered Claude Code's trust prompt for {dir} (open Claude Code \
+                 there once and accept; until then it does not fire)"
+            ),
+            Agent::Codex => format!(
+                "Codex does not trust {dir} or its repository (open Codex there once and trust \
+                 it; until then it does not fire)"
+            ),
+        }
     }
 
     /// Accepted for `dir` or any directory above it, which Claude Code (2.1.283) counts too.
@@ -451,6 +497,12 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             r.target
         ));
     }
+    if !["claude", "codex"].contains(&r.agent.as_str()) {
+        return p(format!("agent: {} is neither claude nor codex", r.agent));
+    }
+    if r.agent() == Agent::Codex {
+        codex(r, own)?;
+    }
     // Only the targets that start a session have a directory: a prompt sent to a resident
     // lands wherever that resident was started.
     if own {
@@ -467,13 +519,9 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
             return p(format!("cwd: {} is not a directory", crate::paths::short(cwd)));
         }
         // A run stalled at the trust dialog is alive, so every later fire would skip itself
-        // as still going. `claude -p` never shows the dialog.
-        if !r.headless() && !trust.trusted(Path::new(cwd)) {
-            return p(format!(
-                "cwd: nothing has answered Claude Code's trust prompt for {} (open Claude Code \
-                 there once and accept; until then it does not fire)",
-                crate::paths::short(cwd)
-            ));
+        // as still going. `claude -p` and `codex exec` never show the dialog.
+        if !r.headless() && !trust.trusts(r.agent(), Path::new(cwd)) {
+            return p(format!("cwd: {}", Trust::untrusted(r.agent(), cwd)));
         }
     }
     if let Some(w) = &r.worktree {
@@ -555,6 +603,29 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
     Ok(s)
 }
 
+/// What a Codex ritual cannot have: only a run that starts a session has an agent, and Codex
+/// has no tool rules or MCP config files, nor every mode and effort Claude Code has.
+fn codex(r: &Ritual, own: bool) -> Result<(), String> {
+    if !own {
+        return Err(format!(
+            "agent: codex is for a run that starts a session (target: new or persistent), and \
+             target {} types into a resident that is already there",
+            r.target
+        ));
+    }
+    if !r.allowed_tools.is_empty() {
+        return Err("allowed_tools: Codex has no tools allowed without asking: its mode says \
+                    what it asks"
+            .into());
+    }
+    if r.mcp_config.is_some() {
+        return Err("mcp_config: Codex takes its MCP servers from its own config, not from a \
+                    file"
+            .into());
+    }
+    crate::daemon::codex::check(r.mode.as_deref(), r.effort.as_deref())
+}
+
 /// The ritual's prompt, and for a run of its own the sentence naming its notes: a fresh
 /// session forgets everything, and the file is where the continuity lives. A resident the user
 /// named gets the prompt alone: it was summoned by hand, and the file is outside its reach.
@@ -574,7 +645,8 @@ pub fn prompt_text(r: &Ritual, memory: &Path) -> String {
 /// a permission prompt, and an Edit rule for the notes file, since an added directory makes
 /// reads free and not writes: an unattended run would stop at its own notes. The rule names the
 /// real path (`//` makes it absolute), which is what Claude Code matches. `--allowedTools` is
-/// variadic and last: a flag or `--` must follow.
+/// variadic and last: a flag or `--` must follow. A Codex run gets model, effort and mode (which
+/// its start takes out and maps) and `--add-dir` alone: the directory is writable to it.
 pub fn args(r: &Ritual, dir: &Path) -> Vec<String> {
     let mut a = Vec::new();
     let mcp = r.mcp_config.as_deref().map(crate::paths::expand);
@@ -590,6 +662,9 @@ pub fn args(r: &Ritual, dir: &Path) -> Vec<String> {
         }
     }
     a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
+    if r.agent() == Agent::Codex {
+        return a;
+    }
     let real = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.into());
     let notes = format!("Edit(/{})", real.join("memory.md").display());
     a.push("--allowedTools".into());
@@ -633,6 +708,7 @@ pub fn info(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust, dir: &Dir) -> Ri
         last_run: dir.last_run(),
         last,
         target: r.target.clone(),
+        agent: r.agent(),
         headless: r.headless(),
         keep: r.keep.clone(),
         overlap: r.overlap.clone(),

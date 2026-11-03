@@ -543,6 +543,9 @@ pub struct RitualInfo {
     pub last: Option<String>,
     /// `new`, `persistent`, or a resident's name.
     pub target: String,
+    /// What a run of its own starts.
+    #[serde(default, skip_serializing_if = "Agent::is_claude")]
+    pub agent: Agent,
     pub headless: bool,
     pub keep: String,
     pub overlap: String,

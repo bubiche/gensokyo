@@ -86,7 +86,7 @@ Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 daemon keeps running after the client leaves: closing the terminal or detaching (`Ctrl-] d`)
 leaves every resident as it was, and `gensokyo` again shows them.
 
-![The shrine: five residents in the sidebar, and Reimu's Claude Code session on screen](docs/shrine.svg)
+![The shrine: five residents in the sidebar, Cirno on Codex beside four on Claude Code, and Reimu's Claude Code session on screen](docs/shrine.svg)
 
 Keys go to the resident on screen, except the **leader**, `Ctrl-]`, and the key after it. The
 sidebar's foot says so (` ^] then a key `), and once the leader is pressed the sidebar lists

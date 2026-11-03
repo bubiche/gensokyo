@@ -247,6 +247,19 @@ fn doctor_reads_without_starting_anything() {
     let plugins = "plugins that declare hooks: p@m (should Codex load them, they run";
     assert!(text.contains(plugins), "{text}");
     assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
+    assert!(!text.contains("shell_environment_policy"), "{text}");
+    // A list of the variables Codex keeps that leaves gensokyo's out is named, with its fix.
+    let policy = "[shell_environment_policy]\ninclude_only = [\n  \"PATH\", # \"GENSOKYO_*\"\n]\n";
+    std::fs::write(home.join("config.toml"), policy).unwrap();
+    let text = e.ok(&["doctor"]);
+    let warn = "\n             config.toml's shell_environment_policy include_only keeps \
+                GENSOKYO_* from residents' commands: a resident's own gensokyo calls arrive with \
+                your rights; add \"GENSOKYO_*\" to include_only\n";
+    assert!(text.contains(warn), "{text}");
+    let policy = policy.replace("\"PATH\",", "\"PATH\", \"gensokyo_*\",");
+    std::fs::write(home.join("config.toml"), policy).unwrap();
+    assert!(!e.ok(&["doctor"]).contains("shell_environment_policy"));
+    std::fs::write(home.join("config.toml"), config).unwrap();
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);
     // Only these, whatever the shell running the tests has.

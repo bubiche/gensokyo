@@ -635,6 +635,67 @@ plugins."off@m".enabled = "true"
 }
 
 #[test]
+fn a_shell_environment_policy_that_keeps_gensokyos_variables_out_is_seen() {
+    let only = |c: &str| codex::setup(c).env_only;
+    let t = "[shell_environment_policy]\n";
+    // However the list is spelt: over lines with comments, dotted, or as filters.
+    let drops = [
+        format!("{t}include_only = [\"PATH\", 'HOME']"),
+        format!("{t}include_only = [\n  \"PATH\", # [\"GENSOKYO_*\"]\n  \"HOME\",\n]"),
+        "shell_environment_policy.include_only = [\"PATH\"]".into(),
+        format!("{t}inherit = \"core\"\nset = {{ A = \"1\" }}\ninclude_only = [\"P*\"]"),
+    ];
+    for c in &drops {
+        assert_eq!(only(&format!("{c}\n")), ["include_only"], "{c}");
+    }
+    let filters = [
+        format!("{t}filters = {{ \"PATH\" = \"include\", \"GENSOKYO_*\" = \"exclude\" }}"),
+        "[shell_environment_policy.filters]\nPATH = \"include\"\n\"AWS_*\" = \"exclude\"".into(),
+        "shell_environment_policy.filters.\"PATH\" = \"include\"".into(),
+    ];
+    for c in &filters {
+        assert_eq!(only(&format!("{c}\n")), ["filters"], "{c}");
+    }
+    let both = format!("{t}include_only = [\"PATH\"]\nfilters = {{ HOME = \"include\" }}\n");
+    assert_eq!(only(&both), ["include_only", "filters"]);
+    // A pattern that matches GENSOKYO_RESIDENT, in any case, in either list, keeps them all.
+    let keeps = [
+        format!("{t}include_only = [\"PATH\", \"gensokyo_*\"]"),
+        format!("{t}include_only = [\"*\"]"),
+        format!("{t}include_only = [\n  \"PATH\",\n  \"GENSOKYO_RES?DENT\",\n]"),
+        format!("{t}include_only = [\"PATH\"]\nfilters = {{ \"G*T\" = \"include\" }}"),
+        format!("{t}filters = {{ \"*_RESIDENT\" = \"include\", PATH = \"include\" }}"),
+    ];
+    for c in &keeps {
+        assert!(only(&format!("{c}\n")).is_empty(), "{c}");
+    }
+    // No list, an empty one, only excludes, one not read, or one in another table: none.
+    let none = [
+        format!("{t}inherit = \"none\"\nexclude = [\"*\"]"),
+        format!("{t}include_only = []"),
+        format!("{t}filters = {{ \"PATH\" = \"exclude\" }}"),
+        format!("{t}include_only = [\"PATH\", 1]"),
+        format!("{t}include_only = [\"PATH\""),
+        "[tui]\ninclude_only = [\"PATH\"]".into(),
+        "x = \"\"\"\n[shell_environment_policy]\ninclude_only = [\"PATH\"]\n\"\"\"".into(),
+    ];
+    for c in &none {
+        assert!(only(&format!("{c}\n")).is_empty(), "{c}");
+    }
+    for (p, n, m) in [
+        ("GENSOKYO_*", "gensokyo_resident", true),
+        ("G*T", "GENSOKYO_RESIDENT", true),
+        ("*E*E*", "GENSOKYO_RESIDENT", true),
+        ("GENSOKYO_RES?DENT", "GENSOKYO_RESIDENT", true),
+        ("GENSOKYO_SOCKET", "GENSOKYO_RESIDENT", false),
+        ("GENSOKYO_RESIDENT?", "GENSOKYO_RESIDENT", false),
+        ("*X", "GENSOKYO_RESIDENT", false),
+    ] {
+        assert_eq!(codex::wild(p, n), m, "{p} {n}");
+    }
+}
+
+#[test]
 fn a_plugin_ships_hooks_by_its_hooks_file_or_its_manifest_in_any_version_cached() {
     let home = fresh("cx-plugins");
     let cache = home.join("plugins/cache/market");

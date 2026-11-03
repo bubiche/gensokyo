@@ -198,6 +198,19 @@ fn codex(path: Option<&OsStr>) -> Vec<String> {
     });
     let notify = if setup.notify { "sets" } else { "has no" };
     out.push(format!("config.toml {notify} notify; gensokyo leaves it alone"));
+    if !setup.env_only.is_empty() {
+        let fix = |l: &&str| match *l {
+            "filters" => "\"GENSOKYO_*\" = \"include\" to filters",
+            _ => "\"GENSOKYO_*\" to include_only",
+        };
+        let fixes: Vec<&str> = setup.env_only.iter().map(fix).collect();
+        out.push(format!(
+            "config.toml's shell_environment_policy {} keeps GENSOKYO_* from residents' \
+             commands: a resident's own gensokyo calls arrive with your rights; add {}",
+            setup.env_only.join(" and "),
+            fixes.join(" or ")
+        ));
+    }
     out
 }
 

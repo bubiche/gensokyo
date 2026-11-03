@@ -489,21 +489,28 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
 /// What a user's `config.toml` has that runs beside gensokyo, by name only, no value kept: the
 /// plugins it enables, as `<name>@<marketplace>`; whether it has hooks of its own (under
 /// `hooks`, but not the trust Codex keeps in `hooks.state`); and whether it sets `notify` at
-/// its top level.
+/// its top level. And which of `shell_environment_policy`'s `include_only` and `filters` keep
+/// gensokyo's variables from its agent's commands, as [`setup`] reads them.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Setup {
     pub plugins: Vec<String>,
     pub hooks: bool,
     pub notify: bool,
+    pub env_only: Vec<&'static str>,
 }
 
 /// `config`'s [`Setup`], by a small scan as `projects` is: each key is read with the table it is
 /// in, so `[plugins."<name>@<marketplace>"]` then `enabled = true`, as Codex writes one, is the
 /// same as `plugins."<name>@<marketplace>".enabled = true`. Inline tables are not read, but for
-/// the first key of a `hooks = {…}`.
+/// the first key of a `hooks = {…}` and the strings a `filters = {…}` maps its patterns to.
+///
+/// Codex keeps only what an `include_only` pattern, or a `filters` one set to `"include"`,
+/// matches, and does so after it adds what `set` names: a list of them that matches no
+/// `GENSOKYO_RESIDENT` leaves it out of every command, as one that cannot be read does not.
 pub fn setup(config: &str) -> Setup {
     let mut s = Setup::default();
     let mut table = Vec::new();
+    let mut only = Vec::new();
     for line in plain_lines(config) {
         if line.starts_with('[') {
             // A header not read is a table that is none of these.
@@ -524,8 +531,97 @@ pub fn setup(config: &str) -> Setup {
         {
             s.plugins.push(name.clone());
         }
+        let (list, found) = match &path[..] {
+            [p, rest @ ..] if p == "shell_environment_policy" => match rest {
+                [l] if l == "include_only" => ("include_only", strings(tail(config, v))),
+                [l] if l == "filters" => ("filters", included(tail(config, v))),
+                [l, pattern @ ..] if l == "filters" => {
+                    let include = toml_unquote(v.trim()).is_some_and(|(v, _)| v == "include");
+                    ("filters", Some(include.then(|| pattern.join(".")).into_iter().collect()))
+                }
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let found = found.unwrap_or_default();
+        if !found.is_empty() && !s.env_only.contains(&list) {
+            s.env_only.push(list);
+        }
+        only.extend(found);
+    }
+    if only.iter().any(|p| wild(p, "GENSOKYO_RESIDENT")) {
+        s.env_only.clear();
     }
     s
+}
+
+/// `config` from where `v`, a slice of it, starts, so a value is read on past its line.
+fn tail<'a>(config: &'a str, v: &str) -> &'a str {
+    &config[v.as_ptr() as usize - config.as_ptr() as usize..]
+}
+
+/// The strings of the array `v` opens; none if any item is no string.
+fn strings(v: &str) -> Option<Vec<String>> {
+    let (mut s, mut out) = (v.trim_start().strip_prefix('[')?, Vec::new());
+    loop {
+        s = between(s);
+        if s.starts_with(']') {
+            return Some(out);
+        }
+        let (item, rest) = toml_unquote(s)?;
+        out.push(item);
+        s = rest;
+    }
+}
+
+/// The keys of the inline table `v` opens that it maps to `"include"`; none if any value is no
+/// string.
+fn included(v: &str) -> Option<Vec<String>> {
+    let (mut s, mut out) = (v.trim_start().strip_prefix('{')?, Vec::new());
+    loop {
+        s = between(s);
+        if s.starts_with('}') {
+            return Some(out);
+        }
+        let (key, rest) = dotted(s)?;
+        let (value, rest) = toml_unquote(rest.strip_prefix('=')?.trim_start())?;
+        if value == "include" {
+            out.push(key.join("."));
+        }
+        s = rest;
+    }
+}
+
+/// `s` past the spaces, commas and comments between one item and the next.
+fn between(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start().trim_start_matches(',');
+        match s.strip_prefix('#') {
+            Some(c) => s = c.split_once('\n').map_or("", |(_, r)| r),
+            None if s.starts_with(|c: char| c.is_whitespace()) => {}
+            None => return s,
+        }
+    }
+}
+
+/// Whether `name` matches `pattern` as Codex matches a variable's: `*` for any run, `?` for any
+/// one character, in any case.
+pub fn wild(pattern: &str, name: &str) -> bool {
+    let up = |s: &str| s.chars().map(|c| c.to_ascii_uppercase()).collect::<Vec<_>>();
+    let (p, n) = (up(pattern), up(name));
+    // Where the last `*` was, and how much of `name` it has taken so far.
+    let (mut i, mut j, mut star) = (0, 0, None);
+    while j < n.len() {
+        match p.get(i) {
+            Some('*') => (star, i) = (Some((i, j)), i + 1),
+            Some(&c) if c == '?' || c == n[j] => (i, j) = (i + 1, j + 1),
+            _ => match star {
+                Some((at, took)) => (star, i, j) = (Some((at, took + 1)), at + 1, took + 1),
+                None => return false,
+            },
+        }
+    }
+    p[i..].iter().all(|&c| c == '*')
 }
 
 /// Whether the key or table at `path`, its value `v`, holds hooks: anything under `hooks` but

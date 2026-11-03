@@ -699,6 +699,11 @@ fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
     assert_eq!(ritual::problem(&rit(&headless), now, &tz, &no), None, "exec has no prompt");
     let i = ritual::info(&rit(&good), now, &tz, &yes, &Dir::at(&root, "morning"));
     assert_eq!(i.agent, Agent::Codex);
+    // Whose mode it is, where the user reads what each run may do.
+    let p = ritual::powers(&i);
+    assert_eq!(p[..2], [("agent", "codex".to_string()), ("mode", "acceptEdits".to_string())]);
+    let i = ritual::info(&rit("---\nmode: auto\n---\nhi"), now, &tz, &yes, &Dir::at(&root, "c"));
+    assert_eq!(ritual::powers(&i), [("mode", "auto".to_string())]);
     for (line, want) in [
         ("agent: gemini\n", "agent: gemini is neither claude nor codex"),
         ("allowed_tools: Read\n", "allowed_tools: Codex has no tools allowed without asking"),

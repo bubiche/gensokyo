@@ -688,10 +688,14 @@ pub fn when(t: i64, tz: &TimeZone) -> String {
     }
 }
 
-/// What each run may do without asking, as label and value: shown before one is resumed.
+/// What each run may do without asking, as label and value: shown before one is resumed. Codex
+/// first when it is Codex's, whose modes are not Claude Code's.
 pub fn powers(i: &RitualInfo) -> Vec<(&'static str, String)> {
-    let mode = i.mode.clone().unwrap_or_else(|| "your settings' default".into());
-    let mut v = vec![("mode", mode)];
+    let mut v = Vec::new();
+    if i.agent == Agent::Codex {
+        v.push(("agent", "codex".into()));
+    }
+    v.push(("mode", i.mode.clone().unwrap_or_else(|| "your settings' default".into())));
     if !i.allowed_tools.is_empty() {
         v.push(("tools", i.allowed_tools.join(", ")));
     }

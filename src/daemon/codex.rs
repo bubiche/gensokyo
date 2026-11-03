@@ -133,6 +133,84 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     Ok(a)
 }
 
+/// `codex exec`'s argv for a headless ritual run, but its prompt, which goes after a `--`: its
+/// events as JSONL on stdout, its answer in `answer`. Its mode's flags but the approval policy,
+/// which exec has none of: it never asks. No hooks and none of gensokyo's words, as `claude -p`
+/// has none: the role's alone, as its instructions. The ritual's directory is added for its
+/// notes; outside a git repository exec refuses to start unless told it may.
+pub fn exec(
+    r: &crate::ritual::Ritual,
+    role: Option<&str>,
+    dir: &Path,
+    answer: &Path,
+) -> Result<Vec<String>, String> {
+    check(r.mode.as_deref(), r.effort.as_deref())?;
+    let mut a: Vec<String> = ["exec", "--json", "-o"].map(String::from).into();
+    a.push(answer.to_string_lossy().into_owned());
+    let mut mode = r.mode.as_deref().and_then(mode_flags).unwrap_or_default().iter();
+    while let Some(f) = mode.next() {
+        match *f {
+            "-a" => _ = mode.next(),
+            f => a.push(f.into()),
+        }
+    }
+    if let Some(m) = &r.model {
+        a.extend(["-m".into(), m.clone()]);
+    }
+    if let Some(e) = &r.effort {
+        a.extend(["-c".into(), format!("model_reasoning_effort={e}")]);
+    }
+    if let Some(w) = role {
+        a.extend(["-c".into(), format!("developer_instructions={}", toml_str(w))]);
+    }
+    a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
+    let cwd = Path::new(r.cwd.as_deref().unwrap_or_default());
+    if !cwd.ancestors().any(|d| d.join(".git").exists()) {
+        a.push("--skip-git-repo-check".into());
+    }
+    Ok(a)
+}
+
+/// What a `codex exec --json` run's events say: its thread, whether its turn completed or why it
+/// failed, and its tokens in and out. Error items are warnings (the hook trust bypass gives
+/// two), and a line that is no event is passed over.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Exec {
+    pub thread: Option<String>,
+    pub completed: bool,
+    pub failed: Option<String>,
+    pub tokens: Option<(u64, u64)>,
+}
+
+impl Exec {
+    pub fn read(jsonl: &str) -> Exec {
+        let mut e = Exec::default();
+        for v in jsonl.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
+            match v["type"].as_str() {
+                Some("thread.started") => e.thread = v["thread_id"].as_str().map(Into::into),
+                Some("turn.completed") => {
+                    e.completed = true;
+                    let n = |k: &str| v["usage"][k].as_u64();
+                    e.tokens = n("input_tokens").zip(n("output_tokens"));
+                }
+                Some("turn.failed") => {
+                    let err = &v["error"];
+                    let why = err["message"].as_str().or(err.as_str()).unwrap_or("its turn failed");
+                    e.failed = Some(why.into());
+                }
+                _ => {}
+            }
+        }
+        e
+    }
+
+    /// Done: its turn completed, none failed, and it exited 0. `code` is none for an exit no
+    /// daemon saw, when its events are all there is to go by.
+    pub fn ok(&self, code: Option<i32>) -> bool {
+        self.completed && self.failed.is_none() && code.is_none_or(|c| c == 0)
+    }
+}
+
 /// `codex queue`'s argv: `text` as the next prompt of `thread`, once it is idle. Each value
 /// joined to its flag, so text that starts with `-` is never taken for a flag.
 pub fn queue(thread: &str, text: &str) -> Vec<OsString> {

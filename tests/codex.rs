@@ -1176,3 +1176,100 @@ fn a_recalled_codex_helper_resumes_its_thread_and_an_interrupt_before_still_hold
     // Nothing was typed into its pane for it.
     assert!(!d.stub(&h["id"], "input").contains("while you were gone"));
 }
+
+fn ritual(front: &str) -> gensokyo::ritual::Ritual {
+    let text = format!("---\nagent: codex\n{front}---\nDo it.");
+    gensokyo::ritual::parse("r", Path::new("/x/r.md"), false, &text)
+}
+
+/// A headless run is `codex exec`: events on stdout, the answer in a file, the mode's flags
+/// with no approval policy (exec never asks), and no hooks or words of gensokyo's.
+#[test]
+fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
+    let repo = fresh("cx-exec");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let in_repo = |f: &str| ritual(&format!("cwd: {}\n{f}", repo.display()));
+    let (dir, answer) = (Path::new("/s/rituals/r"), Path::new("/s/rituals/r/runs/1.txt"));
+    let r = in_repo("model: gpt-x\neffort: high\nmode: default\n");
+    assert_eq!(
+        codex::exec(&r, Some("Be \"brief\".\nOnly read."), dir, answer).unwrap(),
+        [
+            "exec",
+            "--json",
+            "-o",
+            "/s/rituals/r/runs/1.txt",
+            "-s",
+            "read-only",
+            "-m",
+            "gpt-x",
+            "-c",
+            "model_reasoning_effort=high",
+            "-c",
+            r#"developer_instructions="Be \"brief\".\nOnly read.""#,
+            "--add-dir",
+            "/s/rituals/r"
+        ]
+    );
+    let tail = |r: &gensokyo::ritual::Ritual| {
+        let a = codex::exec(r, None, dir, answer).unwrap();
+        a[4..].to_vec()
+    };
+    assert_eq!(tail(&in_repo("mode: acceptEdits\n"))[..2], ["-s", "workspace-write"]);
+    assert_eq!(tail(&in_repo("mode: auto\n"))[..1], ["--approve-for-me"]);
+    let bypass = tail(&in_repo("mode: bypassPermissions\n"));
+    assert_eq!(bypass[..1], ["--dangerously-bypass-approvals-and-sandbox"]);
+    // No mode: whatever Codex's own config says.
+    assert_eq!(tail(&in_repo("")), ["--add-dir", "/s/rituals/r"]);
+    // Outside any repository exec refuses to run unless told it may.
+    let bare = fresh("cx-exec-bare");
+    let out = ritual(&format!("cwd: {}\n", bare.display()));
+    assert_eq!(tail(&out), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
+    for a in codex::exec(&r, Some("x"), dir, answer).unwrap() {
+        assert!(!a.contains("hook") && a != "-a", "{a}");
+    }
+    let e = codex::exec(&in_repo("mode: dontAsk\n"), None, dir, answer).unwrap_err();
+    assert!(e.contains("Codex has no dontAsk mode"), "{e}");
+}
+
+/// A run is done when it exits 0 and its turn completed; a failed turn says why. Error items
+/// are warnings, and a line that is no event is passed over.
+#[test]
+fn a_codex_exec_runs_events_say_whether_it_was_done() {
+    let done = concat!(
+        r#"{"type":"thread.started","thread_id":"019a2b3c-0000-7000-8000-000000000001"}"#,
+        "\n",
+        r#"{"type":"turn.started"}"#,
+        "\n",
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"hooks"}}"#,
+        "\nnot an event\n",
+        r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hi"}}"#,
+        "\n",
+        r#"{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":7}}"#,
+        "\n",
+    );
+    let e = codex::Exec::read(done);
+    assert_eq!(e.thread.as_deref(), Some("019a2b3c-0000-7000-8000-000000000001"));
+    assert_eq!((e.completed, e.failed.as_deref(), e.tokens), (true, None, Some((120, 7))));
+    assert!(e.ok(Some(0)) && e.ok(None), "unseen, its events are all there is");
+    assert!(!e.ok(Some(1)));
+    let failed = concat!(
+        r#"{"type":"thread.started","thread_id":"t"}"#,
+        "\n",
+        r#"{"type":"turn.started"}"#,
+        "\n",
+        r#"{"type":"turn.failed","error":{"message":"unsupported model: gpt-x"}}"#,
+        "\n"
+    );
+    let e = codex::Exec::read(failed);
+    assert_eq!((e.completed, e.failed.as_deref()), (false, Some("unsupported model: gpt-x")));
+    assert!(!e.ok(Some(1)) && !e.ok(Some(0)) && !e.ok(None));
+    // An error that is a bare string reads the same.
+    let e = codex::Exec::read(r#"{"type":"turn.failed","error":"stream closed"}"#);
+    assert_eq!(e.failed.as_deref(), Some("stream closed"));
+    // Exited 0 with its turn never completed: not done.
+    let cut =
+        concat!(r#"{"type":"thread.started","thread_id":"t"}"#, "\n", r#"{"type":"turn.started"}"#);
+    let e = codex::Exec::read(cut);
+    assert!(!e.completed && e.failed.is_none() && !e.ok(Some(0)));
+    assert_eq!(codex::Exec::read(""), codex::Exec::default());
+}

@@ -78,6 +78,12 @@ PROMPT
   remember each other in conversation, when a frequent ritual may outrun its interval, or when
   the user asks for one of these.
 - `--headless` is the run with no pane at all (see below).
+- `--agent codex` runs it on Codex instead of Claude Code, only when the user asks for Codex:
+  a fresh or persistent run is a Codex resident, a headless one is `codex exec`. Codex has no
+  `--allowed-tools` or `--mcp-config` (both are refused): its `--mode` alone says what it may
+  do, and `default` or `plan` keep it read-only, notes included, so a run that writes needs
+  `--mode acceptEdits` or wider. Its trust is Codex's own: the user opens Codex in that
+  directory once and trusts it, and the warning says so.
 - `--when <probe>` makes the schedule a polling interval: each fire first runs the probe, a
   program in gensokyo's `probes/` (see below), and starts a run only when its output differs
   from what it printed for the last run. For "tell me when X changes".
@@ -174,7 +180,7 @@ gensokyo ritual remove slack-morning  # "delete it" - the file, its notes and it
 
 Read `list --json` before you answer "what have I got scheduled?" or change one: it carries
 each ritual's `name`, `enabled`, `schedule`, `next_fire` (epoch seconds; `next_fire_local` is
-the same minute on this machine's clock), `last_run`, `last` (its newest journal line), `target`, `headless`, `keep`, `overlap`,
+the same minute on this machine's clock), `last_run`, `last` (its newest journal line), `target`, `agent` (only when it is `codex`), `headless`, `keep`, `overlap`,
 `deliver`, `cwd`, `mode`, `allowed_tools`, `mcp_config`, `role`, `when`, `problem`, `path` and
 `shipped`. A `problem` is why that ritual is not firing,
 and it is the answer to "why didn't it run?" - unless it has a `when`: a probe that saw nothing

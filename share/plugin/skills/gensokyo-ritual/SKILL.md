@@ -101,10 +101,11 @@ You cannot resume or run it yourself. Say that it is paused and give them the co
 ## A run with no pane: `--headless`
 
 `--headless` runs the ritual as a background `claude -p` (`codex exec` for Codex) instead: no
-pane, nothing to watch, and when it finishes gensokyo notifies the user and keeps what it said in a log of its own, which
-`gensokyo ritual log <name>` names. One still going after an hour is stopped. Offer it when the user wants the **answer** and not the
-working - "just tell me what came in overnight" - and leave it alone when they said they want to
-see it run, or when the run is going to want a decision from them.
+pane, nothing to watch, and when it finishes gensokyo notifies the user and keeps what it said
+in a log of its own, which `gensokyo ritual log <name>` names. One still going after an hour is
+stopped. Offer it when the user wants the **answer** and not the working - "just tell me what
+came in overnight" - and leave it alone when they said they want to see it run, or when the run
+is going to want a decision from them.
 
 Two things change when you write one, and both belong in what you say back before you create it:
 
@@ -167,7 +168,8 @@ That shows what it stops to ask, while the user is there to answer, which is muc
 finding out at 09:05 on Monday. An answer lasts only for that session, and each fire of the
 default target is a fresh one: tell the user what to add to `allowed_tools` in its file (for a
 Codex ritual, which `mode` it needs), or the next fire stops at the same prompt. Its own notes
-file needs nothing: every run may write that. The clock picks the new ritual up on its own; nothing needs restarting.
+file needs nothing: every run may write that. The clock picks the new ritual up on its own;
+nothing needs restarting.
 
 ## The other things the user will ask for
 

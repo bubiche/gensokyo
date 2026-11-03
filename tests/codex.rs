@@ -1186,11 +1186,10 @@ fn ritual(front: &str) -> gensokyo::ritual::Ritual {
 /// with no approval policy (exec never asks), and no hooks or words of gensokyo's.
 #[test]
 fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
-    let repo = fresh("cx-exec");
-    std::fs::create_dir_all(repo.join(".git")).unwrap();
-    let in_repo = |f: &str| ritual(&format!("cwd: {}\n{f}", repo.display()));
+    let cwd = fresh("cx-exec");
+    let at = |f: &str| ritual(&format!("cwd: {}\n{f}", cwd.display()));
     let (dir, answer) = (Path::new("/s/rituals/r"), Path::new("/s/rituals/r/runs/1.txt"));
-    let r = in_repo("model: gpt-x\neffort: high\nmode: default\n");
+    let r = at("model: gpt-x\neffort: high\nmode: default\n");
     assert_eq!(
         codex::exec(&r, Some("Be \"brief\".\nOnly read."), dir, answer).unwrap(),
         [
@@ -1215,20 +1214,16 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
         let a = codex::exec(r, None, dir, answer).unwrap();
         a[4..].to_vec()
     };
-    assert_eq!(tail(&in_repo("mode: acceptEdits\n"))[..2], ["-s", "workspace-write"]);
-    assert_eq!(tail(&in_repo("mode: auto\n"))[..1], ["--approve-for-me"]);
-    let bypass = tail(&in_repo("mode: bypassPermissions\n"));
+    assert_eq!(tail(&at("mode: acceptEdits\n"))[..2], ["-s", "workspace-write"]);
+    assert_eq!(tail(&at("mode: auto\n"))[..1], ["--approve-for-me"]);
+    let bypass = tail(&at("mode: bypassPermissions\n"));
     assert_eq!(bypass[..1], ["--dangerously-bypass-approvals-and-sandbox"]);
     // No mode, which a ritual that passed its check never has: no sandbox flags at all.
-    assert_eq!(tail(&in_repo("")), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
-    // Outside any repository too: exec would refuse a directory Codex has not trusted.
-    let bare = fresh("cx-exec-bare");
-    let out = ritual(&format!("cwd: {}\n", bare.display()));
-    assert_eq!(tail(&out), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
+    assert_eq!(tail(&at("")), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
     for a in codex::exec(&r, Some("x"), dir, answer).unwrap() {
         assert!(!a.contains("hook") && a != "-a", "{a}");
     }
-    let e = codex::exec(&in_repo("mode: dontAsk\n"), None, dir, answer).unwrap_err();
+    let e = codex::exec(&at("mode: dontAsk\n"), None, dir, answer).unwrap_err();
     assert!(e.contains("Codex has no dontAsk mode"), "{e}");
 }
 

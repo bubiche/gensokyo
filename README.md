@@ -39,8 +39,7 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
   2.1.306; nothing checks the version.
-- Optional: OpenAI's Codex, for [Codex residents](#codex): `$GENSOKYO_CODEX`, else the first
-  `codex` on `PATH`, else the ChatGPT app's own copy.
+- Optional: OpenAI's Codex, for [Codex residents](#codex).
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
@@ -224,18 +223,17 @@ text.
 Inside the resident, gensokyo draws its own one-line status line; `STATUSLINE=user` in the
 config runs your own `statusLine` command instead, with the same input.
 
-**Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every resident starts with Claude
-Code's Remote Control, under its own name: the Claude app on your phone and claude.ai/code list
-it, and a prompt or an answer can be given there while it stays in the shrine. Once it has had a
-prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives as `remote`.
-It is off by default, since whoever holds your claude.ai login can then type into every
-resident; it needs that login (not an API key), a Claude Code that takes `--remote-control`
-(2.1.306 does; an older one may refuse the flag, and the resident not start), and the Mac
-awake and online. The setting is
-read at each launch, so `gensokyo renew Marisa` brings it to a resident already running, and
-`doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take it, so
-claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs and
-cloud sessions. Claude Code's own `/remote-control` turns it on in one resident until that one
+**Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every Claude Code resident starts
+with Claude Code's Remote Control, under its own name: the Claude app on your phone and
+claude.ai/code list it, and a prompt or an answer can be given there while it stays in the shrine.
+Once it has had a prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives
+as `remote`. It is off by default, since whoever holds your claude.ai login can then type into every
+resident; it needs that login (not an API key), a Claude Code that takes `--remote-control` (2.1.306
+does; an older one may refuse the flag, and the resident not start), and the Mac awake and online.
+The setting is read at each launch, so `gensokyo renew Marisa` brings it to a resident already
+running, and `doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take
+it, so claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs
+and cloud sessions. Claude Code's own `/remote-control` turns it on in one resident until that one
 starts again. On the web, a permission prompt's main button is "Always allow", which lasts the
 session; "Allow once" is under its arrow.
 
@@ -635,8 +633,7 @@ and a lead commits its helper's work. In a worktree it starts as it would anywhe
 - **Trust.** A lead's Codex helper, and a Codex ritual's resident, need a directory Codex
   trusts: `[projects."<dir>"] trust_level = "trusted"` in `$CODEX_HOME/config.toml` (`~/.codex`
   by default), for it or its repository's main checkout, as Codex writes once you trust it there.
-  gensokyo only reads that file, and leaves its `notify` alone. Your own summon shows Codex's
-  trust prompt in the pane.
+  gensokyo only reads that file, and leaves its `notify` alone.
 - **Hooks.** Every launch passes `--dangerously-bypass-hook-trust`, with gensokyo's hooks as
   `-c hooks.<Event>=…`, so Codex does not hold them for review. Any other hook Codex has enabled
   then runs unreviewed too. `gensokyo doctor` lists what it found: `hooks.json`, `[hooks]` in

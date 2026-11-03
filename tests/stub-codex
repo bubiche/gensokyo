@@ -1,7 +1,7 @@
 #!/bin/bash
 # tests/stub-codex - stands in for the `codex` binary so gensokyo can run a Codex resident without
 # Codex or an OpenAI login. It implements just enough of codex-cli 0.154:
-#   --version                 prints codex-cli 0.154.0-alpha.6.2
+#   --version                 prints codex-cli 0.154.0-alpha.6.2, its CODEX_HOME to version.home
 #   queue --thread <id> --message <text>
 #                             queues <text> for the interactive stub on that thread, which runs
 #                             it as a prompt once it is idle, but not after an interrupted turn
@@ -67,7 +67,8 @@ json() {
 uuid() { uuidgen | tr 'A-Z' 'a-z'; }
 
 case ${1:-} in
-  --version) echo "codex-cli 0.154.0-alpha.6.2"; exit 0 ;;
+  --version) printf '%s' "${CODEX_HOME-}" > "$STUB_STATE/version.home"
+    echo "codex-cli 0.154.0-alpha.6.2"; exit 0 ;;
   queue)
     printf '%s\0' "$@" > "$STUB_STATE/queue.args"
     thread='' msg=''

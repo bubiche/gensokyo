@@ -158,7 +158,7 @@ pub fn render(exe: &Path, env: &[(String, String)]) -> String {
 
 /// What the agent is given of this shell's environment.
 fn baked() -> Vec<(String, String)> {
-    const CARRIED: [&str; 7] = [
+    const CARRIED: [&str; 9] = [
         "PATH",
         "GENSOKYO_STATE_DIR",
         "GENSOKYO_CONFIG_DIR",
@@ -166,6 +166,8 @@ fn baked() -> Vec<(String, String)> {
         "GENSOKYO_SHARE",
         "GENSOKYO_CLAUDE",
         "CLAUDE_CONFIG_DIR",
+        "GENSOKYO_CODEX",
+        "CODEX_HOME",
     ];
     CARRIED
         .iter()

@@ -72,10 +72,11 @@ pub fn launched(argv: &[String]) -> Launched {
 /// What a launch or a `say` is told when `program` finds none.
 pub const MISSING: &str = "codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app";
 
-/// The `codex` to run: `$GENSOKYO_CODEX`, else the first on PATH that is not in gensokyo's own
-/// shim directory, else the ChatGPT app's.
+/// The `codex` to run: `$GENSOKYO_CODEX` unless empty, else the first on PATH that is not in
+/// gensokyo's own shim directory, else the ChatGPT app's.
 pub fn program(path: Option<&OsStr>) -> Option<PathBuf> {
-    find(std::env::var_os("GENSOKYO_CODEX"), path, &crate::shim::dir(), Path::new(APP))
+    let set = std::env::var_os("GENSOKYO_CODEX").filter(|c| !c.is_empty());
+    find(set, path, &crate::shim::dir(), Path::new(APP))
 }
 
 /// `set` when given, else the first `codex` on `path` outside `skip`, else `app` if it runs.
@@ -390,7 +391,7 @@ pub fn config_model(config: &str, profile: Option<&str>) -> Option<String> {
     let (mut top, mut chosen, mut theirs) = (None, None, Vec::new());
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            table = Some(profile_header(line));
+            table = Some(named_header(line, "profiles"));
             continue;
         }
         let Some((k, v)) = line.split_once('=') else { continue };
@@ -413,29 +414,10 @@ pub fn config_model(config: &str, profile: Option<&str>) -> Option<String> {
 
 /// A key as written, `model` or `"model"`; none for a dotted one.
 fn bare_key(k: &str) -> Option<String> {
-    let k = k.trim();
-    match toml_unquote(k) {
-        Some((k, rest)) => rest.trim().is_empty().then_some(k),
-        None => {
-            k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-').then(|| k.into())
-        }
+    match dotted(k)? {
+        (mut k, "") if k.len() == 1 => k.pop(),
+        _ => None,
     }
-}
-
-/// The name a `[profiles.<name>]` header gives, bare or quoted; none for any other header.
-fn profile_header(line: &str) -> Option<String> {
-    let rest = line.strip_prefix('[')?.trim_start();
-    let rest = rest.strip_prefix("profiles")?.trim_start().strip_prefix('.')?.trim_start();
-    let (name, rest) = match toml_unquote(rest) {
-        Some(q) => q,
-        None => {
-            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
-            let (name, rest) = rest.split_at(end.unwrap_or(rest.len()));
-            (name.to_string(), rest)
-        }
-    };
-    let rest = rest.trim_start().strip_prefix(']')?.trim();
-    (!name.is_empty() && (rest.is_empty() || rest.starts_with('#'))).then_some(name)
 }
 
 /// The context used, percent, as the last part of its title says: `Context 12% used`.
@@ -462,55 +444,226 @@ pub fn trusted_in(config: &str, cwd: &Path, root: Option<&Path>) -> bool {
 }
 
 /// The directories `config` has `trust_level = "trusted"` for, each as `[projects."<dir>"]`:
-/// how Codex writes a trust it was given. A small scan, not a TOML parser: any other table
+/// how Codex writes a trust it was given. Absolute ones only: a relative one would be read from
+/// the daemon's own directory. A small scan, not a TOML parser: any other table
 /// (`[projects."<dir>".x]` too) ends the one before it, and multi-line strings are skipped.
 pub fn projects(config: &str) -> Vec<PathBuf> {
     let (mut found, mut table) = (Vec::new(), None::<String>);
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            table = project_header(line);
+            table = named_header(line, "projects");
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
-        let v = toml_unquote(v.trim());
-        let rest = v.as_ref().map(|(_, r)| r.trim());
-        let trusted = v.as_ref().is_some_and(|(v, _)| v == "trusted")
-            && rest.is_some_and(|r| r.is_empty() || r.starts_with('#'));
-        if let Some(t) = table.as_ref().filter(|_| k.trim() == "trust_level" && trusted) {
+        let Some((k, v)) = dotted(line) else { continue };
+        let v = v.strip_prefix('=').and_then(|v| toml_unquote(v.trim()));
+        let trusted = v.is_some_and(|(v, r)| v == "trusted" && scalar(r).is_empty());
+        if let Some(t) = table.as_ref().filter(|_| k == ["trust_level"] && trusted) {
             found.push(PathBuf::from(t));
         }
     }
+    found.retain(|p| p.is_absolute());
     found
 }
 
-/// `config`'s lines, trimmed, but those inside a multi-line string.
-fn plain_lines(config: &str) -> impl Iterator<Item = &str> {
-    let mut long = None::<&str>;
-    config.lines().filter_map(move |line| {
-        if let Some(q) = long {
-            if line.matches(q).count() % 2 == 1 {
-                long = None;
+/// What a user's `config.toml` has that runs beside gensokyo, by name only, no value kept: the
+/// plugins it enables, as `<name>@<marketplace>`; whether it has hooks of its own (under
+/// `hooks`, but not the trust Codex keeps in `hooks.state`); and whether it sets `notify` at
+/// its top level.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Setup {
+    pub plugins: Vec<String>,
+    pub hooks: bool,
+    pub notify: bool,
+}
+
+/// `config`'s [`Setup`], by a small scan as `projects` is: each key is read with the table it is
+/// in, so `[plugins."<name>@<marketplace>"]` then `enabled = true`, as Codex writes one, is the
+/// same as `plugins."<name>@<marketplace>".enabled = true`. Inline tables are not read, but for
+/// the first key of a `hooks = {…}`.
+pub fn setup(config: &str) -> Setup {
+    let mut s = Setup::default();
+    let mut table = Vec::new();
+    for line in plain_lines(config) {
+        if line.starts_with('[') {
+            // A header not read is a table that is none of these.
+            table = header(line).unwrap_or_else(|| vec![String::new()]);
+            s.hooks |= hooks_in(&table, "");
+            continue;
+        }
+        let Some((key, v)) = dotted(line) else { continue };
+        let Some(v) = v.strip_prefix('=') else { continue };
+        let path: Vec<String> = table.iter().cloned().chain(key).collect();
+        s.notify |= path == ["notify"];
+        s.hooks |= hooks_in(&path, v);
+        if let [p, name, e] = &path[..]
+            && p == "plugins"
+            && e == "enabled"
+            && scalar(v) == "true"
+            && !s.plugins.contains(name)
+        {
+            s.plugins.push(name.clone());
+        }
+    }
+    s
+}
+
+/// Whether the key or table at `path`, its value `v`, holds hooks: anything under `hooks` but
+/// `hooks.state`, and a `hooks = {…}` by its first key.
+fn hooks_in(path: &[String], v: &str) -> bool {
+    match path {
+        [h, e, ..] => h == "hooks" && e != "state",
+        [h] => {
+            let first = v.trim_start().strip_prefix('{').and_then(dotted);
+            h == "hooks" && first.is_some_and(|(k, _)| k[0] != "state")
+        }
+        [] => false,
+    }
+}
+
+/// A value with its comment cut off.
+fn scalar(v: &str) -> &str {
+    v.split('#').next().unwrap_or("").trim()
+}
+
+/// A key's parts, each bare or quoted, joined by dots, and what follows it, trimmed.
+fn dotted(s: &str) -> Option<(Vec<String>, &str)> {
+    let (mut parts, mut s) = (Vec::new(), s.trim_start());
+    loop {
+        let (part, rest) = match toml_unquote(s) {
+            Some(q) => q,
+            None => {
+                let bare = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+                let end = s.find(|c| !bare(c)).unwrap_or(s.len());
+                (end > 0).then(|| (s[..end].to_string(), &s[end..]))?
             }
-            return None;
+        };
+        parts.push(part);
+        s = rest.trim_start();
+        match s.strip_prefix('.') {
+            Some(r) => s = r.trim_start(),
+            None => return Some((parts, s)),
         }
-        if let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| line.matches(q).count() % 2 == 1) {
-            long = Some(q);
-            return None;
-        }
-        Some(line.trim())
+    }
+}
+
+/// The parts of the table a `[...]` or `[[...]]` header names.
+fn header(line: &str) -> Option<Vec<String>> {
+    let (inner, end) = match line.strip_prefix("[[") {
+        Some(inner) => (inner, "]]"),
+        None => (line.strip_prefix('[')?, "]"),
+    };
+    let (parts, rest) = dotted(inner)?;
+    let rest = rest.strip_prefix(end)?.trim();
+    (rest.is_empty() || rest.starts_with('#')).then_some(parts)
+}
+
+/// Whether `plugin`, `<name>@<marketplace>`, ships hooks in any version `home` caches in
+/// `plugins/cache/<marketplace>/<name>/<version>/`: a `hooks/hooks.json` that holds any, or a
+/// `hooks` in its `.codex-plugin/plugin.json`, a path or the hooks themselves. Only those two
+/// files are opened, and no link is followed to a version.
+pub fn plugin_hooks(home: &Path, plugin: &str) -> bool {
+    let Some((name, market)) = plugin.rsplit_once('@') else { return false };
+    if [name, market].iter().any(|p| p.is_empty() || p.starts_with('.') || p.contains('/')) {
+        return false;
+    }
+    let versions = std::fs::read_dir(home.join("plugins/cache").join(market).join(name));
+    let versions = versions.into_iter().flatten().flatten();
+    let mut dirs = versions.filter(|v| v.file_type().is_ok_and(|t| t.is_dir())).map(|v| v.path());
+    dirs.any(|v| {
+        let manifest = json(&v.join(".codex-plugin/plugin.json"), false);
+        let hooks = json(&v.join("hooks/hooks.json"), false);
+        hooks.is_some_and(|h| holds(&h)) || manifest.is_some_and(|m| holds(&m["hooks"]))
     })
 }
 
-/// The directory a `[projects."<dir>"]` header names; none for any other header.
-fn project_header(line: &str) -> Option<String> {
-    let rest = line.strip_prefix('[')?.trim_start();
-    if rest.starts_with('[') {
-        return None;
+/// Whether `file`, a hooks.json of the user's own, holds any hooks; a link to one is followed.
+pub fn hooks_file(file: &Path) -> bool {
+    json(file, true).is_some_and(|h| holds(&h))
+}
+
+/// `file` as JSON, if it is a regular file, a link to one only when `follow`: a pipe there would
+/// never end.
+fn json(file: &Path, follow: bool) -> Option<serde_json::Value> {
+    let meta = if follow { std::fs::metadata(file) } else { std::fs::symlink_metadata(file) };
+    meta.ok().filter(std::fs::Metadata::is_file)?;
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
+/// Whether hooks as JSON have any in them: a path, or what its `hooks` (or itself) holds.
+fn holds(h: &serde_json::Value) -> bool {
+    use serde_json::Value::*;
+    match h.get("hooks").unwrap_or(h) {
+        Null | Bool(false) => false,
+        String(s) => !s.is_empty(),
+        Array(a) => !a.is_empty(),
+        Object(o) => !o.is_empty(),
+        _ => true,
     }
-    let rest = rest.strip_prefix("projects")?.trim_start().strip_prefix('.')?.trim_start();
-    let (dir, rest) = toml_unquote(rest)?;
-    let rest = rest.trim_start().strip_prefix(']')?.trim();
-    (rest.is_empty() || rest.starts_with('#')).then_some(dir)
+}
+
+/// `config`'s lines, trimmed, but those that open a multi-line string and those inside one or
+/// inside an array or inline table a line before opened.
+fn plain_lines(config: &str) -> impl Iterator<Item = &str> {
+    let mut state = (None, 0);
+    config.lines().filter_map(move |line| {
+        let start = state;
+        state = scan(line, state);
+        (start == (None, 0) && state.0.is_none()).then(|| line.trim())
+    })
+}
+
+/// The multi-line string open at a line's end, and how many brackets.
+type Scan = (Option<&'static str>, u32);
+
+/// The [`Scan`] after `line`, given the one as it starts: strings and comments are passed over
+/// as TOML reads them.
+fn scan(line: &str, (mut open, mut depth): Scan) -> Scan {
+    let mut rest = line;
+    loop {
+        if let Some(q) = open {
+            let Some(i) = close(rest, q) else { return (open, depth) };
+            (open, rest) = (None, &rest[i + q.len()..]);
+            continue;
+        }
+        let Some(i) = rest.find(['#', '"', '\'', '[', ']', '{', '}']) else { return (None, depth) };
+        let (c, after) = (rest.as_bytes()[i], &rest[i + 1..]);
+        rest = after;
+        match c {
+            b'#' => return (None, depth),
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {
+                let q = if c == b'"' { "\"\"\"" } else { "'''" };
+                if after.starts_with(&q[1..]) {
+                    (open, rest) = (Some(q), &after[2..]);
+                } else {
+                    let Some(j) = close(after, &q[..1]) else { return (None, depth) };
+                    rest = &after[j + 1..];
+                }
+            }
+        }
+    }
+}
+
+/// Where `q` closes the string `s` starts inside; in a basic one a `\` escapes what follows.
+fn close(s: &str, q: &str) -> Option<usize> {
+    let (s, mut i) = (s.as_bytes(), 0);
+    while i < s.len() {
+        match s[i] {
+            b'\\' if q.starts_with('"') => i += 2,
+            _ if s[i..].starts_with(q.as_bytes()) => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The name a `[<table>.<name>]` header gives; none for any other header.
+fn named_header(line: &str, table: &str) -> Option<String> {
+    match header(line).filter(|_| !line.starts_with("[["))?.as_slice() {
+        [t, name] if t == table => Some(name.clone()),
+        _ => None,
+    }
 }
 
 /// The main checkout `dir` belongs to: the directory holding the common git dir, read from the

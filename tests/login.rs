@@ -124,6 +124,10 @@ fn setup_writes_an_agent_launchd_can_load_and_remove_takes_it_out() {
     assert_eq!(extract(&p, "EnvironmentVariables.PATH", "raw"), path);
     let state = e.dir.display().to_string();
     assert_eq!(extract(&p, "EnvironmentVariables.GENSOKYO_STATE_DIR", "raw"), state);
+    // The codex residents run, and its home, are the ones this shell's doctor describes.
+    for (k, v) in stub_env(&e.dir).into_iter().filter(|(k, _)| k.contains("CODEX")) {
+        assert_eq!(extract(&p, &format!("EnvironmentVariables.{k}"), "raw"), v);
+    }
     assert_eq!(extract(&p, "StandardErrorPath", "raw"), format!("{state}/login.log"));
     let target = format!("gui/{}/{}", uid(), e.label);
     let boot = format!("bootout {target}\nbootstrap gui/{} {}\n", uid(), p.display());
@@ -210,6 +214,14 @@ fn doctor_reads_without_starting_anything() {
         assert!(has(l), "no `{l}` in:\n{text}");
     }
     assert!(text.contains("(a build from source)"), "{text}");
+    let codex = "  codex      0.154.0-alpha.6.2  ";
+    assert!(text.contains(codex) && text.contains("/tests/stub-codex (from GENSOKYO_CODEX)"));
+    for l in ["no hooks in ", "no enabled plugin declares hooks", "config.toml has no notify;"] {
+        assert!(text.contains(l), "no `{l}` in:\n{text}");
+    }
+    // Asked for its version in a home that is not there, Codex leaves nothing in any.
+    let asked = std::fs::read_to_string(e.dir.join("stub/version.home")).unwrap();
+    assert!(!asked.is_empty() && !Path::new(&asked).exists(), "{asked}");
     assert!(!e.up() && !e.dir.join("daemon.log").exists(), "doctor started a daemon");
     e.ok(&["list"]);
     let text = e.ok(&["doctor"]);
@@ -221,12 +233,40 @@ fn doctor_reads_without_starting_anything() {
     let size = text.lines().find(|l| l.trim_start().starts_with("size")).unwrap_or_default();
     assert!(size.contains(" MB; largest rituals/big/runs/1.log 3.0 MB, "), "{text}");
     assert!(!text.contains("never reach residents"), "{text}");
+    // Codex's own hooks run unreviewed beside gensokyo's; `notify` shows by its name alone.
+    let home = e.dir.join("codex");
+    let config = "notify = [\"SECRET\"]\n[plugins.\"p@m\"]\nenabled = true\n[hooks.Stop]\n";
+    std::fs::create_dir_all(home.join("plugins/cache/m/p/1/hooks")).unwrap();
+    let hooks = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}"#;
+    std::fs::write(home.join("plugins/cache/m/p/1/hooks/hooks.json"), hooks).unwrap();
+    std::fs::write(home.join("config.toml"), config).unwrap();
+    std::fs::write(home.join("hooks.json"), hooks).unwrap();
+    let text = e.ok(&["doctor"]);
+    let own = "/hooks.json, [hooks] in config.toml (a trusted project's .codex/ is not read)\n";
+    assert!(text.contains("runs unreviewed under gensokyo: ") && text.contains(own), "{text}");
+    let plugins = "plugins that declare hooks: p@m (should Codex load them, they run";
+    assert!(text.contains(plugins), "{text}");
+    assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);
     let o =
         c.env("ANTHROPIC_BASE_URL", "http://x").env("https_proxy", "http://y").output().unwrap();
     let want = "ANTHROPIC_BASE_URL https_proxy set here never reach residents launchd starts";
     assert!(out(&o).contains(want), "{}", out(&o));
+    // An empty GENSOKYO_CLAUDE or GENSOKYO_CODEX is unset: PATH's are found.
+    let bin = e.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stubs = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    for name in ["claude", "codex"] {
+        std::os::unix::fs::symlink(stubs.join(format!("stub-{name}")), bin.join(name)).unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let mut c = e.command(Path::new(BIN), &["doctor"]);
+    let o = c.env("GENSOKYO_CLAUDE", "").env("GENSOKYO_CODEX", "").env("PATH", path).output();
+    let text = out(&o.unwrap());
+    let bin = e.dir.file_name().unwrap().to_string_lossy();
+    assert!(text.contains(&format!("/{bin}/bin/claude\n")), "{text}");
+    assert!(text.contains(&format!("/{bin}/bin/codex (from PATH)\n")), "{text}");
 }
 
 #[test]

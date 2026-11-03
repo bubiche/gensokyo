@@ -405,6 +405,31 @@ trust_level = "trusted"
 }
 
 #[test]
+fn a_string_a_comment_or_an_array_over_lines_hides_no_table_after_it() {
+    let trust = "[projects.\"/a\"]\ntrust_level = \"trusted\"\n";
+    for before in [
+        "# not a ''' string\n",
+        "x = \"it'''s\"\n",
+        "x = 'say \"\"\"'\n",
+        "x = \"a \\\" ''' b\" # and '''\n",
+        "x = \"\"\"one\"\"\"\n",
+        "x = '''\n[no]\n'''\n",
+        "x = [\n  [1, 2],\n  { y = \"]\" },\n]\n",
+        "naïve = \"é'''\"\n",
+    ] {
+        assert_eq!(codex::projects(&format!("{before}{trust}")), [Path::new("/a")], "{before}");
+    }
+    // Nor one inside its table.
+    let inside = "[projects.\"/a\"]\nx = [\n  [1, 2],\n]\ntrust_level = \"trusted\"\n";
+    assert_eq!(codex::projects(inside), [Path::new("/a")]);
+    // A relative one is none: the daemon's own directory would be where it is read from.
+    assert!(codex::projects("[projects.dev]\ntrust_level = \"trusted\"\n").is_empty());
+    assert!(codex::projects("[projects.\"a/b\"]\ntrust_level = \"trusted\"\n").is_empty());
+    // An unclosed multi-line string runs to the end.
+    assert!(codex::projects(&format!("x = \"\"\"\n{trust}")).is_empty());
+}
+
+#[test]
 fn without_a_profile_the_model_is_read_from_the_configs_top_level() {
     assert_eq!(codex::config_model("model = \"gpt-5.5\"\n", None).as_deref(), Some("gpt-5.5"));
     let c = "# mine\nmodel_provider = \"x\"\nmodel='o4' # set by hand\n[tui]\nmodel = \"no\"\n";
@@ -465,6 +490,128 @@ approval_policy = "never"
     assert_eq!(codex::model(&argv(&["--", "-p", "deep"]), h).as_deref(), Some("o4-mini"));
     assert_eq!(codex::model(&argv(&["-p", "deep", "-m", "mine"]), h).as_deref(), Some("mine"));
     assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), config);
+}
+
+#[test]
+fn the_config_says_which_plugins_it_enables_its_own_hooks_and_notify_by_name() {
+    let config = r#"
+notify = ["/bin/notifier", "SECRET"] # its value is never kept
+model = "o4"
+[plugins."a@market"]
+enabled = true # on
+[plugins."b@market"]
+enabled = false
+[plugins."c@x@market"]
+"enabled" = true
+[plugins.bare]
+enabled = true
+[plugins."d@market".extra]
+enabled = true
+x = """
+[plugins."e@market"]
+enabled = true
+"""
+[hooks.state."k"]
+trusted_hash = "h"
+[tui]
+notify = true
+"#;
+    let s = codex::setup(config);
+    assert_eq!(s.plugins, ["a@market", "c@x@market", "bare"]);
+    assert!(s.notify && !s.hooks, "{s:?}");
+    // However the key is spelt: dotted, quoted or under `[plugins]`; not as an inline table,
+    // which Codex does not write.
+    let spelt = r#"
+plugins."f@m".enabled = true
+"plugins".'g@m'.enabled = true # quoted
+plugins."off@m".enabled = "true"
+[plugins]
+"h@m".enabled = true
+"i@m" = { enabled = true }
+"#;
+    assert_eq!(codex::setup(spelt).plugins, ["f@m", "g@m", "h@m"]);
+    // A hooks table or key is Codex's own hooks; one holding only its trust, or nothing, is not.
+    let hooks = [
+        "[hooks.Stop]",
+        "[[hooks.Stop]]",
+        "[\"hooks\".Stop]",
+        "hooks.Stop = []",
+        "\"hooks\" . 'Stop' = []",
+        "hooks = { Stop = [], state = {} }",
+        "[hooks]\nStop = []",
+    ];
+    for h in hooks {
+        assert!(codex::setup(&format!("{h}\n")).hooks, "{h}");
+    }
+    let not = [
+        "[hooks]",
+        "hooks = {}",
+        "hooks = { state = { k = { trusted_hash = \"h\" } } }",
+        "[hooks]\nstate.k.trusted_hash = \"h\"",
+        "[\"hooks\".state.\"k\"]\ntrusted_hash = \"h\"",
+        "hooks.state.k.trusted_hash = \"h\"\n[x]\nhooks = { Stop = [] }",
+        "x = [\n  [hooks.Stop],\n]",
+    ];
+    for h in not {
+        assert!(!codex::setup(&format!("{h}\n")).hooks, "{h}");
+    }
+    assert_eq!(codex::setup("[tui]\nnotify = []\n"), codex::Setup::default());
+    assert!(codex::setup("\"notify\" = [\n  \"a\",\n]\n").notify);
+}
+
+#[test]
+fn a_plugin_ships_hooks_by_its_hooks_file_or_its_manifest_in_any_version_cached() {
+    let home = fresh("cx-plugins");
+    let cache = home.join("plugins/cache/market");
+    let manifest = |p: &str, json: &str| {
+        let d = cache.join(p).join(".codex-plugin");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("plugin.json"), json).unwrap();
+    };
+    manifest("inline/1.0", r#"{"name":"inline","hooks":{"Stop":[]}}"#);
+    manifest("path/1.0", r#"{"name":"path","hooks":"./hooks.json"}"#);
+    manifest("none/1.0", r#"{"name":"none","skills":"./skills/"}"#);
+    manifest("broken/1.0", "{");
+    manifest("old/1.0", r#"{"name":"old"}"#);
+    let hooks_json = |p: &str, json: &str| {
+        let d = cache.join(p).join("hooks");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("hooks.json"), json).unwrap();
+    };
+    hooks_json("old/2.0", r#"{"hooks":{"Stop":[{"hooks":[]}]}}"#);
+    std::fs::write(cache.join("old/.codex-remote-plugin-install.json"), "{}").unwrap();
+    // Hooks that hold none are none.
+    for (i, empty) in ["\"\"", "[]", "false", "{}", "null", r#"{"hooks":{}}"#].iter().enumerate() {
+        manifest(&format!("empty/{i}"), &format!(r#"{{"name":"empty","hooks":{empty}}}"#));
+    }
+    hooks_json("empty/9", "{}");
+    hooks_json("empty/10", r#"{"hooks":{}}"#);
+    // Nor are they behind a link, or in a pipe, which would never end.
+    let elsewhere = fresh("cx-plugins-elsewhere");
+    manifest("linked/1.0", r#"{"name":"linked"}"#);
+    std::fs::create_dir_all(elsewhere.join("v/hooks")).unwrap();
+    std::fs::write(elsewhere.join("v/hooks/hooks.json"), r#"{"Stop":[]}"#).unwrap();
+    std::os::unix::fs::symlink(elsewhere.join("v"), cache.join("linked/2.0")).unwrap();
+    std::fs::create_dir_all(cache.join("linked/3.0/hooks")).unwrap();
+    let file = elsewhere.join("v/hooks/hooks.json");
+    std::os::unix::fs::symlink(file, cache.join("linked/3.0/hooks/hooks.json")).unwrap();
+    std::fs::create_dir_all(cache.join("pipe/1.0/.codex-plugin")).unwrap();
+    let fifo = cache.join("pipe/1.0/.codex-plugin/plugin.json");
+    assert!(Command::new("mkfifo").arg(fifo).status().unwrap().success());
+    let has = |p: &str| codex::plugin_hooks(&home, p);
+    assert!(has("inline@market") && has("path@market") && has("old@market"));
+    assert!(!has("none@market") && !has("broken@market") && !has("gone@market"));
+    assert!(!has("empty@market") && !has("linked@market") && !has("pipe@market"));
+    // The user's own hooks.json is read through a link, but never from a pipe.
+    let own = home.join("hooks.json");
+    std::os::unix::fs::symlink(elsewhere.join("v/hooks/hooks.json"), &own).unwrap();
+    assert!(codex::hooks_file(&own));
+    std::fs::remove_file(&own).unwrap();
+    assert!(Command::new("mkfifo").arg(&own).status().unwrap().success());
+    assert!(!codex::hooks_file(&own) && !codex::hooks_file(&home.join("gone.json")));
+    // A name that is not `<name>@<marketplace>`, or that would leave the cache, is none.
+    std::fs::create_dir_all(home.join("plugins/hooks")).unwrap();
+    assert!(!has("inline") && !has("..@cache") && !has("old@../cache/market") && !has("@market"));
 }
 
 #[test]

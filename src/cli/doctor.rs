@@ -1,9 +1,12 @@
-//! `gensokyo doctor`: which binary, which `claude`, and whether what gensokyo leans on is there.
+//! `gensokyo doctor`: which binary, which `claude` and `codex`, and whether what gensokyo leans on
+//! is there.
 //! It only reads: it never starts the daemon or loads anything.
 
 use super::{Error, login, request};
+use crate::daemon::codex;
 use crate::paths;
 use crate::proto::{Reply, Request};
+use std::ffi::OsStr;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -46,15 +49,18 @@ pub fn main() -> Result<(), String> {
         match &claude {
             None => "MISSING: install Claude Code (https://code.claude.com)".into(),
             Some(c) => {
-                let v = run(c, &["--version"], Duration::from_secs(10));
+                let v = run(Command::new(c).arg("--version"), Duration::from_secs(10));
                 let v = v.map(|o| o.lines().next().unwrap_or("").replace(" (Claude Code)", ""));
                 format!("{}  {}", v.as_deref().unwrap_or("?"), short(c))
             }
         },
     );
+    for (i, l) in codex(path.as_deref()).into_iter().enumerate() {
+        line(if i == 0 { "codex" } else { "" }, l);
+    }
     // The registry is undocumented: a change in it shows here first.
     if let Some(c) = &claude {
-        let out = run(c, &["agents", "--json"], Duration::from_secs(5));
+        let out = run(Command::new(c).args(["agents", "--json"]), Duration::from_secs(5));
         let parsed = out.as_deref().and_then(|o| {
             let all: Vec<serde_json::Value> = serde_json::from_str(o).ok()?;
             let read = crate::daemon::registry::parse(o.as_bytes())?.len();
@@ -139,6 +145,60 @@ pub fn main() -> Result<(), String> {
     Ok(())
 }
 
+/// Which codex gensokyo would run and by which rule, then what of Codex's own in its home may
+/// run in its residents: every launch bypasses hook review for gensokyo's hooks, and so for all
+/// the others. Codex is optional: none found is no fault.
+fn codex(path: Option<&OsStr>) -> Vec<String> {
+    let Some(c) = codex::program(path) else {
+        return vec![
+            "none (optional): not in GENSOKYO_CODEX, on PATH or in the ChatGPT app".into(),
+        ];
+    };
+    let rule = match () {
+        _ if std::env::var_os("GENSOKYO_CODEX").is_some_and(|c| !c.is_empty()) => "GENSOKYO_CODEX",
+        _ if c == Path::new(codex::APP) => "the ChatGPT app",
+        _ => "PATH",
+    };
+    // A home that is not there, never made: Codex leaves its temp files in the one it runs with.
+    let none = std::env::temp_dir().join(format!("gensokyo-doctor-{}", std::process::id()));
+    let v = run(Command::new(&c).arg("--version").env("CODEX_HOME", none), Duration::from_secs(10));
+    let v = v.map(|o| o.lines().next().unwrap_or("").replace("codex-cli ", ""));
+    let c = paths::short(&c.to_string_lossy());
+    let mut out = vec![format!("{}  {c} (from {rule})", v.as_deref().unwrap_or("?"))];
+    let Some(home) = codex::home() else { return out };
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    let setup = codex::setup(&config);
+    let file = home.join("hooks.json");
+    let mut own = Vec::new();
+    if codex::hooks_file(&file) {
+        own.push(paths::short(&file.to_string_lossy()));
+    }
+    if setup.hooks {
+        own.push("[hooks] in config.toml".into());
+    }
+    let unread = "a trusted project's .codex/ is not read";
+    out.push(match own.is_empty() {
+        true => format!(
+            "no hooks in {}'s config.toml or hooks.json; {unread}",
+            paths::short(&home.to_string_lossy())
+        ),
+        false => format!("runs unreviewed under gensokyo: {} ({unread})", own.join(", ")),
+    });
+    let hooked: Vec<String> =
+        setup.plugins.into_iter().filter(|p| codex::plugin_hooks(&home, p)).collect();
+    out.push(match hooked.is_empty() {
+        true => "no enabled plugin declares hooks".into(),
+        false => format!(
+            "plugins that declare hooks: {} (should Codex load them, they run unreviewed under \
+             gensokyo)",
+            hooked.join(", ")
+        ),
+    });
+    let notify = if setup.notify { "sets" } else { "has no" };
+    out.push(format!("config.toml {notify} notify; gensokyo leaves it alone"));
+    out
+}
+
 /// The daemon as it is, asked without starting one.
 fn daemon() -> String {
     let pid = UnixStream::connect(paths::socket_path()).ok().and_then(|s| super::peer_pid(&s));
@@ -199,9 +259,8 @@ fn bytes(n: u64) -> String {
 
 /// A command's stdout, if it succeeds within `most`. Read as it comes, so a long answer cannot
 /// fill the pipe and hold the child up.
-fn run(cmd: &Path, args: &[&str], most: Duration) -> Option<String> {
-    let mut c = Command::new(cmd);
-    c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+fn run(c: &mut Command, most: Duration) -> Option<String> {
+    c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     let mut child = c.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {

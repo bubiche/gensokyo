@@ -996,8 +996,8 @@ fn a_codex_residents_own_gensokyo_call_is_known_as_that_resident() {
     let f = d.dir.join(format!("stub/{id}.sh"));
     common::wait_for(LONG, || f.exists(), "its command to run");
     let out = std::fs::read_to_string(&f).unwrap();
-    assert!(out.contains(&format!("\nGENSOKYO_RESIDENT={id}\n")), "{out}");
-    assert!(out.contains("\nCODEX_THREAD_ID="), "{out}");
+    assert!(out.lines().any(|l| l == format!("GENSOKYO_RESIDENT={id}")), "{out}");
+    assert!(out.lines().any(|l| l.starts_with("CODEX_THREAD_ID=")), "{out}");
     assert!(!out.contains("STUB_STATE=") && !out.contains("CODEX_HOME="), "{out}");
     // Refused as only a resident's own `read` of itself is: the user's would show its screen.
     assert!(out.contains("Nitori is you: finish your turn instead"), "{out}");

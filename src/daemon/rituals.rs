@@ -524,12 +524,13 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
 }
 
 /// The session a persistent ritual keeps: typed into when it is here, recalled when it has
-/// left, started when there has never been one.
+/// left, started when there has never been one, or when it was another agent's.
 async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Fired>) {
     let d = Dir::of(&r.slug);
     let id = d.session().filter(|id| {
         let sh = shrine.borrow();
-        sh.entries.iter().any(|e| &e.rec.id == id) || sh.store.load_departed_id(id).is_some()
+        let here = sh.entries.iter().find(|e| &e.rec.id == id).map(|e| e.rec.agent);
+        here.or_else(|| sh.store.load_departed_id(id).map(|rec| rec.agent)) == Some(r.agent())
     });
     let Some(id) = id else {
         match fresh(shrine, r, &d, None) {

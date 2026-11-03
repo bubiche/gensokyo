@@ -1504,6 +1504,33 @@ fn a_persistent_codex_ritual_types_into_its_session_and_resumes_its_thread() {
     assert_eq!(args[args.len() - 4..], ["--add-dir", notes.as_str(), "resume", thread.as_str()]);
 }
 
+/// The session a persistent ritual keeps is its agent's: once that changes, it starts afresh.
+#[test]
+fn a_persistent_ritual_whose_agent_changed_starts_a_session_of_the_new_one() {
+    let text = hourly("target: persistent\n");
+    let d = Daemon::new("persist-agent", T0 + 120, &[("diary", &text)], &[]);
+    codex_trusts(&d);
+    d.cli(&["list"]);
+    wait(|| d.stamp("diary").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.live().len() == 1, "the session");
+    let claude = d.live()[0]["id"].clone();
+    let session =
+        || std::fs::read_to_string(d.dir.join("rituals/diary/session")).unwrap_or_default();
+    wait(|| session().trim() == claude.as_str().unwrap(), "the session file");
+    let r = d.req(json!({"t": "banish", "id": 4, "who": "diary"}));
+    assert_eq!(r["t"], "done", "{r}");
+
+    d.ritual("diary", &hourly("target: persistent\nagent: codex\nmode: acceptEdits\n"));
+    d.clock(T0 + 7200 + 5);
+    wait(|| d.live().len() == 1, "a session of Codex's");
+    let live = d.live();
+    assert_eq!(live[0]["agent"], "codex", "{live:?}");
+    assert_ne!(live[0]["id"], claude, "Claude's session recalled");
+    wait(|| session().trim() == live[0]["id"].as_str().unwrap(), "the session file naming it");
+    assert!(d.evs("diary", "sent").is_empty(), "typed into a session of its own");
+}
+
 #[test]
 fn a_headless_codex_run_is_codex_exec_and_logs_its_answer() {
     let (d, log) = headless_with("cx-hl", "agent: codex\nmode: acceptEdits\n", &[]);

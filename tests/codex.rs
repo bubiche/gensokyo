@@ -981,6 +981,28 @@ fn a_codex_resident_is_started_listed_left_and_resumed_on_its_thread() {
     assert_eq!(c["message"], "Nitori has left (/exit)", "{c}");
 }
 
+/// Codex's agent runs its commands with none of the environment Codex was started with, but
+/// for its thread and what `shell_environment_policy.set` names (the stand-in as strictly as
+/// that): a `gensokyo` run there still reaches the daemon as that resident, with its rights.
+#[test]
+fn a_codex_residents_own_gensokyo_call_is_known_as_that_resident() {
+    let d = daemon("sh", true);
+    let dir = d.dir.display().to_string();
+    let cmd = format!("/sh env; '{}' read Nitori", common::BIN);
+    let args = ["new", "--agent", "codex", "--json", "--name", "Nitori"];
+    let o = d.cli(&[&args[..], &["-p", "bypassPermissions", "--prompt", &cmd, &dir]].concat());
+    let r: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let id = r["id"].as_str().unwrap();
+    let f = d.dir.join(format!("stub/{id}.sh"));
+    common::wait_for(LONG, || f.exists(), "its command to run");
+    let out = std::fs::read_to_string(&f).unwrap();
+    assert!(out.contains(&format!("\nGENSOKYO_RESIDENT={id}\n")), "{out}");
+    assert!(out.contains("\nCODEX_THREAD_ID="), "{out}");
+    assert!(!out.contains("STUB_STATE=") && !out.contains("CODEX_HOME="), "{out}");
+    // Refused as only a resident's own `read` of itself is: the user's would show its screen.
+    assert!(out.contains("Nitori is you: finish your turn instead"), "{out}");
+}
+
 #[test]
 fn what_only_claude_code_has_is_refused_for_codex() {
     let d = daemon("b", true);

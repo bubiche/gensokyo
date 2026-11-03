@@ -38,8 +38,11 @@
 # and PermissionRequest for a Bash command with a description, with three choices; y, or Enter on
 # the first two, grants it (PostToolUse, whose tool_input has no description, as Codex sends it;
 # then the turn goes on to its Stop); Esc, n, or Enter on the third refuses it (Interrupt, no
-# Stop). Up and Down move between the choices. SessionEnd ("other") fires on leaving, whether or
-# not a session started.
+# Stop). Up and Down move between the choices. The prompt `/sh <command>` runs <command> with
+# `sh -c` as Codex's agent would, in an environment of only CODEX_THREAD_ID and what each
+# `-c shell_environment_policy.set.<NAME>="<value>"` sets (none of the stub's own), its output
+# in <resident>.sh once it is done; the turn goes on as any other. SessionEnd ("other") fires on
+# leaving, whether or not a session started.
 # Title, only with `-c tui.terminal_title=...`, by OSC 0 as Codex draws it: "Ready | Context 0%
 # used", then "Ready | <id cut to 29>... | ...", "Starting | ...", then Ready or Working, each held
 # for a moment so a poller sees it. A turn draws Working frames with a spinner glyph, through an
@@ -156,7 +159,7 @@ untoml() {
   printf '%s' "$out"
 }
 
-prompt='' model=gpt-5.6-sol mode=default trusted='' titled=''
+prompt='' model=gpt-5.6-sol mode=default trusted='' titled='' shellenv=()
 while [ $# -gt 0 ]; do
   case $1 in
     --) shift; prompt=$*; break ;;
@@ -166,6 +169,9 @@ while [ $# -gt 0 ]; do
             ev=${1#hooks.}; ev=${ev%%=*}; cmd=${1#*command=\"}; cmd=${cmd%\"\}\]\}\]}
             case $ev in *[!A-Za-z]*) ;; *) eval "hook_$ev=\$(untoml \"\$cmd\")" ;; esac ;;
           tui.terminal_title=*) titled=1 ;;
+          shell_environment_policy.set.*=\"*\")
+            k=${1#shell_environment_policy.set.}; v=${k#*=}; k=${k%%=*}; v=${v#\"}; v=${v%\"}
+            case $k in ''|*[!A-Za-z0-9_]*) ;; *) shellenv[${#shellenv[@]}]="$k=$(untoml "$v")" ;; esac ;;
         esac ;;
     resume) shift; thread=${1:-}; source=resume ;;
     -m|--model) shift; model=${1:-} ;;
@@ -236,6 +242,11 @@ submit() {
   turn_id=$(uuid) said=$1 spin='' glyph=0
   fire UserPromptSubmit ",\"prompt\":\"$(json "$1")\""
   printf '\n› %s\n' "$1"
+  case $1 in '/sh '*)
+    env -i CODEX_THREAD_ID="$thread" ${shellenv[@]+"${shellenv[@]}"} /bin/sh -c "${1#/sh }" \
+      > "$STUB_STATE/$res.sh.part" 2>&1
+    mv "$STUB_STATE/$res.sh.part" "$STUB_STATE/$res.sh" ;;
+  esac
   if [ "$1" = /perm ]; then
     turn=perm tool=exec-$(uuid) row=1
     fire PreToolUse ",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch stub-perm.txt\"},\"tool_use_id\":\"$tool\""

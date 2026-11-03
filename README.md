@@ -369,18 +369,17 @@ scheduled?" work the same way.
   first if it has left. `target: <name>` types the prompt into a resident you run yourself.
   `target: branch` (with `when`) types into whichever resident works on a branch, below.
   A fire that cannot be delivered says so in the journal and as a notification.
-- **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire
-  until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
-  question open, nothing half typed into it. Whether it is on screen makes no difference. A
-  newer fire takes the place of one still held, and 4 h after the first of them the fire is
-  dropped, with what held it; the journal says `held`, then `sent` or `not sent`. When what
-  holds it is yours to clear (a dialog, or text typed and not sent), a notification says so.
-  Text typed and not sent counts until a prompt goes in, Ctrl-C, `/clear`, or the Enter that
-  runs a `/` or `!` command. Fires for one resident go in one at a time, each after the turn
-  the last one started. A resident that has not come up within a minute (not yet seen by
-  Claude Code's session list, as at the trust dialog) is given up on. `deliver: now` types it
-  in at once, mid-turn too, where Claude Code queues it, and gives up on a dialog instead of
-  waiting.
+- **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire until
+  its resident is idle: its turn over (10 s since it was last heard from), no dialog or question
+  open, nothing half typed into it. Whether it is on screen makes no difference. A newer fire takes
+  the place of one still held, and 4 h after the first of them the fire is dropped, with what held
+  it; the journal says `held`, then `sent` or `not sent`. When what holds it is yours to clear (a
+  dialog, or text typed and not sent), a notification says so. Text typed and not sent counts until
+  a prompt goes in, Ctrl-C, `/clear`, or the Enter that runs a `/` or `!` command. Fires for one
+  resident go in one at a time, each after the turn the last one started. A resident that has not
+  come up within a minute (not yet seen by Claude Code's session list, or, for Codex, its title, as
+  at the trust dialog) is given up on. `deliver: now` types it in at once, mid-turn too, where
+  Claude Code queues it, and gives up on a dialog instead of waiting.
 - **`model`**, **`effort`**, **`mode`** (the permission mode), **`allowed_tools`** and
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts
   with. A ritual that reads Slack or mail needs its MCP server: a claude.ai connector, the
@@ -390,10 +389,10 @@ scheduled?" work the same way.
   role it was started with, as it keeps its model.
 - **`agent: codex`** (with `target: new` or `persistent`): its runs are Codex, as
   [Codex](#codex) describes.
-- **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` in the
-  background, what it said goes to a log beside the ritual's notes, and a run still going after
-  an hour is stopped. Nobody is there to answer a permission prompt, so what it needs goes in
-  `allowed_tools`; the log names any tool it was refused.
+- **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` (for
+  Codex, `codex exec`) in the background, what it said goes to a log beside the ritual's notes, and
+  a run still going after an hour is stopped. Nobody is there to answer a permission prompt, so what
+  it needs goes in `allowed_tools` (for Codex, its `mode`); the log names any tool it was refused.
 - **`worktree`** (with `target: new`): every run works in that worktree of `cwd`'s repository,
   made the first time as `new --worktree` makes one, and in the same subdirectory as `cwd`. One
   checkout for all its runs, so not with `overlap: parallel`.
@@ -480,8 +479,8 @@ Three examples ship paused in `share/rituals/`: `slack-morning`, `nightly-checks
 names a directory that is not on your machine, which is the line to change first. A shipped
 example can't be removed, only disabled; removing your copy brings the paused original back.
 Run a new ritual by hand once before leaving it to the clock, and add what it asks permission for to
-its `allowed_tools` (a Codex one's `mode`): each fire is a fresh session, and an answer given to one
-does not carry over.
+its `allowed_tools` (for a Codex one, widen its `mode`): each fire is a fresh session, and an answer
+given to one does not carry over.
 
 Rituals fire only while the daemon runs, and on a machine that is awake. A laptop whose lid was
 shut through a fire makes it up at the next tick after it wakes. A run keeps the Mac awake while
@@ -785,13 +784,13 @@ inside a resident.
 CI runs the suite, clippy and fmt on macOS. The tests start real daemons on the stub in
 `tests/stub-claude`, which stands in for `claude` (hooks, the registry, `/exit`), and
 `tests/stub-codex` for `codex`, each in a state directory of its own under `target/`, so nothing
-touches yours and no Claude Code login is needed. A changed screen snapshot fails its test and
-leaves a `.snap.new` beside the old one in `tests/snapshots/`; read it, then `cargo insta review`
-(cargo-insta) or rename it over the old. The install, update and uninstall tests package this build
-with `scripts/release.sh` and run the shipped scripts in a home of their own, with a stand-in
-`launchctl`. One test loads a real launchd agent under a `dev.gensokyo.test.*` label and boots it
-out again: it is left out unless asked for, with `cargo nextest run --test login --run-ignored
-ignored-only`.
+touches yours and no Claude Code or OpenAI login is needed. A changed screen snapshot fails its test
+and leaves a `.snap.new` beside the old one in `tests/snapshots/`; read it, then `cargo insta
+review` (cargo-insta) or rename it over the old. The install, update and uninstall tests package
+this build with `scripts/release.sh` and run the shipped scripts in a home of their own, with a
+stand-in `launchctl`. One test loads a real launchd agent under a `dev.gensokyo.test.*` label and
+boots it out again: it is left out unless asked for, with `cargo nextest run --test login
+--run-ignored ignored-only`.
 
 A release is a `v<version>` tag matching `Cargo.toml`: the release workflow builds the arm64
 tarball with `scripts/release.sh`, installs it into a scratch home, and publishes it with

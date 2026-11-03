@@ -567,6 +567,31 @@ fn a_headless_run_that_ended_between_daemons_is_journaled_by_the_next() {
     assert!(pid_file(&runs).is_none(), "its pid file stayed");
 }
 
+/// A headless Codex run that ended between daemons is reported by its events alone.
+#[test]
+fn a_headless_codex_run_that_ended_between_daemons_is_journaled_by_the_next() {
+    let text = hourly("headless: true\nagent: codex\nmode: acceptEdits\n");
+    let env = [("STUB_EXEC_SLEEP", "2")];
+    let d = Daemon::start("cx-hl-between", T0 + 120, &[("quiet", &text)], &env);
+    wait(|| d.stamp("quiet").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    let runs = d.dir.join("rituals/quiet/runs");
+    wait(|| pid_file(&runs).is_some(), "the run's pid file");
+    let (_, pid) = pid_file(&runs).unwrap();
+    d.cli(&["quit"]);
+    wait(|| !alive(pid), "the run to finish on its own");
+    assert!(d.evs("quiet", "done").is_empty());
+    d.cli(&["list"]);
+    wait(|| !d.evs("quiet", "done").is_empty(), "the next daemon's journal line");
+    let done = d.evs("quiet", "done");
+    assert!(done[0].starts_with("done (headless, ") && done[0].contains(": stub exec ran in "));
+    let log = std::fs::read_dir(&runs).unwrap().flatten().map(|e| e.path());
+    let log = log.into_iter().find(|p| p.extension().is_some_and(|x| x == "log")).unwrap();
+    let log = std::fs::read_to_string(log).unwrap();
+    assert!(log.contains(", 120 tokens in, 7 out\nto read the whole transcript: codex resume "));
+    assert!(pid_file(&runs).is_none(), "its pid file stayed");
+}
+
 #[test]
 fn a_ritual_that_cannot_fire_says_so_once() {
     let text = "---\nschedule: \"0 * * * *\"\ncwd: /no/such/dir\n---\nDo the rounds.\n";

@@ -20,7 +20,8 @@
 #                             STUB_EXEC_FAIL=<text> fails the turn with it (an error event
 #                             and turn.failed, each with the API's error as JSON for message,
 #                             the text on stderr too, exit 1); STUB_EXEC_CUT=1 exits 0 before the
-#                             turn completes. Without --skip-git-repo-check, or with
+#                             turn completes; STUB_EXEC_SLEEP=<s> works that long first.
+#                             Without --skip-git-repo-check, or with
 #                             STUB_EXEC_REFUSE=1, it refuses an untrusted directory as Codex
 #                             does: no events, why on stderr, exit 1
 #   [flags] resume <thread>   starts on that thread, the flags before or after it: its first
@@ -123,6 +124,7 @@ if [ "${1:-}" = exec ]; then
     printf '{"type":"turn.failed","error":{"message":"%s"}}\n' "$api"
     exit 1
   fi
+  [ -z "${STUB_EXEC_SLEEP:-}" ] || sleep "$STUB_EXEC_SLEEP"
   said="stub exec ran in $PWD: ${prompt%%$'\n'*}"
   printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"%s"}}\n' "$(json "$said")"
   [ -z "${STUB_EXEC_CUT:-}" ] || exit 0

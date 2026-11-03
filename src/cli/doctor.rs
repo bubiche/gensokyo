@@ -104,8 +104,10 @@ pub fn main() -> Result<(), String> {
     if let login::Agent::Ours(_) = login::agent() {
         let proxy = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
         let mut unseen: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
-        unseen
-            .retain(|k| k.starts_with("ANTHROPIC_") || proxy.contains(&k.to_uppercase().as_str()));
+        unseen.retain(|k| {
+            ["ANTHROPIC_", "OPENAI_"].iter().any(|p| k.starts_with(p))
+                || proxy.contains(&k.to_uppercase().as_str())
+        });
         unseen.sort();
         if !unseen.is_empty() {
             line("", format!("{} set here never reach residents launchd starts", unseen.join(" ")));

@@ -249,9 +249,17 @@ fn doctor_reads_without_starting_anything() {
     assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);
-    let o =
-        c.env("ANTHROPIC_BASE_URL", "http://x").env("https_proxy", "http://y").output().unwrap();
-    let want = "ANTHROPIC_BASE_URL https_proxy set here never reach residents launchd starts";
+    // Only these, whatever the shell running the tests has.
+    let named = |k: &str| {
+        ["ANTHROPIC_", "OPENAI_"].iter().any(|p| k.starts_with(p)) || k.ends_with("_PROXY")
+    };
+    for (k, _) in std::env::vars().filter(|(k, _)| named(&k.to_uppercase())) {
+        c.env_remove(k);
+    }
+    c.env("ANTHROPIC_BASE_URL", "http://x").env("OPENAI_BASE_URL", "http://z");
+    let o = c.env("https_proxy", "http://y").output().unwrap();
+    let want = "ANTHROPIC_BASE_URL OPENAI_BASE_URL https_proxy set here never reach residents \
+                launchd starts";
     assert!(out(&o).contains(want), "{}", out(&o));
     // An empty GENSOKYO_CLAUDE or GENSOKYO_CODEX is unset: PATH's are found.
     let bin = e.dir.join("bin");

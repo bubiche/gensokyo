@@ -1417,3 +1417,84 @@ fn a_branch_ritual_tells_the_resident_on_each_branch_only_what_is_new() {
     wait(|| typed() == 6, "news under the repo in another case");
     assert!(d.stub(&id, "input").contains("ci: FAILURE@0f0f0f0"));
 }
+
+/// Codex trusts the test's directory, as its config says once the user has trusted it there.
+fn codex_trusts(d: &Daemon) {
+    let toml = format!("[projects.\"{}\"]\ntrust_level = \"trusted\"\n", d.dir.display());
+    std::fs::create_dir_all(d.dir.join("codex")).unwrap();
+    std::fs::write(d.dir.join("codex/config.toml"), toml).unwrap();
+}
+
+/// The stand-in Codex's launch arguments.
+fn codex_args(d: &Daemon, id: &Value) -> Vec<String> {
+    d.stub(id, "args").split('\0').filter(|a| !a.is_empty()).map(String::from).collect()
+}
+
+#[test]
+fn a_codex_ritual_starts_codex_with_its_mode_and_notes_dir_and_its_run_is_recorded() {
+    let text = hourly("agent: codex\nmodel: gpt-x\nmode: acceptEdits\n");
+    let d = Daemon::new("cx-run", T0 + 120, &[("rounds", &text)], &[]);
+    codex_trusts(&d);
+    d.cli(&["list"]);
+    wait(|| d.stamp("rounds").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.live().len() == 1, "the run");
+    let run = d.live()[0].clone();
+    assert_eq!((&run["name"], &run["agent"]), (&json!("rounds"), &json!("codex")), "{run}");
+    assert_eq!(d.evs("rounds", "ran"), vec!["ran (due 2026-09-21 16:00)".to_string()]);
+    let args = codex_args(&d, &run["id"]);
+    let notes = d.dir.join("rituals/rounds");
+    let n = args.len();
+    assert_eq!(args[n - 4..n - 1], ["--add-dir", &notes.display().to_string(), "--"]);
+    assert!(args[n - 1].starts_with("Do the rounds.\nThen report.\n\nYour notes"), "{args:?}");
+    let has = |w: &[&str]| args.windows(w.len()).any(|a| a == w);
+    assert!(has(&["-s", "workspace-write", "-a", "on-request"]) && has(&["-m", "gpt-x"]));
+    assert!(!args.iter().any(|a| a.starts_with("--allowedTools") || a.starts_with("Edit(")));
+    // Its turn ends as any Codex resident's does.
+    wait_for(Duration::from_secs(15), || d.live()[0]["turns"] == 1, "its turn to end");
+}
+
+#[test]
+fn a_codex_ritual_in_a_directory_codex_has_not_trusted_is_refused_by_the_clock() {
+    let text = hourly("agent: codex\n");
+    let d = Daemon::start("cx-untrusted", T0 + 120, &[("rounds", &text)], &[]);
+    wait(|| d.stamp("rounds").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| !d.evs("rounds", "not-run").is_empty(), "the refusal");
+    let not = d.evs("rounds", "not-run");
+    assert!(not[0].starts_with("not run: cwd: Codex does not trust "), "{not:?}");
+    assert!(d.live().is_empty());
+}
+
+#[test]
+fn a_persistent_codex_ritual_types_into_its_session_and_resumes_its_thread() {
+    let text = hourly("target: persistent\nagent: codex\n");
+    let d = Daemon::new("cx-persist", T0 + 120, &[("diary", &text)], &[]);
+    codex_trusts(&d);
+    d.cli(&["list"]);
+    wait(|| d.stamp("diary").is_some(), "first sight");
+    d.clock(T0 + 3600 + 5);
+    wait(|| d.live().len() == 1, "the session");
+    let id = d.live()[0]["id"].clone();
+    let session =
+        || std::fs::read_to_string(d.dir.join("rituals/diary/session")).unwrap_or_default();
+    wait(|| session().trim() == id.as_str().unwrap(), "the session file");
+    wait_for(Duration::from_secs(15), || d.live()[0]["turns"] == 1, "its first turn to end");
+
+    d.clock(T0 + 7200 + 5);
+    wait(|| d.evs("diary", "sent").len() == 1, "the prompt typed in");
+    assert!(d.stub(&id, "input").contains("Do the rounds."));
+    wait_for(Duration::from_secs(15), || d.live()[0]["turns"] == 2, "the typed turn to end");
+
+    let r = d.req(json!({"t": "banish", "id": 4, "who": "diary"}));
+    assert_eq!(r["t"], "done", "{r}");
+    let thread = d.stub(&id, "thread").trim().to_string();
+    std::fs::remove_file(d.dir.join(format!("stub/{}.ready", id.as_str().unwrap()))).unwrap();
+    d.clock(T0 + 10800 + 5);
+    wait(|| d.evs("diary", "sent").len() == 2, "the prompt typed into the resumed thread");
+    let live = d.live();
+    assert_eq!((live.len(), &live[0]["id"]), (1, &id), "the same record, recalled");
+    let args = codex_args(&d, &id);
+    let notes = d.dir.join("rituals/diary").display().to_string();
+    assert_eq!(args[args.len() - 4..], ["--add-dir", notes.as_str(), "resume", thread.as_str()]);
+}

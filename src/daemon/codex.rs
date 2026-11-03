@@ -94,7 +94,8 @@ pub fn find(
 /// The argv for a start, or why there is none: a mode Codex has no flags for, or an effort that
 /// is not one word. A fresh start's prompt goes last, after `--`, so one that starts with `-`
 /// stays whole; with `resume`, `resume <thread>` goes last instead, after the same flags, and
-/// no prompt. `notify` is the user's and left alone.
+/// no prompt. A ritual's own flags (`--add-dir`) come just before either. `notify` is the
+/// user's and left alone.
 pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     check(o.mode, o.effort)?;
     // gensokyo's hooks run unreviewed: Codex would otherwise hold each new one for the user.
@@ -123,6 +124,7 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
     if let Some(e) = o.effort {
         a.extend(["-c".into(), format!("model_reasoning_effort={e}").into()]);
     }
+    a.extend(o.extra.iter().map(OsString::from));
     if o.resume {
         a.extend(["resume".into(), o.session.into()]);
     } else if let Some(prompt) = o.prompt {

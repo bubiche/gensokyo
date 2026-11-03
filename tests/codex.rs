@@ -205,6 +205,12 @@ fn a_resumed_codex_argv_has_its_flags_then_resume_and_its_thread_and_no_prompt()
     assert_eq!(back[m - 2..], ["resume", "019a-thread"]);
     assert!(!back.iter().any(|w| w == "--" || w == "brief"), "{back:?}");
     assert_eq!(codex::launched(&back), codex::launched(&first));
+    // A ritual's own flags go before the prompt, and before `resume` at a recall.
+    let extra = ["--add-dir".to_string(), "/s/rituals/r".into()];
+    let first = argv("/g", &Options { extra: &extra, ..o });
+    let back = argv("/g", &Options { session: "019a-thread", resume: true, extra: &extra, ..o });
+    assert_eq!(first[first.len() - 4..], ["--add-dir", "/s/rituals/r", "--", "brief"]);
+    assert_eq!(back[back.len() - 4..], ["--add-dir", "/s/rituals/r", "resume", "019a-thread"]);
 }
 
 /// A thread is resumed only when Codex kept it: its rollout, by name, three levels down.

@@ -15,7 +15,7 @@ use crate::tele;
 use jiff::tz::TimeZone;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
@@ -475,12 +475,8 @@ fn in_worktree(
         }
         // The repository's top may be above the trusted cwd, and a run at the trust dialog
         // would be alive and stuck.
-        if !run.headless() && !trust(&shrine).trusted(std::path::Path::new(&made.path)) {
-            let why = format!(
-                "worktree: nothing has answered Claude Code's trust prompt for {} (open Claude \
-                 Code there once and accept)",
-                crate::paths::short(&made.path)
-            );
+        if !run.headless() && !trust(&shrine).trusts(run.agent(), Path::new(&made.path)) {
+            let why = format!("worktree: {}", Trust::untrusted(run.agent(), &made.path));
             return complain(&shrine, &run, &d, now(), &why);
         }
         (run.cwd, run.worktree) = (Some(made.path), None);
@@ -508,7 +504,7 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
     };
     let s = Start {
         cwd: r.cwd.clone().unwrap_or_default(),
-        agent: Default::default(),
+        agent: r.agent(),
         name,
         model,
         effort,

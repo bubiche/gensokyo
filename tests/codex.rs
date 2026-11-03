@@ -399,6 +399,28 @@ trust_level = "trusted"
 }
 
 #[test]
+fn a_string_a_comment_or_an_array_over_lines_hides_no_table_after_it() {
+    let trust = "[projects.\"/a\"]\ntrust_level = \"trusted\"\n";
+    for before in [
+        "# not a ''' string\n",
+        "x = \"it'''s\"\n",
+        "x = 'say \"\"\"'\n",
+        "x = \"a \\\" ''' b\" # and '''\n",
+        "x = \"\"\"one\"\"\"\n",
+        "x = '''\n[no]\n'''\n",
+        "x = [\n  [1, 2],\n  { y = \"]\" },\n]\n",
+        "naïve = \"é'''\"\n",
+    ] {
+        assert_eq!(codex::projects(&format!("{before}{trust}")), [Path::new("/a")], "{before}");
+    }
+    // Nor one inside its table.
+    let inside = "[projects.\"/a\"]\nx = [\n  [1, 2],\n]\ntrust_level = \"trusted\"\n";
+    assert_eq!(codex::projects(inside), [Path::new("/a")]);
+    // An unclosed multi-line string runs to the end.
+    assert!(codex::projects(&format!("x = \"\"\"\n{trust}")).is_empty());
+}
+
+#[test]
 fn without_a_profile_the_model_is_read_from_the_configs_top_level() {
     assert_eq!(codex::config_model("model = \"gpt-5.5\"\n", None).as_deref(), Some("gpt-5.5"));
     let c = "# mine\nmodel_provider = \"x\"\nmodel='o4' # set by hand\n[tui]\nmodel = \"no\"\n";

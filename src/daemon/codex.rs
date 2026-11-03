@@ -456,22 +456,61 @@ pub fn plugin_hooks(home: &Path, plugin: &str) -> bool {
     })
 }
 
-/// `config`'s lines, trimmed, but those inside a multi-line string.
+/// `config`'s lines, trimmed, but those that open a multi-line string and those inside one or
+/// inside an array or inline table a line before opened.
 fn plain_lines(config: &str) -> impl Iterator<Item = &str> {
-    let mut long = None::<&str>;
+    let mut state = (None, 0);
     config.lines().filter_map(move |line| {
-        if let Some(q) = long {
-            if line.matches(q).count() % 2 == 1 {
-                long = None;
-            }
-            return None;
-        }
-        if let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| line.matches(q).count() % 2 == 1) {
-            long = Some(q);
-            return None;
-        }
-        Some(line.trim())
+        let start = state;
+        state = scan(line, state);
+        (start == (None, 0) && state.0.is_none()).then(|| line.trim())
     })
+}
+
+/// The multi-line string open at a line's end, and how many brackets.
+type Scan = (Option<&'static str>, u32);
+
+/// The [`Scan`] after `line`, given the one as it starts: strings and comments are passed over
+/// as TOML reads them.
+fn scan(line: &str, (mut open, mut depth): Scan) -> Scan {
+    let mut rest = line;
+    loop {
+        if let Some(q) = open {
+            let Some(i) = close(rest, q) else { return (open, depth) };
+            (open, rest) = (None, &rest[i + q.len()..]);
+            continue;
+        }
+        let Some(i) = rest.find(['#', '"', '\'', '[', ']', '{', '}']) else { return (None, depth) };
+        let (c, after) = (rest.as_bytes()[i], &rest[i + 1..]);
+        rest = after;
+        match c {
+            b'#' => return (None, depth),
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {
+                let q = if c == b'"' { "\"\"\"" } else { "'''" };
+                if after.starts_with(&q[1..]) {
+                    (open, rest) = (Some(q), &after[2..]);
+                } else {
+                    let Some(j) = close(after, &q[..1]) else { return (None, depth) };
+                    rest = &after[j + 1..];
+                }
+            }
+        }
+    }
+}
+
+/// Where `q` closes the string `s` starts inside; in a basic one a `\` escapes what follows.
+fn close(s: &str, q: &str) -> Option<usize> {
+    let (s, mut i) = (s.as_bytes(), 0);
+    while i < s.len() {
+        match s[i] {
+            b'\\' if q.starts_with('"') => i += 2,
+            _ if s[i..].starts_with(q.as_bytes()) => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// The name a `[<table>."<name>"]` header gives, quoted; none for any other header.

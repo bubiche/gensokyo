@@ -752,6 +752,12 @@ fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
     let r = ritual::parse("cx", &path, false, &std::fs::read_to_string(&path).unwrap());
     assert_eq!(r.agent(), Agent::Codex);
     assert!(lines.iter().any(|l| l.starts_with("warning: cwd: Codex does not trust")), "{lines:?}");
+    // What it may not ask for is its mode's to say, not allowed_tools'.
+    assert!(lines.last().unwrap().ends_with("what it asks permission for needs a wider mode"));
+    assert!(!lines.iter().any(|l| l.contains("allowed_tools")), "{lines:?}");
+    let h = Add { name: "ch".into(), headless: true, ..a.clone() };
+    let (_, lines) = ritual::add(&h, now, &tz, &no, &mine, None).unwrap();
+    assert!(lines.iter().any(|l| l.contains("prompt, so its mode is all it may do;")), "{lines:?}");
     let bad = Add { name: "cy".into(), allowed_tools: vec!["Read".into()], ..a.clone() };
     let e = ritual::add(&bad, now, &tz, &yes, &mine, None).unwrap_err();
     assert!(e.contains("Codex has no tools allowed"), "{e}");

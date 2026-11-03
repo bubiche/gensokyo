@@ -4,6 +4,7 @@
 use super::{Dir, NAME_RULE, Ritual, SCHEDULES, Target, Trust, check, name_ok, parse, when};
 use crate::daemon::store::write_atomic;
 use crate::frontmatter::quote;
+use crate::proto::Agent;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use std::path::{Path, PathBuf};
@@ -169,15 +170,20 @@ pub fn add(
         "  {} is this machine's clock, now {clock} - a ritual is never in UTC",
         a.schedule
     ));
+    // Codex has no tools to allow: its mode is all a run of it may do.
+    let (needs, asks) = match r.agent() {
+        Agent::Claude => ("what it needs goes in allowed_tools", "goes in allowed_tools"),
+        Agent::Codex => ("its mode is all it may do", "needs a wider mode"),
+    };
     if r.headless() {
         out.push(format!(
-            "  headless: no pane to watch and nobody to answer a prompt, so what it needs goes in \
-             allowed_tools; what each run says keeps in {}",
+            "  headless: no pane to watch and nobody to answer a prompt, so {needs}; what each \
+             run says keeps in {}",
             crate::paths::short(&Dir::of(name).runs().to_string_lossy())
         ));
     }
     out.push(format!(
-        "  gensokyo ritual run {name}   fires it now: what it asks permission for goes in allowed_tools"
+        "  gensokyo ritual run {name}   fires it now: what it asks permission for {asks}"
     ));
     Ok((path, out))
 }

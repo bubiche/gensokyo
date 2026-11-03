@@ -100,8 +100,8 @@ You cannot resume or run it yourself. Say that it is paused and give them the co
 
 ## A run with no pane: `--headless`
 
-`--headless` runs the ritual as a background `claude -p` instead: no pane, nothing to watch, and
-when it finishes gensokyo notifies the user and keeps what it said in a log of its own, which
+`--headless` runs the ritual as a background `claude -p` (`codex exec` for Codex) instead: no
+pane, nothing to watch, and when it finishes gensokyo notifies the user and keeps what it said in a log of its own, which
 `gensokyo ritual log <name>` names. One still going after an hour is stopped. Offer it when the user wants the **answer** and not the
 working - "just tell me what came in overnight" - and leave it alone when they said they want to
 see it run, or when the run is going to want a decision from them.
@@ -111,7 +111,9 @@ Two things change when you write one, and both belong in what you say back befor
 - **Nobody can answer a permission prompt.** A tool the prompt needs and does not have is
   refused, and the run finishes successfully having done nothing. Name every tool it needs in
   `--allowed-tools` (or use `--mode acceptEdits`), and treat that as part of the ritual rather
-  than something to fix afterwards. The log names any tool that was refused.
+  than something to fix afterwards. The log names any tool that was refused. A Codex run has
+  no tools to name: its `--mode` is all it may do, and what it was refused shows only in what
+  it says.
 - **Where the answer goes has to be somewhere.** "Write in this pane" is the normal instruction
   for a ritual and it means nothing here: the answer is the run's own result, which lands in the
   log and in the notification, so ask for it short and say the user reads it in
@@ -163,9 +165,9 @@ gensokyo ritual run slack-morning     # now, whatever the schedule says; the sch
 
 That shows what it stops to ask, while the user is there to answer, which is much better than
 finding out at 09:05 on Monday. An answer lasts only for that session, and each fire of the
-default target is a fresh one: tell the user what to add to `allowed_tools` in its file, or the
-next fire stops at the same prompt. Its own notes file needs nothing: every run may
-write that. The clock picks the new ritual up on its own; nothing needs restarting.
+default target is a fresh one: tell the user what to add to `allowed_tools` in its file (for a
+Codex ritual, which `mode` it needs), or the next fire stops at the same prompt. Its own notes
+file needs nothing: every run may write that. The clock picks the new ritual up on its own; nothing needs restarting.
 
 ## The other things the user will ask for
 

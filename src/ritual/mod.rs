@@ -492,8 +492,8 @@ fn check(r: &Ritual, now: i64, tz: &TimeZone, trust: &Trust) -> Result<Schedule,
     }
     if r.headless() && r.target() != Target::New {
         return p(format!(
-            "headless: true is a claude -p of its own, which is always a fresh session, so it \
-             goes with target: new and not with {}",
+            "headless: true is a run of its own (claude -p, or codex exec), which is always a \
+             fresh session, so it goes with target: new and not with {}",
             r.target
         ));
     }

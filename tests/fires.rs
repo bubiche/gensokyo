@@ -1544,4 +1544,12 @@ fn a_headless_codex_run_that_fails_says_why_either_way() {
     let (d, _) = headless_with("cx-hl-cut", codex, &[("STUB_EXEC_CUT", "1")]);
     let failed = d.evs("quiet", "failed");
     assert!(failed[0].ends_with("): codex exited 0: its turn never completed"), "{failed:?}");
+    drop(d);
+    // Refused before any event: what it said on stderr is why, its word about stdin left out.
+    let (d, log) = headless_with("cx-hl-refused", codex, &[("STUB_EXEC_REFUSE", "1")]);
+    let failed = d.evs("quiet", "failed");
+    let why = "Not inside a trusted directory and --skip-git-repo-check was not specified.";
+    assert!(failed[0].ends_with(&format!("): codex exited 1: {why}")), "{failed:?}");
+    assert!(!failed[0].contains("stdin"), "{failed:?}");
+    assert!(log.contains(&format!("and said:\n{why}\n---\n")), "{log}");
 }

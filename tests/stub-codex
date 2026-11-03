@@ -13,12 +13,15 @@
 #                             does. With queue.fail there it queues nothing: its text goes to
 #                             stderr and it exits 1, as codex does while an app-server runs
 #   exec [flags] -- <prompt>  `codex exec --json -o <file>`: its argv, each arg ended by a NUL, in
-#                             exec.args and what it read on stdin in exec.stdin; prints the
-#                             events of one turn as JSONL, a warning among them as an error
-#                             item, and writes "stub exec ran in <dir>: <prompt's first line>" to
-#                             the -o file. STUB_EXEC_FAIL=<text> fails the turn with it
-#                             (turn.failed, the text on stderr too, exit 1); STUB_EXEC_CUT=1
-#                             exits 0 before the turn completes
+#                             exec.args and what it read on stdin in exec.stdin (saying so on
+#                             stderr when it is no tty); prints the events of one turn as
+#                             JSONL, a warning among them as an error item, and writes "stub
+#                             exec ran in <dir>: <prompt's first line>" to the -o file.
+#                             STUB_EXEC_FAIL=<text> fails the turn with it (turn.failed, the
+#                             text on stderr too, exit 1); STUB_EXEC_CUT=1 exits 0 before the
+#                             turn completes. Without --skip-git-repo-check, or with
+#                             STUB_EXEC_REFUSE=1, it refuses an untrusted directory as Codex
+#                             does: no events, why on stderr, exit 1
 #   [flags] resume <thread>   starts on that thread, the flags before or after it: its first
 #                             SessionStart says "resume", and comes with its first prompt, as
 #                             Codex sends it, none while it waits for one
@@ -88,16 +91,26 @@ esac
 if [ "${1:-}" = exec ]; then
   shift
   printf '%s\0' "$@" > "$STUB_STATE/exec.args"
-  if [ -t 0 ]; then : > "$STUB_STATE/exec.stdin"; else cat > "$STUB_STATE/exec.stdin"; fi
-  out='' prompt=''
+  if [ -t 0 ]; then
+    : > "$STUB_STATE/exec.stdin"
+  else
+    echo "Reading additional input from stdin..." >&2
+    cat > "$STUB_STATE/exec.stdin"
+  fi
+  out='' prompt='' skip=${STUB_EXEC_REFUSE:+refused}
   while [ $# -gt 0 ]; do
     case $1 in
       -o|--output-last-message) shift; out=${1:-} ;;
+      --skip-git-repo-check) skip=${skip:-yes} ;;
       --) shift; prompt=$*; break ;;
       -m|-s|-c|-p|--add-dir|-C|--cd) shift ;;
     esac
     shift
   done
+  if [ "$skip" != yes ]; then
+    echo "Not inside a trusted directory and --skip-git-repo-check was not specified." >&2
+    exit 1
+  fi
   printf '{"type":"thread.started","thread_id":"%s"}\n{"type":"turn.started"}\n' "$(uuid)"
   printf '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"a warning"}}\n'
   if [ -n "${STUB_EXEC_FAIL:-}" ]; then

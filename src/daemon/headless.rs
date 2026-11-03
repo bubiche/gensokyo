@@ -424,17 +424,19 @@ fn codex_report(stem: &Path, ended: Ended, took: &str) -> (String, String, Strin
     };
     if !ok {
         let code = exited(ended);
+        // Past exec's word that it reads stdin, which it says whatever goes wrong after.
+        let said = err.lines().filter(|l| !l.starts_with("Reading additional input from stdin"));
+        let said = said.take(20).collect::<Vec<_>>().join("\n");
         let why =
-            e.failed.clone().map(|f| tele::clean(&f, 120)).unwrap_or_else(|| match err.trim() {
+            e.failed.clone().map(|f| tele::clean(&f, 120)).unwrap_or_else(|| match said.trim() {
                 "" => "its turn never completed".into(),
-                err => tele::clean(err, 120),
+                said => tele::clean(said, 120),
             });
-        let said: Vec<&str> = err.lines().take(20).collect();
         let mut tail = format!("--- codex {code}, and said:\n");
         if let Some(f) = &e.failed {
             tail += &format!("{f}\n");
         }
-        tail += &format!("{}\n---\nfailed after {took}\n", said.join("\n"));
+        tail += &format!("{said}\n---\nfailed after {took}\n");
         let journal = format!("failed (headless, {took}): codex {code}: {why}");
         let told = "the headless run failed; gensokyo ritual log says what it said".to_string();
         return (journal, told, tail);

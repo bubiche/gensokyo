@@ -137,7 +137,8 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
 /// events as JSONL on stdout, its answer in `answer`. Its mode's flags but the approval policy,
 /// which exec has none of: it never asks. No hooks and none of gensokyo's words, as `claude -p`
 /// has none: the role's alone, as its instructions. The ritual's directory is added for its
-/// notes; outside a git repository exec refuses to start unless told it may.
+/// notes. `--skip-git-repo-check` always: without it exec refuses a directory Codex has not
+/// trusted, and a headless run, Claude's too, starts with no trust dialog to pass.
 pub fn exec(
     r: &crate::ritual::Ritual,
     role: Option<&str>,
@@ -164,10 +165,7 @@ pub fn exec(
         a.extend(["-c".into(), format!("developer_instructions={}", toml_str(w))]);
     }
     a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
-    let cwd = Path::new(r.cwd.as_deref().unwrap_or_default());
-    if !cwd.ancestors().any(|d| d.join(".git").exists()) {
-        a.push("--skip-git-repo-check".into());
-    }
+    a.push("--skip-git-repo-check".into());
     Ok(a)
 }
 

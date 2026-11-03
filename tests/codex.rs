@@ -1207,7 +1207,8 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
             "-c",
             r#"developer_instructions="Be \"brief\".\nOnly read.""#,
             "--add-dir",
-            "/s/rituals/r"
+            "/s/rituals/r",
+            "--skip-git-repo-check"
         ]
     );
     let tail = |r: &gensokyo::ritual::Ritual| {
@@ -1219,8 +1220,8 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
     let bypass = tail(&in_repo("mode: bypassPermissions\n"));
     assert_eq!(bypass[..1], ["--dangerously-bypass-approvals-and-sandbox"]);
     // No mode, which a ritual that passed its check never has: no sandbox flags at all.
-    assert_eq!(tail(&in_repo("")), ["--add-dir", "/s/rituals/r"]);
-    // Outside any repository exec refuses to run unless told it may.
+    assert_eq!(tail(&in_repo("")), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
+    // Outside any repository too: exec would refuse a directory Codex has not trusted.
     let bare = fresh("cx-exec-bare");
     let out = ritual(&format!("cwd: {}\n", bare.display()));
     assert_eq!(tail(&out), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);

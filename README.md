@@ -39,7 +39,8 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
   2.1.306; nothing checks the version.
-- Optional: OpenAI's Codex, for [Codex residents](#codex).
+- Optional: OpenAI's Codex, for [Codex residents](#codex): tested on 0.154; an older one may
+  refuse the flags it is started with.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
@@ -61,14 +62,15 @@ Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 - `gensokyo doctor` says which binary, `claude` and `codex` are in use, whether the daemon and
   the login agent are running, how much the state dir holds and its largest files, and what looks
   wrong.
-- `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
-  open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
-  is how the daemon finds `claude` and `codex`: run it again after either moves. Only that `PATH`,
+- `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never open a
+  terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which is how
+  the daemon finds `claude` and `codex`: run it again after either moves. Only that `PATH`,
   `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and gensokyo's own location variables carry over (the agent's
   file is readable by anyone), so a variable such as `ANTHROPIC_BASE_URL` or a proxy set in your
-  shell does not reach residents once launchd starts the daemon; `doctor` names any it sees.
-  `gensokyo login` says whether it is on; `gensokyo login remove` turns it off. A daemon
-  `gensokyo quit` stopped stays stopped until the next login or the next `gensokyo`.
+  shell does not reach residents once launchd starts the daemon; `doctor` names any `ANTHROPIC_*`,
+  `OPENAI_*` or proxy variable it sees. `gensokyo login` says whether it is on; `gensokyo login
+  remove` turns it off. A daemon `gensokyo quit` stopped stays stopped until the next login or the
+  next `gensokyo`.
 - `gensokyo update` swaps `~/.gensokyo` for the latest release (`--check` only says whether there
   is one, `--version` picks one). The running daemon keeps the old binary until `gensokyo
   restart`.

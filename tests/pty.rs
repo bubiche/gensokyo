@@ -111,12 +111,17 @@ impl AsyncRead for Counting {
 async fn asyncfd_on_a_macos_pty_master() {
     let _g = shared();
     for (name, script) in [
-        ("slow 1 B / 10 ms x 200", "for i in $(jot 200); do printf x; sleep 0.01; done"),
+        // One process: a `sleep` per byte takes as long as an exec does, half a second on a
+        // slow machine, which would outlast the read's limit.
+        (
+            "slow 1 B / 10 ms x 200",
+            "perl -e '$|=1; for (1..200) { print \"x\"; select(undef, undef, undef, 0.01) }'",
+        ),
         ("idle 2 s then 1 B", "sleep 2; printf x"),
         ("burst 8 MiB", "head -c 8388608 /dev/zero | tr '\\0' x"),
         ("exit with a byte still buffered", "printf LAST"),
     ] {
-        let (r, _w, mut child, _) = bash(script);
+        let (r, w, mut child, _) = bash(script);
         let mut c = Counting { inner: r, polls: 0, pending: 0 };
         let t = Instant::now();
         let (mut bytes, mut reads) = (0usize, 0usize);
@@ -128,17 +133,24 @@ async fn asyncfd_on_a_macos_pty_master() {
             }
         })
         .await;
-        let st = child.wait().await.unwrap();
+        let (polls, pending) = (c.polls, c.pending);
+        if res.is_err() {
+            // A child exiting with output nobody reads stays in its tty's close, deaf to
+            // signals, until the master is closed too.
+            let _ = child.start_kill();
+            drop((c, w));
+        }
+        let st = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
         println!(
-            "{name}: {bytes} bytes in {reads} reads, {} polls ({} pending), EOF after {:?}, {st:?}",
-            c.polls,
-            c.pending,
+            "{name}: {bytes} bytes in {reads} reads, {polls} polls ({pending} pending), EOF after \
+             {:?}, {st:?}",
             t.elapsed()
         );
         assert!(res.is_ok(), "{name}: no EOF");
+        assert!(st.is_ok_and(|s| s.is_ok()), "{name}: the child was not reaped");
         assert!(bytes > 0, "{name}: output lost");
         // A spurious wakeup or two is fine; a Pending for every poll is the bug this looks for.
-        assert!(c.pending <= 2 * reads + 2, "{name}: more Pending polls than data reads");
+        assert!(pending <= 2 * reads + 2, "{name}: more Pending polls than data reads");
     }
 }
 

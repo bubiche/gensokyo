@@ -1529,7 +1529,8 @@ fn a_persistent_codex_ritual_types_into_its_session_and_resumes_its_thread() {
     assert_eq!(args[args.len() - 4..], ["--add-dir", notes.as_str(), "resume", thread.as_str()]);
 }
 
-/// The session a persistent ritual keeps is its agent's: once that changes, it starts afresh.
+/// The session a persistent ritual keeps is its agent's: once that changes, it starts afresh,
+/// and the other agent's session, if it is still here, leaves and is no run of the ritual.
 #[test]
 fn a_persistent_ritual_whose_agent_changed_starts_a_session_of_the_new_one() {
     let text = hourly("target: persistent\n");
@@ -1543,15 +1544,30 @@ fn a_persistent_ritual_whose_agent_changed_starts_a_session_of_the_new_one() {
     let session =
         || std::fs::read_to_string(d.dir.join("rituals/diary/session")).unwrap_or_default();
     wait(|| session().trim() == claude.as_str().unwrap(), "the session file");
-    let r = d.req(json!({"t": "banish", "id": 4, "who": "diary"}));
-    assert_eq!(r["t"], "done", "{r}");
+    wait_for(Duration::from_secs(15), || d.live()[0]["turns"] == 1, "its first turn to end");
 
+    // Claude's session still here: it leaves, untagged, for Codex's.
     d.ritual("diary", &hourly("target: persistent\nagent: codex\nmode: acceptEdits\n"));
     d.clock(T0 + 7200 + 5);
-    wait(|| d.live().len() == 1, "a session of Codex's");
+    let codex = || d.live().into_iter().find(|r| r["agent"] == "codex");
+    wait_for(Duration::from_secs(30), || codex().is_some(), "a session of Codex's");
+    let cx = codex().unwrap()["id"].clone();
+    wait(|| session().trim() == cx.as_str().unwrap(), "the session file naming it");
+    wait(|| d.live().len() == 1, "Claude's session to leave");
+    let gone = d.dir.join(format!("residents/{}.json", claude.as_str().unwrap()));
+    let gone: Value = serde_json::from_str(&std::fs::read_to_string(gone).unwrap()).unwrap();
+    assert!(gone["departed"].is_number(), "{gone}");
+    assert!(gone["ritual"].is_null(), "still a run of the ritual: {gone}");
+    assert!(d.evs("diary", "sent").is_empty(), "typed into a session of its own");
+
+    // Codex's departed: Claude again starts afresh, recalling neither.
+    let r = d.req(json!({"t": "banish", "id": 4, "who": cx}));
+    assert_eq!(r["t"], "done", "{r}");
+    d.ritual("diary", &text);
+    d.clock(T0 + 10800 + 5);
+    wait(|| d.live().len() == 1, "a session of Claude's");
     let live = d.live();
-    assert_eq!(live[0]["agent"], "codex", "{live:?}");
-    assert_ne!(live[0]["id"], claude, "Claude's session recalled");
+    assert!(live[0]["agent"] == "claude" && live[0]["id"] != claude, "{live:?}");
     wait(|| session().trim() == live[0]["id"].as_str().unwrap(), "the session file naming it");
     assert!(d.evs("diary", "sent").is_empty(), "typed into a session of its own");
 }

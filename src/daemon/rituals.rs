@@ -527,12 +527,16 @@ fn fresh(shrine: &Shared, r: &Ritual, d: &Dir, keep: Option<u64>) -> Result<Stri
 /// left, started when there has never been one, or when it was another agent's.
 async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Fired>) {
     let d = Dir::of(&r.slug);
-    let id = d.session().filter(|id| {
+    let kept = d.session();
+    let id = kept.clone().filter(|id| {
         let sh = shrine.borrow();
         let here = sh.entries.iter().find(|e| &e.rec.id == id).map(|e| e.rec.agent);
         here.or_else(|| sh.store.load_departed_id(id).map(|rec| rec.agent)) == Some(r.agent())
     });
     let Some(id) = id else {
+        if let Some(old) = kept {
+            let_go(shrine, &r.slug, &old).await;
+        }
         match fresh(shrine, r, &d, None) {
             Ok(id) => {
                 delivered(&d, key);
@@ -553,6 +557,24 @@ async fn persistent(shrine: &Shared, r: &Ritual, label: &str, key: Option<Fired>
         return undelivered(shrine, r, &why);
     }
     type_prompt(shrine, r, &id, label, key.map_or(Sent::Nothing, Sent::Probe)).await;
+}
+
+/// The session a persistent ritual kept for its other agent, if it is still here: no run of the
+/// ritual from now on, and asked to leave as the daemon closes a resident, which a fire finds
+/// idle (one still at work holds the fire back as still going).
+async fn let_go(shrine: &Shared, slug: &str, id: &str) {
+    {
+        let mut sh = shrine.borrow_mut();
+        let sh = &mut *sh;
+        let Some(e) = sh.entries.iter_mut().find(|e| e.rec.id == id && e.handle.is_some()) else {
+            return;
+        };
+        e.rec.ritual = None;
+        let _ = sh.store.save(&e.rec);
+    }
+    if let Err(e) = super::shrine::close(shrine, id).await {
+        log(json!({"ev": "ritual", "slug": slug, "session": id, "error": e}));
+    }
 }
 
 /// A resident the user manages, by name: the prompt alone. Typed in as a spell card is, so a

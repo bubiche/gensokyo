@@ -513,17 +513,17 @@ notify = true
     let s = codex::setup(config);
     assert_eq!(s.plugins, ["a@market", "c@x@market", "bare"]);
     assert!(s.notify && !s.hooks, "{s:?}");
-    // However the key is spelt: dotted, quoted, under `[plugins]` or as an inline table.
+    // However the key is spelt: dotted, quoted or under `[plugins]`; not as an inline table,
+    // which Codex does not write.
     let spelt = r#"
 plugins."f@m".enabled = true
 "plugins".'g@m'.enabled = true # quoted
-plugins."off@m" = { enabled = false, x = "enabled = true" }
+plugins."off@m".enabled = "true"
 [plugins]
 "h@m".enabled = true
-"i@m" = { x = [1, { y = 2 }], "enabled" = true }
-"j@m" = { x = "}", enabled = true }
+"i@m" = { enabled = true }
 "#;
-    assert_eq!(codex::setup(spelt).plugins, ["f@m", "g@m", "h@m", "i@m", "j@m"]);
+    assert_eq!(codex::setup(spelt).plugins, ["f@m", "g@m", "h@m"]);
     // A hooks table or key is Codex's own hooks; one holding only its trust, or nothing, is not.
     let hooks = [
         "[hooks.Stop]",

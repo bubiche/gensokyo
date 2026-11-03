@@ -302,7 +302,7 @@ pub fn config_model(config: &str, profile: Option<&str>) -> Option<String> {
     let (mut top, mut chosen, mut theirs) = (None, None, Vec::new());
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            table = Some(profile_header(line));
+            table = Some(named_header(line, "profiles"));
             continue;
         }
         let Some((k, v)) = line.split_once('=') else { continue };
@@ -325,29 +325,10 @@ pub fn config_model(config: &str, profile: Option<&str>) -> Option<String> {
 
 /// A key as written, `model` or `"model"`; none for a dotted one.
 fn bare_key(k: &str) -> Option<String> {
-    let k = k.trim();
-    match toml_unquote(k) {
-        Some((k, rest)) => rest.trim().is_empty().then_some(k),
-        None => {
-            k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-').then(|| k.into())
-        }
+    match dotted(k)? {
+        (mut k, "") if k.len() == 1 => k.pop(),
+        _ => None,
     }
-}
-
-/// The name a `[profiles.<name>]` header gives, bare or quoted; none for any other header.
-fn profile_header(line: &str) -> Option<String> {
-    let rest = line.strip_prefix('[')?.trim_start();
-    let rest = rest.strip_prefix("profiles")?.trim_start().strip_prefix('.')?.trim_start();
-    let (name, rest) = match toml_unquote(rest) {
-        Some(q) => q,
-        None => {
-            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
-            let (name, rest) = rest.split_at(end.unwrap_or(rest.len()));
-            (name.to_string(), rest)
-        }
-    };
-    let rest = rest.trim_start().strip_prefix(']')?.trim();
-    (!name.is_empty() && (rest.is_empty() || rest.starts_with('#'))).then_some(name)
 }
 
 /// The context used, percent, as the last part of its title says: `Context 12% used`.
@@ -384,12 +365,10 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
             table = named_header(line, "projects");
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
-        let v = toml_unquote(v.trim());
-        let rest = v.as_ref().map(|(_, r)| r.trim());
-        let trusted = v.as_ref().is_some_and(|(v, _)| v == "trusted")
-            && rest.is_some_and(|r| r.is_empty() || r.starts_with('#'));
-        if let Some(t) = table.as_ref().filter(|_| k.trim() == "trust_level" && trusted) {
+        let Some((k, v)) = dotted(line) else { continue };
+        let v = v.strip_prefix('=').and_then(|v| toml_unquote(v.trim()));
+        let trusted = v.is_some_and(|(v, r)| v == "trusted" && scalar(r).is_empty());
+        if let Some(t) = table.as_ref().filter(|_| k == ["trust_level"] && trusted) {
             found.push(PathBuf::from(t));
         }
     }
@@ -410,7 +389,8 @@ pub struct Setup {
 
 /// `config`'s [`Setup`], by a small scan as `projects` is: each key is read with the table it is
 /// in, so `[plugins."<name>@<marketplace>"]` then `enabled = true`, as Codex writes one, is the
-/// same as `plugins."<name>@<marketplace>".enabled = true` or an inline table of it.
+/// same as `plugins."<name>@<marketplace>".enabled = true`. Inline tables are not read, but for
+/// the first key of a `hooks = {…}`.
 pub fn setup(config: &str) -> Setup {
     let mut s = Setup::default();
     let mut table = Vec::new();
@@ -426,23 +406,27 @@ pub fn setup(config: &str) -> Setup {
         let path: Vec<String> = table.iter().cloned().chain(key).collect();
         s.notify |= path == ["notify"];
         s.hooks |= hooks_in(&path, v);
-        if let [p, name, rest @ ..] = &path[..] {
-            let on = |rest: &[String], v: &str| rest == ["enabled"] && scalar(v) == "true";
-            let on = on(rest, v) || rest.is_empty() && inline(v).iter().any(|(k, v)| on(k, v));
-            if p == "plugins" && on && !s.plugins.contains(name) {
-                s.plugins.push(name.clone());
-            }
+        if let [p, name, e] = &path[..]
+            && p == "plugins"
+            && e == "enabled"
+            && scalar(v) == "true"
+            && !s.plugins.contains(name)
+        {
+            s.plugins.push(name.clone());
         }
     }
     s
 }
 
 /// Whether the key or table at `path`, its value `v`, holds hooks: anything under `hooks` but
-/// `hooks.state`.
+/// `hooks.state`, and a `hooks = {…}` by its first key.
 fn hooks_in(path: &[String], v: &str) -> bool {
     match path {
         [h, e, ..] => h == "hooks" && e != "state",
-        [h] => h == "hooks" && inline(v).iter().any(|(k, _)| k[0] != "state"),
+        [h] => {
+            let first = v.trim_start().strip_prefix('{').and_then(dotted);
+            h == "hooks" && first.is_some_and(|(k, _)| k[0] != "state")
+        }
         [] => false,
     }
 }
@@ -450,35 +434,6 @@ fn hooks_in(path: &[String], v: &str) -> bool {
 /// A value with its comment cut off.
 fn scalar(v: &str) -> &str {
     v.split('#').next().unwrap_or("").trim()
-}
-
-/// The keys of the inline table `v` is, with their values, at its own level only.
-fn inline(v: &str) -> Vec<(Vec<String>, &str)> {
-    let Some(body) = v.trim_start().strip_prefix('{') else { return Vec::new() };
-    let (b, mut parts) = (body.as_bytes(), Vec::new());
-    let (mut i, mut depth, mut start) = (0, 0, 0);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                let q = if q == b'"' { "\"" } else { "'" };
-                i += 1 + close(&body[i + 1..], q).unwrap_or(b.len());
-            }
-            b'[' | b'{' => depth += 1,
-            b']' | b'}' if depth > 0 => depth -= 1,
-            b'}' => {
-                parts.push(&body[start..i]);
-                break;
-            }
-            b',' if depth == 0 => {
-                parts.push(&body[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    let pairs = parts.into_iter().filter_map(|p| dotted(p));
-    pairs.filter_map(|(k, r)| Some((k, r.strip_prefix('=')?.trim()))).collect()
 }
 
 /// A key's parts, each bare or quoted, joined by dots, and what follows it, trimmed.

@@ -37,6 +37,8 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
   2.1.306; nothing checks the version.
+- Optional: OpenAI's Codex, for [Codex residents](#codex): `$GENSOKYO_CODEX`, else the first
+  `codex` on `PATH`, else the ChatGPT app's own copy.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
@@ -55,15 +57,15 @@ into `~/.gensokyo` and links `~/.local/bin/gensokyo` (it says so if that is not 
 Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 `GENSOKYO_VERSION`, `GENSOKYO_DIR`, `GENSOKYO_BIN_DIR`). Nothing is written anywhere else.
 
-- `gensokyo doctor` says which binary and which `claude` are in use, whether the daemon and the
-  login agent are running, how much the state dir holds and its largest files, and what looks
+- `gensokyo doctor` says which binary, `claude` and `codex` are in use, whether the daemon and
+  the login agent are running, how much the state dir holds and its largest files, and what looks
   wrong.
 - `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
   open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
-  is how the daemon finds `claude`: run it again after `claude` moves. Only that `PATH`,
-  `CLAUDE_CONFIG_DIR` and gensokyo's own location variables carry over (the agent's file is
-  readable by anyone), so a variable such as `ANTHROPIC_BASE_URL` or a proxy set in your shell
-  does not reach residents once launchd starts the daemon; `doctor` names any it sees.
+  is how the daemon finds `claude` and `codex`: run it again after either moves. Only that `PATH`,
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and gensokyo's own location variables carry over (the agent's
+  file is readable by anyone), so a variable such as `ANTHROPIC_BASE_URL` or a proxy set in your
+  shell does not reach residents once launchd starts the daemon; `doctor` names any it sees.
   `gensokyo login` says whether it is on; `gensokyo login remove` turns it off. A daemon
   `gensokyo quit` stopped stays stopped until the next login or the next `gensokyo`.
 - `gensokyo update` swaps `~/.gensokyo` for the latest release (`--check` only says whether there

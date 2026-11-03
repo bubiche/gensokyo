@@ -273,10 +273,11 @@ if [ -n "$remote" ]; then
   mv "$bridge.tmp" "$bridge"
 fi
 
-# fire <event> [,"more": "json"]: one hook, the way Claude Code runs it.
+# fire <event> [,"more": "json"]: one hook, the way Claude Code runs it. The command is run in
+# the pipe's own subshell rather than by another `sh`: an exec can cost a quarter second.
 fire() {
   [ -n "${STUB_HOOKS:-}" ] && [ -n "$hook_cmd" ] || return 0
-  printf '{"hook_event_name": "%s", "session_id": "%s"%s}' "$1" "$session" "${2:-}" | sh -c "$hook_cmd"
+  printf '{"hook_event_name": "%s", "session_id": "%s"%s}' "$1" "$session" "${2:-}" | eval "$hook_cmd"
 }
 
 # The status line's JSON, as much of it as gensokyo reads that the stub can say.
@@ -414,8 +415,10 @@ $more"
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
     /busy\ *) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/busy"'; echo "> $line"; submitted "$line"
              : > "$STUB_STATE/$id.turn"
-             ( n=$(( ${line#/busy } * 10 )); while [ $n -gt 0 ]; do n=$((n - 1)); sleep 0.1
-               fire PreToolUse ', "tool_name": "Bash", "tool_input": {}' & done; wait; rm -f "$STUB_STATE/$id.turn" ) & ;;
+             # The beat is perl's: a `sleep` per tick would take as long as an exec, not 0.1 s.
+             ( perl -e '$|=1; for (1..$ARGV[0] * 10) { select(undef, undef, undef, 0.1); print "\n" }' "${line#/busy }" |
+               { while read -r _; do fire PreToolUse ', "tool_name": "Bash", "tool_input": {}' & done; wait; }
+               rm -f "$STUB_STATE/$id.turn" ) & ;;
     /finish) fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "finished"'; echo "finished" ;;
     # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
     # exec can take longer than the daemon's hold on a loaded runner.

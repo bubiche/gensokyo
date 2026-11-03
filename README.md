@@ -38,7 +38,7 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 ## Requirements
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
-  2.1.306; nothing checks the version.
+  2.1.317; nothing checks the version.
 - Optional: OpenAI's Codex, for [Codex residents](#codex): tested on 0.154; an older one may
   refuse the flags it is started with.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty

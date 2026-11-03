@@ -524,19 +524,22 @@ pub fn plugin_hooks(home: &Path, plugin: &str) -> bool {
     let versions = versions.into_iter().flatten().flatten();
     let mut dirs = versions.filter(|v| v.file_type().is_ok_and(|t| t.is_dir())).map(|v| v.path());
     dirs.any(|v| {
-        let manifest = json(&v.join(".codex-plugin/plugin.json"));
-        hooks_file(&v.join("hooks/hooks.json")) || manifest.is_some_and(|m| holds(&m["hooks"]))
+        let manifest = json(&v.join(".codex-plugin/plugin.json"), false);
+        let hooks = json(&v.join("hooks/hooks.json"), false);
+        hooks.is_some_and(|h| holds(&h)) || manifest.is_some_and(|m| holds(&m["hooks"]))
     })
 }
 
-/// Whether `file`, a hooks.json, holds any hooks.
+/// Whether `file`, a hooks.json of the user's own, holds any hooks; a link to one is followed.
 pub fn hooks_file(file: &Path) -> bool {
-    json(file).is_some_and(|h| holds(&h))
+    json(file, true).is_some_and(|h| holds(&h))
 }
 
-/// `file` as JSON, if it is a regular file and not a link: a pipe there would never end.
-fn json(file: &Path) -> Option<serde_json::Value> {
-    std::fs::symlink_metadata(file).ok().filter(std::fs::Metadata::is_file)?;
+/// `file` as JSON, if it is a regular file, a link to one only when `follow`: a pipe there would
+/// never end.
+fn json(file: &Path, follow: bool) -> Option<serde_json::Value> {
+    let meta = if follow { std::fs::metadata(file) } else { std::fs::symlink_metadata(file) };
+    meta.ok().filter(std::fs::Metadata::is_file)?;
     serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
 }
 

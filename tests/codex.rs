@@ -593,6 +593,13 @@ fn a_plugin_ships_hooks_by_its_hooks_file_or_its_manifest_in_any_version_cached(
     assert!(has("inline@market") && has("path@market") && has("old@market"));
     assert!(!has("none@market") && !has("broken@market") && !has("gone@market"));
     assert!(!has("empty@market") && !has("linked@market") && !has("pipe@market"));
+    // The user's own hooks.json is read through a link, but never from a pipe.
+    let own = home.join("hooks.json");
+    std::os::unix::fs::symlink(elsewhere.join("v/hooks/hooks.json"), &own).unwrap();
+    assert!(codex::hooks_file(&own));
+    std::fs::remove_file(&own).unwrap();
+    assert!(Command::new("mkfifo").arg(&own).status().unwrap().success());
+    assert!(!codex::hooks_file(&own) && !codex::hooks_file(&home.join("gone.json")));
     // A name that is not `<name>@<marketplace>`, or that would leave the cache, is none.
     std::fs::create_dir_all(home.join("plugins/hooks")).unwrap();
     assert!(!has("inline") && !has("..@cache") && !has("old@../cache/market") && !has("@market"));

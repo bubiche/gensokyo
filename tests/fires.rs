@@ -1461,7 +1461,7 @@ fn a_codex_ritual_starts_codex_with_its_mode_and_notes_dir_and_its_run_is_record
 
 #[test]
 fn a_codex_ritual_in_a_directory_codex_has_not_trusted_is_refused_by_the_clock() {
-    let text = hourly("agent: codex\n");
+    let text = hourly("agent: codex\nmode: acceptEdits\n");
     let d = Daemon::start("cx-untrusted", T0 + 120, &[("rounds", &text)], &[]);
     wait(|| d.stamp("rounds").is_some(), "first sight");
     d.clock(T0 + 3600 + 5);
@@ -1473,7 +1473,7 @@ fn a_codex_ritual_in_a_directory_codex_has_not_trusted_is_refused_by_the_clock()
 
 #[test]
 fn a_persistent_codex_ritual_types_into_its_session_and_resumes_its_thread() {
-    let text = hourly("target: persistent\nagent: codex\n");
+    let text = hourly("target: persistent\nagent: codex\nmode: auto\n");
     let d = Daemon::new("cx-persist", T0 + 120, &[("diary", &text)], &[]);
     codex_trusts(&d);
     d.cli(&["list"]);
@@ -1532,7 +1532,7 @@ fn a_headless_codex_run_is_codex_exec_and_logs_its_answer() {
 
 #[test]
 fn a_headless_codex_run_that_fails_says_why_either_way() {
-    let codex = "agent: codex\n";
+    let codex = "agent: codex\nmode: acceptEdits\n";
     let (d, log) = headless_with("cx-hl-fail", codex, &[("STUB_EXEC_FAIL", "unsupported model")]);
     assert!(
         log.contains("--- codex exited 1, and said:\nunsupported model\nstub-codex: unsupported"),

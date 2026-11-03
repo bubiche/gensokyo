@@ -683,8 +683,10 @@ fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
         std::fs::write(home.join("config.toml"), toml).unwrap();
         claude().with_codex(&home)
     };
-    let good =
-        format!("---\nschedule: \"@daily\"\ncwd: {}\nagent: codex\n---\nhi\n", cwd.display());
+    let good = format!(
+        "---\nschedule: \"@daily\"\ncwd: {}\nagent: codex\nmode: acceptEdits\n---\nhi\n",
+        cwd.display()
+    );
     assert_eq!(rit(&good).agent(), Agent::Codex);
     assert_eq!(rit("---\n---\nhi").agent(), Agent::Claude, "claude by default");
     let yes = trust(&format!("[projects.\"{}\"]\ntrust_level = \"trusted\"\n", cwd.display()));
@@ -704,11 +706,17 @@ fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
         ("mode: dontAsk\n", "Codex has no dontAsk mode"),
         ("effort: \"very high\"\n", "effort very high: Codex takes one word"),
         ("target: Sakuya\n", "agent: codex is for a run that starts a session"),
+        ("mode: default\n", "mode: default keeps Codex read-only: a Codex run writes its notes"),
+        ("mode: plan\n", "mode: plan keeps Codex read-only"),
     ] {
         let text = good.replacen("---\nhi", &format!("{line}---\nhi"), 1);
         let p = ritual::problem(&rit(&text), now, &tz, &yes).unwrap_or_default();
         assert!(p.contains(want), "{line:?}: {p}");
     }
+    // With no mode, Codex's own config would choose its sandbox.
+    let p = ritual::problem(&rit(&good.replacen("mode: acceptEdits\n", "", 1)), now, &tz, &yes);
+    let wide = "a Codex run writes its notes, so it needs acceptEdits (or auto, bypassPermissions)";
+    assert_eq!(p, Some(format!("mode: missing: {wide}")));
     // Its flags are what its start takes out, and the ritual's own directory: no Claude rules.
     let r = rit("---\nagent: codex\nmodel: gpt-5\neffort: high\nmode: acceptEdits\n---\nDo it.");
     assert_eq!(
@@ -730,6 +738,7 @@ fn a_codex_ritual_is_read_checked_and_trusted_by_codex() {
         schedule: "@daily".into(),
         cwd: cwd.to_string_lossy().into_owned(),
         agent: Some("codex".into()),
+        mode: Some("acceptEdits".into()),
         prompt: "hi".into(),
         ..Add::default()
     };

@@ -1218,7 +1218,7 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
     assert_eq!(tail(&in_repo("mode: auto\n"))[..1], ["--approve-for-me"]);
     let bypass = tail(&in_repo("mode: bypassPermissions\n"));
     assert_eq!(bypass[..1], ["--dangerously-bypass-approvals-and-sandbox"]);
-    // No mode: whatever Codex's own config says.
+    // No mode, which a ritual that passed its check never has: no sandbox flags at all.
     assert_eq!(tail(&in_repo("")), ["--add-dir", "/s/rituals/r"]);
     // Outside any repository exec refuses to run unless told it may.
     let bare = fresh("cx-exec-bare");

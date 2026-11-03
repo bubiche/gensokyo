@@ -81,9 +81,9 @@ PROMPT
 - `--agent codex` runs it on Codex instead of Claude Code, only when the user asks for Codex:
   a fresh or persistent run is a Codex resident, a headless one is `codex exec`. Codex has no
   `--allowed-tools` or `--mcp-config` (both are refused): its `--mode` alone says what it may
-  do, and `default` or `plan` keep it read-only, notes included, so a run that writes needs
-  `--mode acceptEdits` or wider. Its trust is Codex's own: the user opens Codex in that
-  directory once and trusts it, and the warning says so.
+  do, and it must let the run write its notes, so give it `--mode acceptEdits` (or `auto`,
+  `bypassPermissions`); `default`, `plan` and no mode at all are refused. Its trust is Codex's
+  own: the user opens Codex in that directory once and trusts it, and the warning says so.
 - `--when <probe>` makes the schedule a polling interval: each fire first runs the probe, a
   program in gensokyo's `probes/` (see below), and starts a run only when its output differs
   from what it printed for the last run. For "tell me when X changes".

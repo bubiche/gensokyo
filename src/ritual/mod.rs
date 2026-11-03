@@ -623,7 +623,15 @@ fn codex(r: &Ritual, own: bool) -> Result<(), String> {
                     file"
             .into());
     }
-    crate::daemon::codex::check(r.mode.as_deref(), r.effort.as_deref())
+    crate::daemon::codex::check(r.mode.as_deref(), r.effort.as_deref())?;
+    // Its notes are in the directory it adds, which Codex's read-only sandbox keeps from it
+    // too, and with no mode its own config says which sandbox: neither keeps notes for sure.
+    let wide = "a Codex run writes its notes, so it needs acceptEdits (or auto, bypassPermissions)";
+    match r.mode.as_deref() {
+        None => Err(format!("mode: missing: {wide}")),
+        Some(m @ ("default" | "plan")) => Err(format!("mode: {m} keeps Codex read-only: {wide}")),
+        Some(_) => Ok(()),
+    }
 }
 
 /// The ritual's prompt, and for a run of its own the sentence naming its notes: a fresh

@@ -564,12 +564,35 @@ fn a_plugin_ships_hooks_by_its_hooks_file_or_its_manifest_in_any_version_cached(
     manifest("none/1.0", r#"{"name":"none","skills":"./skills/"}"#);
     manifest("broken/1.0", "{");
     manifest("old/1.0", r#"{"name":"old"}"#);
-    std::fs::create_dir_all(cache.join("old/2.0/hooks")).unwrap();
-    std::fs::write(cache.join("old/2.0/hooks/hooks.json"), "{}").unwrap();
+    let hooks_json = |p: &str, json: &str| {
+        let d = cache.join(p).join("hooks");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("hooks.json"), json).unwrap();
+    };
+    hooks_json("old/2.0", r#"{"hooks":{"Stop":[{"hooks":[]}]}}"#);
     std::fs::write(cache.join("old/.codex-remote-plugin-install.json"), "{}").unwrap();
+    // Hooks that hold none are none.
+    for (i, empty) in ["\"\"", "[]", "false", "{}", "null", r#"{"hooks":{}}"#].iter().enumerate() {
+        manifest(&format!("empty/{i}"), &format!(r#"{{"name":"empty","hooks":{empty}}}"#));
+    }
+    hooks_json("empty/9", "{}");
+    hooks_json("empty/10", r#"{"hooks":{}}"#);
+    // Nor are they behind a link, or in a pipe, which would never end.
+    let elsewhere = fresh("cx-plugins-elsewhere");
+    manifest("linked/1.0", r#"{"name":"linked"}"#);
+    std::fs::create_dir_all(elsewhere.join("v/hooks")).unwrap();
+    std::fs::write(elsewhere.join("v/hooks/hooks.json"), r#"{"Stop":[]}"#).unwrap();
+    std::os::unix::fs::symlink(elsewhere.join("v"), cache.join("linked/2.0")).unwrap();
+    std::fs::create_dir_all(cache.join("linked/3.0/hooks")).unwrap();
+    let file = elsewhere.join("v/hooks/hooks.json");
+    std::os::unix::fs::symlink(file, cache.join("linked/3.0/hooks/hooks.json")).unwrap();
+    std::fs::create_dir_all(cache.join("pipe/1.0/.codex-plugin")).unwrap();
+    let fifo = cache.join("pipe/1.0/.codex-plugin/plugin.json");
+    assert!(Command::new("mkfifo").arg(fifo).status().unwrap().success());
     let has = |p: &str| codex::plugin_hooks(&home, p);
     assert!(has("inline@market") && has("path@market") && has("old@market"));
     assert!(!has("none@market") && !has("broken@market") && !has("gone@market"));
+    assert!(!has("empty@market") && !has("linked@market") && !has("pipe@market"));
     // A name that is not `<name>@<marketplace>`, or that would leave the cache, is none.
     std::fs::create_dir_all(home.join("plugins/hooks")).unwrap();
     assert!(!has("inline") && !has("..@cache") && !has("old@../cache/market") && !has("@market"));

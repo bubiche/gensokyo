@@ -511,19 +511,44 @@ fn header(line: &str) -> Option<Vec<String>> {
 }
 
 /// Whether `plugin`, `<name>@<marketplace>`, ships hooks in any version `home` caches in
-/// `plugins/cache/<marketplace>/<name>/<version>/`: a `hooks/hooks.json`, or a `hooks` in its
-/// `.codex-plugin/plugin.json`, a path or the hooks themselves. Only that manifest is opened.
+/// `plugins/cache/<marketplace>/<name>/<version>/`: a `hooks/hooks.json` that holds any, or a
+/// `hooks` in its `.codex-plugin/plugin.json`, a path or the hooks themselves. Only those two
+/// files are opened, and no link is followed to a version.
 pub fn plugin_hooks(home: &Path, plugin: &str) -> bool {
     let Some((name, market)) = plugin.rsplit_once('@') else { return false };
     if [name, market].iter().any(|p| p.is_empty() || p.starts_with('.') || p.contains('/')) {
         return false;
     }
     let versions = std::fs::read_dir(home.join("plugins/cache").join(market).join(name));
-    versions.into_iter().flatten().flatten().map(|v| v.path()).filter(|v| v.is_dir()).any(|v| {
-        let manifest = std::fs::read_to_string(v.join(".codex-plugin/plugin.json")).ok();
-        let manifest = manifest.and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok());
-        v.join("hooks/hooks.json").is_file() || manifest.is_some_and(|m| !m["hooks"].is_null())
+    let versions = versions.into_iter().flatten().flatten();
+    let mut dirs = versions.filter(|v| v.file_type().is_ok_and(|t| t.is_dir())).map(|v| v.path());
+    dirs.any(|v| {
+        let manifest = json(&v.join(".codex-plugin/plugin.json"));
+        hooks_file(&v.join("hooks/hooks.json")) || manifest.is_some_and(|m| holds(&m["hooks"]))
     })
+}
+
+/// Whether `file`, a hooks.json, holds any hooks.
+pub fn hooks_file(file: &Path) -> bool {
+    json(file).is_some_and(|h| holds(&h))
+}
+
+/// `file` as JSON, if it is a regular file and not a link: a pipe there would never end.
+fn json(file: &Path) -> Option<serde_json::Value> {
+    std::fs::symlink_metadata(file).ok().filter(std::fs::Metadata::is_file)?;
+    serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()
+}
+
+/// Whether hooks as JSON have any in them: a path, or what its `hooks` (or itself) holds.
+fn holds(h: &serde_json::Value) -> bool {
+    use serde_json::Value::*;
+    match h.get("hooks").unwrap_or(h) {
+        Null | Bool(false) => false,
+        String(s) => !s.is_empty(),
+        Array(a) => !a.is_empty(),
+        Object(o) => !o.is_empty(),
+        _ => true,
+    }
 }
 
 /// `config`'s lines, trimmed, but those that open a multi-line string and those inside one or

@@ -82,8 +82,9 @@ PROMPT
   a fresh or persistent run is a Codex resident, a headless one is `codex exec`. Codex has no
   `--allowed-tools` or `--mcp-config` (both are refused): its `--mode` alone says what it may
   do, and it must let the run write its notes, so give it `--mode acceptEdits` (or `auto`,
-  `bypassPermissions`); `default`, `plan` and no mode at all are refused. Its trust is Codex's
-  own: the user opens Codex in that directory once and trusts it, and the warning says so.
+  `bypassPermissions`); `default`, `plan` and no mode at all are refused. A Codex resident
+  needs a directory Codex trusts: the user opens Codex there once and trusts it, and the
+  warning says so. A headless one (`codex exec`) needs no trust.
 - `--when <probe>` makes the schedule a polling interval: each fire first runs the probe, a
   program in gensokyo's `probes/` (see below), and starts a run only when its output differs
   from what it printed for the last run. For "tell me when X changes".

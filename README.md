@@ -30,6 +30,8 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 - **Roles** are standing instructions (reviewer, implementer, debugger, …) that last through a
   `/clear` or a `/compact`.
 - **The Mac stays awake while sessions work**, and sleeps once the work is done.
+- **Codex too.** `gensokyo new --agent codex` runs OpenAI's Codex as a resident or a helper, or
+  for a ritual, followed and read as Claude Code is.
 - **Everything is a command** (`list --json`, `new`, `wait`, `read`, `tag`, …), for your scripts
   and for the sessions themselves.
 
@@ -37,6 +39,8 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 
 - macOS on Apple silicon, and Claude Code (`claude` on `PATH`). This release was tested on
   2.1.306; nothing checks the version.
+- Optional: OpenAI's Codex, for [Codex residents](#codex): tested on 0.154; an older one may
+  refuse the flags it is started with.
 - iTerm2 3.5 or newer is the terminal it is made for. Terminal.app works without the kitty
   keyboard protocol, so Shift+Enter and a few other chords are not told apart there.
 - For the PR watcher only: `gh`, logged in, and `jq` (macOS 15 and later ship it), and a
@@ -55,17 +59,18 @@ into `~/.gensokyo` and links `~/.local/bin/gensokyo` (it says so if that is not 
 Options go after `sh -s --`: `--version 0.2.0`, `--dir DIR`, `--bin-dir DIR` (or
 `GENSOKYO_VERSION`, `GENSOKYO_DIR`, `GENSOKYO_BIN_DIR`). Nothing is written anywhere else.
 
-- `gensokyo doctor` says which binary and which `claude` are in use, whether the daemon and the
-  login agent are running, how much the state dir holds and its largest files, and what looks
+- `gensokyo doctor` says which binary, `claude` and `codex` are in use, whether the daemon and
+  the login agent are running, how much the state dir holds and its largest files, and what looks
   wrong.
-- `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never
-  open a terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which
-  is how the daemon finds `claude`: run it again after `claude` moves. Only that `PATH`,
-  `CLAUDE_CONFIG_DIR` and gensokyo's own location variables carry over (the agent's file is
-  readable by anyone), so a variable such as `ANTHROPIC_BASE_URL` or a proxy set in your shell
-  does not reach residents once launchd starts the daemon; `doctor` names any it sees.
-  `gensokyo login` says whether it is on; `gensokyo login remove` turns it off. A daemon
-  `gensokyo quit` stopped stays stopped until the next login or the next `gensokyo`.
+- `gensokyo login setup` starts the daemon at every login, so rituals fire on a day you never open a
+  terminal, and launchd starts it again if it crashes. It takes this shell's `PATH`, which is how
+  the daemon finds `claude` and `codex`: run it again after either moves. Only that `PATH`,
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and gensokyo's own location variables carry over (the agent's
+  file is readable by anyone), so a variable such as `ANTHROPIC_BASE_URL` or a proxy set in your
+  shell does not reach residents once launchd starts the daemon; `doctor` names any `ANTHROPIC_*`,
+  `OPENAI_*` or proxy variable it sees. `gensokyo login` says whether it is on; `gensokyo login
+  remove` turns it off. A daemon `gensokyo quit` stopped stays stopped until the next login or the
+  next `gensokyo`.
 - `gensokyo update` swaps `~/.gensokyo` for the latest release (`--check` only says whether there
   is one, `--version` picks one). The running daemon keeps the old binary until `gensokyo
   restart`.
@@ -187,14 +192,14 @@ for. The setting is kept in the config (`KEEP_AWAKE=off`).
 
 ## When a resident needs you
 
-Every resident is launched with `--settings` carrying a few hooks and a status line (they merge
-with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a resident is
-doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished turn you
-have not seen, `✧` a question it asked. A resident that needs you is gold. When there are more
-than the sidebar has room for, it keeps the one on screen in view and says how many are above
-and below (gold when one of those needs you; a click shows it). When it is not the one on
-screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
-(OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
+Every Claude Code resident is launched with `--settings` carrying a few hooks and a status line
+(they merge with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a
+resident is doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished
+turn you have not seen, `✧` a question it asked. A resident that needs you is gold. When there are
+more than the sidebar has room for, it keeps the one on screen in view and says how many are above
+and below (gold when one of those needs you; a click shows it). When it is not the one on screen in
+a focused terminal, the shrine rings the bell and posts an iTerm2 notification (OSC 9).
+`~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
 
 ![Marisa on screen at a permission prompt, gold in the sidebar with Sakuya and Youmu](docs/needs-you.svg)
 
@@ -220,18 +225,17 @@ text.
 Inside the resident, gensokyo draws its own one-line status line; `STATUSLINE=user` in the
 config runs your own `statusLine` command instead, with the same input.
 
-**Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every resident starts with Claude
-Code's Remote Control, under its own name: the Claude app on your phone and claude.ai/code list
-it, and a prompt or an answer can be given there while it stays in the shrine. Once it has had a
-prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives as `remote`.
-It is off by default, since whoever holds your claude.ai login can then type into every
-resident; it needs that login (not an API key), a Claude Code that takes `--remote-control`
-(2.1.306 does; an older one may refuse the flag, and the resident not start), and the Mac
-awake and online. The setting is
-read at each launch, so `gensokyo renew Marisa` brings it to a resident already running, and
-`doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take it, so
-claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs and
-cloud sessions. Claude Code's own `/remote-control` turns it on in one resident until that one
+**Away from the Mac.** With `REMOTE_CONTROL=on` in the config, every Claude Code resident starts
+with Claude Code's Remote Control, under its own name: the Claude app on your phone and
+claude.ai/code list it, and a prompt or an answer can be given there while it stays in the shrine.
+Once it has had a prompt, a recall, a renew or a comeback keeps its link, which `list --json` gives
+as `remote`. It is off by default, since whoever holds your claude.ai login can then type into every
+resident; it needs that login (not an API key), a Claude Code that takes `--remote-control` (2.1.306
+does; an older one may refuse the flag, and the resident not start), and the Mac awake and online.
+The setting is read at each launch, so `gensokyo renew Marisa` brings it to a resident already
+running, and `doctor` says whether it is on. A ritual's runs of their own (`target: new`) don't take
+it, so claude.ai is not filled with them; a persistent ritual's session does. Nor do headless runs
+and cloud sessions. Claude Code's own `/remote-control` turns it on in one resident until that one
 starts again. On the web, a permission prompt's main button is "Always allow", which lasts the
 session; "Allow once" is under its arrow.
 
@@ -365,18 +369,17 @@ scheduled?" work the same way.
   first if it has left. `target: <name>` types the prompt into a resident you run yourself.
   `target: branch` (with `when`) types into whichever resident works on a branch, below.
   A fire that cannot be delivered says so in the journal and as a notification.
-- **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire
-  until its resident is idle: its turn over (10 s since it was last heard from), no dialog or
-  question open, nothing half typed into it. Whether it is on screen makes no difference. A
-  newer fire takes the place of one still held, and 4 h after the first of them the fire is
-  dropped, with what held it; the journal says `held`, then `sent` or `not sent`. When what
-  holds it is yours to clear (a dialog, or text typed and not sent), a notification says so.
-  Text typed and not sent counts until a prompt goes in, Ctrl-C, `/clear`, or the Enter that
-  runs a `/` or `!` command. Fires for one resident go in one at a time, each after the turn
-  the last one started. A resident that has not come up within a minute (not yet seen by
-  Claude Code's session list, as at the trust dialog) is given up on. `deliver: now` types it
-  in at once, mid-turn too, where Claude Code queues it, and gives up on a dialog instead of
-  waiting.
+- **`deliver`** (with `persistent` or a resident's name): `idle`, the default, holds a fire until
+  its resident is idle: its turn over (10 s since it was last heard from), no dialog or question
+  open, nothing half typed into it. Whether it is on screen makes no difference. A newer fire takes
+  the place of one still held, and 4 h after the first of them the fire is dropped, with what held
+  it; the journal says `held`, then `sent` or `not sent`. When what holds it is yours to clear (a
+  dialog, or text typed and not sent), a notification says so. Text typed and not sent counts until
+  a prompt goes in, Ctrl-C, `/clear`, or the Enter that runs a `/` or `!` command. Fires for one
+  resident go in one at a time, each after the turn the last one started. A resident that has not
+  come up within a minute (not yet seen by Claude Code's session list, or, for Codex, its title, as
+  at the trust dialog) is given up on. `deliver: now` types it in at once, mid-turn too, where
+  Claude Code queues it, and gives up on a dialog instead of waiting.
 - **`model`**, **`effort`**, **`mode`** (the permission mode), **`allowed_tools`** and
   **`mcp_config`** (a file of MCP servers, as `claude --mcp-config` takes) are what a run starts
   with. A ritual that reads Slack or mail needs its MCP server: a claude.ai connector, the
@@ -384,10 +387,13 @@ scheduled?" work the same way.
 - **`role`** (with `target: new` or `persistent`): a role for every run's system prompt, by name
   or a file's full path, as [Roles](#roles) describes. A persistent ritual's session keeps the
   role it was started with, as it keeps its model.
-- **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` in the
-  background, what it said goes to a log beside the ritual's notes, and a run still going after
-  an hour is stopped. Nobody is there to answer a permission prompt, so what it needs goes in
-  `allowed_tools`; the log names any tool it was refused.
+- **`agent: codex`** (with `target: new` or `persistent`): its runs are Codex, as
+  [Codex](#codex) describes.
+- **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` (for
+  Codex, `codex exec`) in the background, what it said goes to a log beside the ritual's notes, and
+  a run still going after an hour is stopped. Nobody is there to answer a permission prompt, so what
+  it needs goes in `allowed_tools` (for Codex, its `mode`); the log names any tool it was refused
+  (for Codex, only in what the run says).
 - **`worktree`** (with `target: new`): every run works in that worktree of `cwd`'s repository,
   made the first time as `new --worktree` makes one, and in the same subdirectory as `cwd`. One
   checkout for all its runs, so not with `overlap: parallel`.
@@ -430,7 +436,7 @@ scheduled?" work the same way.
   Their permission prompts still do.
 
 A ritual whose settings don't fit together (a `headless` one with `target: persistent`, a
-`cwd` Claude Code was never trusted in) does not fire, and `gensokyo ritual` and the timetable
+`cwd` its agent was never trusted in) does not fire, and `gensokyo ritual` and the timetable
 say why. A run that stopped at the trust dialog would sit there, and every later fire would skip
 itself as still going.
 
@@ -473,9 +479,9 @@ Three examples ship paused in `share/rituals/`: `slack-morning`, `nightly-checks
 `inbox-zero`. `gensokyo ritual edit slack-morning` makes a copy of yours and opens it; each
 names a directory that is not on your machine, which is the line to change first. A shipped
 example can't be removed, only disabled; removing your copy brings the paused original back.
-Run a new ritual by hand once before leaving it to the clock, and add what it asks permission
-for to its `allowed_tools`: each fire is a fresh session, and an answer given to one does not
-carry over.
+Run a new ritual by hand once before leaving it to the clock, and add what it asks permission for to
+its `allowed_tools` (for a Codex one, widen its `mode`): each fire is a fresh session, and an answer
+given to one does not carry over.
 
 Rituals fire only while the daemon runs, and on a machine that is awake. A laptop whose lid was
 shut through a fire makes it up at the next tick after it wakes. A run keeps the Mac awake while
@@ -606,10 +612,59 @@ done so. Its permission prompts and questions always ring: only you can answer t
 whose lead has left for good is closed after two hours idle (a cloud session once its turn
 ends); a lead recalled before then keeps it.
 
+## Codex
+
+OpenAI's Codex can be a resident too: `gensokyo new ~/dev/x --agent codex`, from a shell (the
+summon dialog starts Claude Code). It runs `$GENSOKYO_CODEX`, else the first `codex` on `PATH`,
+else `/Applications/ChatGPT.app/Contents/Resources/codex`. `-m` reaches it as `-m`, and `-e` as
+`-c model_reasoning_effort=…` (one word). It takes no `--allowed-tools`, and is never a cloud
+session or a run taken over. Its hooks, gensokyo's words and its mode go in as flags; nothing in
+`~/.codex` is written. The permission mode becomes Codex's sandbox and approvals:
+
+| `-p` | Codex runs with |
+|---|---|
+| `plan`, `default` | `-s read-only -a on-request` |
+| `acceptEdits` | `-s workspace-write -a on-request` |
+| `auto` | `--approve-for-me` (sandbox from its config): Codex's reviewer answers its requests |
+| `bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` |
+
+With none, Codex's own config decides (a helper takes its lead's). Codex's sandbox keeps git's own
+files read-only, so outside `bypassPermissions` a Codex resident is told to leave its changes
+uncommitted, and a lead commits its helper's work.
+
+- **Trust.** A lead's Codex helper, and a Codex ritual's resident, need a directory Codex
+  trusts: `[projects."<dir>"] trust_level = "trusted"` in `$CODEX_HOME/config.toml` (`~/.codex`
+  by default), for it, or for the main checkout it lies inside (no directory above counts), as
+  Codex writes once you trust it there.
+- **Hooks.** Every resident's launch passes `--dangerously-bypass-hook-trust`, with gensokyo's hooks
+  as `-c hooks.<Event>=…`, so Codex does not hold them for review. Any other hook Codex has enabled
+  then runs unreviewed too. `notify` is left alone. `gensokyo doctor` lists what it found:
+  `hooks.json`, `[hooks]` in `config.toml`, and enabled plugins that declare hooks; a project's
+  `.codex/` is not read.
+- **What it is told.** gensokyo's paragraph, then a role and your words, as its
+  `developer_instructions`: its name, and for a helper who its lead is and that its last message
+  is its report, since it can message nobody. It gets none of the skills, so it is not set up to
+  lead helpers, and it can't be a pair card's peer.
+- **In the shrine.** Its state comes from its hooks and its terminal title; an approval is a
+  permission prompt, counted in `needs`. Its sidebar line has its model, by Codex's name, and its
+  context. It has no status line, cost or cache rate, and adds nothing to the usage bars. `wait`,
+  `read` and `close` work as for Claude Code; `renew` does not.
+- **`say`** runs `codex queue`: Codex takes the words as its next prompt once its turn is over.
+  It refuses before the first prompt (Codex names its thread then), and after an interrupted
+  turn until someone types in its pane.
+- **Coming back.** A recall, and the comeback after a crash or a stop, resume the same thread
+  (`codex resume`) while Codex still keeps it under `$CODEX_HOME/sessions/`, and otherwise start
+  afresh under the same name. A resumed thread keeps the instructions it started with. Words
+  queued for its thread that had not run yet go in once it is up, unless its last turn was
+  interrupted.
+- **Rituals.** `agent: codex` (`ritual add --agent codex`); a headless run is `codex exec`. A run
+  writes its notes, so its mode must be `acceptEdits`, `auto` or `bypassPermissions`.
+  `allowed_tools`, `mcp_config` and a resident or `branch` as target are refused.
+
 ## What residents are told
 
-Almost nothing, on purpose: a resident's context window is your budget. Each is launched,
-without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
+Almost nothing, on purpose: a resident's context window is your budget. Each Claude Code one is
+launched, without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
 `--append-system-prompt`: the name it lives under, that the first message of an exchange with
 another session is the `gensokyo-peers` skill's to write, that standing schedules are
 gensokyo's (Claude Code's own `CronCreate`, `CronList`, `CronDelete` and `RemoteTrigger` are
@@ -640,6 +695,7 @@ gensokyo new ~/dev/x -n Marisa -m haiku # summon; also -e effort, -p permission 
                                         #   --prompt-file FILE|-, --allowed-tools TOOL, --json
 gensokyo new ~/dev/x --role reviewer    # with a role (Roles); --system-prompt TEXT, your own
 gensokyo new ~/dev/x --worktree fix     # in a worktree of its own (below); --branch, --base
+gensokyo new ~/dev/x --agent codex      # OpenAI's Codex instead (Codex)
 gensokyo resume Marisa                  # bring a departed one back (list --all shows them)
 gensokyo banish Marisa [Sanae …]        # hang up: HUP, then TERM, then KILL
 gensokyo close Marisa [Sanae …]         # ask it to /exit; a departed one leaves the sidebar
@@ -657,15 +713,15 @@ gensokyo tag Reimu pr=#123 ci=          # set and remove its tags; alone, list t
 gensokyo help <command>                 # every command has its own
 ```
 
-A resident is named by its name, its slot or its id. `list --json` is an array with one object
-per resident: `id`, `name`, `slot`, `cwd` (where it was started), `here` (where it works now,
-when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
+A resident is named by its name, its slot or its id. `list --json` is an array with one object per
+resident: `id`, `name`, `agent` (`claude` or `codex`), `slot`, `cwd` (where it was started), `here`
+(where it works now, when that is elsewhere), `pid`, `state` (`busy`, `awaits`, `asked`, `resting`
 or `departed`), `detail` (what it waits for), `blocked` (why nothing may be typed into it now),
 `finished`, `owner` (its lead's id), `turns` and `needs` (turns ended and dialogs opened, ever),
 `mode`, `branch` (at `here`), `telemetry`, `outdated` (the installed Claude Code version, when it
-runs another), `renewing`, `tags` (an object, in the order they were set), `remote` (its
-Remote Control link, from a moment after it starts), and for a departed one `departed` (epoch
-seconds), `exit` and `signal`. `new --json` prints the new resident the same way.
+runs another), `renewing`, `tags` (an object, in the order they were set), `remote` (its Remote
+Control link, from a moment after it starts), and for a departed one `departed` (epoch seconds),
+`exit` and `signal`. `new --json` prints the new resident the same way.
 
 `wait` holds until each resident named has news (`--any`: one of them), or only the kind
 `--until done|needs|gone` names, for at most `--timeout` (`30m`). It prints one JSON line per
@@ -727,14 +783,15 @@ every resident back into its own conversation. Run it from a terminal of your ow
 inside a resident.
 
 CI runs the suite, clippy and fmt on macOS. The tests start real daemons on the stub in
-`tests/stub-claude`, which stands in for `claude` (hooks, the registry, `/exit`), each in a
-state directory of its own under `target/`, so nothing touches yours and no Claude Code login is
-needed. A changed screen snapshot fails its test and leaves a `.snap.new` beside the old one in
-`tests/snapshots/`; read it, then `cargo insta review` (cargo-insta) or rename it over the old.
-The install, update and uninstall tests package this build with `scripts/release.sh` and run
-the shipped scripts in a home of their own, with a stand-in `launchctl`. One test loads a real
-launchd agent under a `dev.gensokyo.test.*` label and boots it out again: it is left out unless
-asked for, with `cargo nextest run --test login --run-ignored ignored-only`.
+`tests/stub-claude`, which stands in for `claude` (hooks, the registry, `/exit`), and
+`tests/stub-codex` for `codex`, each in a state directory of its own under `target/`, so nothing
+touches yours and no Claude Code or OpenAI login is needed. A changed screen snapshot fails its test
+and leaves a `.snap.new` beside the old one in `tests/snapshots/`; read it, then `cargo insta
+review` (cargo-insta) or rename it over the old. The install, update and uninstall tests package
+this build with `scripts/release.sh` and run the shipped scripts in a home of their own, with a
+stand-in `launchctl`. One test loads a real launchd agent under a `dev.gensokyo.test.*` label and
+boots it out again: it is left out unless asked for, with `cargo nextest run --test login
+--run-ignored ignored-only`.
 
 A release is a `v<version>` tag matching `Cargo.toml`: the release workflow builds the arm64
 tarball with `scripts/release.sh`, installs it into a scratch home, and publishes it with
@@ -747,8 +804,9 @@ same into `dist/`.
 - `src/cli/`: the commands; `src/proto.rs` is the socket's NDJSON.
 - `src/vt.rs`: the emulator adapter; `src/ritual/` and `src/card.rs` the two file formats.
 
-`GENSOKYO_CLAUDE` points at another `claude`, `GENSOKYO_CLIENT_LOG` writes the client's own
-trace, and `daemon.log` has one JSON line per event, panics included.
+`GENSOKYO_CLAUDE` points at another `claude`, `GENSOKYO_CODEX` another `codex`,
+`GENSOKYO_CLIENT_LOG` writes the client's own trace, and `daemon.log` has one JSON line per event,
+panics included.
 
 ## License
 

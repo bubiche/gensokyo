@@ -410,13 +410,16 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
 }
 
 /// A `codex exec` run's report, from its events and its answer: done once its turn completed
-/// and it exited 0, else failed with why its turn failed, or what it said on stderr.
+/// and it exited 0, else failed with why its turn failed, what an error event said, or what it
+/// said on stderr.
 fn codex_report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
-    let events = std::fs::read_to_string(part(stem, "jsonl")).unwrap_or_default();
-    let e = super::codex::Exec::read(&events);
-    let answer = std::fs::read_to_string(part(stem, "txt")).unwrap_or_default();
+    let read = |ext| {
+        String::from_utf8_lossy(&std::fs::read(part(stem, ext)).unwrap_or_default()).into_owned()
+    };
+    let e = super::codex::Exec::read(&read("jsonl"));
+    let answer = read("txt");
     let answer = answer.trim_end();
-    let err = std::fs::read_to_string(part(stem, "err")).unwrap_or_default();
+    let err = read("err");
     let ok = match ended {
         Ended::Exit(c) => e.ok(Some(c)),
         Ended::Signal => false,
@@ -427,13 +430,13 @@ fn codex_report(stem: &Path, ended: Ended, took: &str) -> (String, String, Strin
         // Past exec's word that it reads stdin, which it says whatever goes wrong after.
         let said = err.lines().filter(|l| !l.starts_with("Reading additional input from stdin"));
         let said = said.take(20).collect::<Vec<_>>().join("\n");
-        let why =
-            e.failed.clone().map(|f| tele::clean(&f, 120)).unwrap_or_else(|| match said.trim() {
-                "" => "its turn never completed".into(),
-                said => tele::clean(said, 120),
-            });
+        let failed = e.failed.as_ref().or(e.error.as_ref());
+        let why = failed.map(|f| tele::clean(f, 120)).unwrap_or_else(|| match said.trim() {
+            "" => "its turn never completed".into(),
+            said => tele::clean(said, 120),
+        });
         let mut tail = format!("--- codex {code}, and said:\n");
-        if let Some(f) = &e.failed {
+        if let Some(f) = failed {
             tail += &format!("{f}\n");
         }
         tail += &format!("{said}\n---\nfailed after {took}\n");

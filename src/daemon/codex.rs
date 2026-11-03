@@ -170,20 +170,23 @@ pub fn exec(
 }
 
 /// What a `codex exec --json` run's events say: its thread, whether its turn completed or why it
-/// failed, and its tokens in and out. Error items are warnings (the hook trust bypass gives
-/// two), and a line that is no event is passed over.
+/// failed, what an error event said, and its tokens in and out. Error items are warnings, which
+/// a failed turn has too, and a line that is no event is passed over. Items are not read at all:
+/// they hold what the run did, commands' output with it, and say nothing of how it ended.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Exec {
     pub thread: Option<String>,
     pub completed: bool,
     pub failed: Option<String>,
+    pub error: Option<String>,
     pub tokens: Option<(u64, u64)>,
 }
 
 impl Exec {
     pub fn read(jsonl: &str) -> Exec {
         let mut e = Exec::default();
-        for v in jsonl.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
+        let events = jsonl.lines().filter(|l| !l.starts_with(r#"{"type":"item."#));
+        for v in events.filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
             match v["type"].as_str() {
                 Some("thread.started") => e.thread = v["thread_id"].as_str().map(Into::into),
                 Some("turn.completed") => {
@@ -194,8 +197,9 @@ impl Exec {
                 Some("turn.failed") => {
                     let err = &v["error"];
                     let why = err["message"].as_str().or(err.as_str()).unwrap_or("its turn failed");
-                    e.failed = Some(why.into());
+                    e.failed = Some(inner(why));
                 }
+                Some("error") => e.error = v["message"].as_str().map(inner),
                 _ => {}
             }
         }
@@ -207,6 +211,13 @@ impl Exec {
     pub fn ok(&self, code: Option<i32>) -> bool {
         self.completed && self.failed.is_none() && code.is_none_or(|c| c == 0)
     }
+}
+
+/// An error's message, out of the API's own error when that is what the message is, as JSON:
+/// `{"type":"error","status":400,"error":{"message":"…"}}`.
+fn inner(message: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(message).unwrap_or_default();
+    v["error"]["message"].as_str().or(v["message"].as_str()).unwrap_or(message).into()
 }
 
 /// `codex queue`'s argv: `text` as the next prompt of `thread`, once it is idle. Each value

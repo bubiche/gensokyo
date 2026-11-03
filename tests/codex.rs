@@ -1245,7 +1245,8 @@ fn a_codex_exec_runs_events_say_whether_it_was_done() {
         "\nnot an event\n",
         r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hi"}}"#,
         "\n",
-        r#"{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":7}}"#,
+        r#"{"type":"turn.completed","usage":"#,
+        r#"{"input_tokens":120,"cached_input_tokens":20,"output_tokens":7}}"#,
         "\n",
     );
     let e = codex::Exec::read(done);
@@ -1267,6 +1268,26 @@ fn a_codex_exec_runs_events_say_whether_it_was_done() {
     // An error that is a bare string reads the same.
     let e = codex::Exec::read(r#"{"type":"turn.failed","error":"stream closed"}"#);
     assert_eq!(e.failed.as_deref(), Some("stream closed"));
+    // The API's own error, as JSON in the message, as Codex 0.154 gives it: its message.
+    let api = concat!(
+        r#"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\","#,
+        r#"\"message\":\"The 'x' model is not supported.\",\"code\":\"model_not_found\"}}"#
+    );
+    let live = format!(
+        "{}\n{}\n{}\n",
+        format_args!(r#"{{"type":"error","message":"{api}"}}"#),
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"warned"}}"#,
+        format_args!(r#"{{"type":"turn.failed","error":{{"message":"{api}"}}}}"#),
+    );
+    let e = codex::Exec::read(&live);
+    let why = Some("The 'x' model is not supported.");
+    assert_eq!((e.failed.as_deref(), e.error.as_deref()), (why, why));
+    // An error event alone says why, and is not taken for a failed turn.
+    let e = codex::Exec::read(&format!(r#"{{"type":"error","message":"{api}"}}"#));
+    assert_eq!((e.failed, e.error.as_deref()), (None, why));
+    // Items are not read: one that looks like the end of a turn is none.
+    let e = codex::Exec::read(r#"{"type":"item.completed","item":{"type":"turn.completed"}}"#);
+    assert_eq!(e, codex::Exec::default());
     // Exited 0 with its turn never completed: not done.
     let cut =
         concat!(r#"{"type":"thread.started","thread_id":"t"}"#, "\n", r#"{"type":"turn.started"}"#);

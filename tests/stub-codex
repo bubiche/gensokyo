@@ -17,8 +17,9 @@
 #                             stderr when it is no tty); prints the events of one turn as
 #                             JSONL, a warning among them as an error item, and writes "stub
 #                             exec ran in <dir>: <prompt's first line>" to the -o file.
-#                             STUB_EXEC_FAIL=<text> fails the turn with it (turn.failed, the
-#                             text on stderr too, exit 1); STUB_EXEC_CUT=1 exits 0 before the
+#                             STUB_EXEC_FAIL=<text> fails the turn with it (an error event
+#                             and turn.failed, each with the API's error as JSON for message,
+#                             the text on stderr too, exit 1); STUB_EXEC_CUT=1 exits 0 before the
 #                             turn completes. Without --skip-git-repo-check, or with
 #                             STUB_EXEC_REFUSE=1, it refuses an untrusted directory as Codex
 #                             does: no events, why on stderr, exit 1
@@ -115,7 +116,11 @@ if [ "${1:-}" = exec ]; then
   printf '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"a warning"}}\n'
   if [ -n "${STUB_EXEC_FAIL:-}" ]; then
     echo "stub-codex: $STUB_EXEC_FAIL" >&2
-    printf '{"type":"turn.failed","error":{"message":"%s"}}\n' "$(json "$STUB_EXEC_FAIL")"
+    # As the API's error comes: JSON, in the message of an error event and of turn.failed.
+    api='{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"%s"}}'
+    api=$(json "$(printf "$api" "$(json "$STUB_EXEC_FAIL")")")
+    printf '{"type":"error","message":"%s"}\n' "$api"
+    printf '{"type":"turn.failed","error":{"message":"%s"}}\n' "$api"
     exit 1
   fi
   said="stub exec ran in $PWD: ${prompt%%$'\n'*}"

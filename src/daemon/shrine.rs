@@ -286,7 +286,8 @@ fn launch(
         }
         Agent::Codex => {
             let (program, env) = sh.codex(o.id).ok_or(codex::MISSING)?;
-            (program, env, codex::argv(&paths, o)?)
+            let argv = codex::argv(&paths, o, &env)?;
+            (program, env, argv)
         }
     };
     let (cols, rows) = sh.size;

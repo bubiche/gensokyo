@@ -69,7 +69,7 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
     let (pre, args, out) = match codex {
         true => (
             vec![],
-            super::codex::exec(r, words.as_deref(), &d.path, &part(&stem, "txt"))?,
+            super::codex::exec(r, words.as_deref(), &d.path, &part(&stem, "txt"), &env)?,
             "jsonl",
         ),
         false => {

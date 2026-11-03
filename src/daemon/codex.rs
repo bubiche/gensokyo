@@ -96,8 +96,8 @@ pub fn find(
 /// is not one word. A fresh start's prompt goes last, after `--`, so one that starts with `-`
 /// stays whole; with `resume`, `resume <thread>` goes last instead, after the same flags, and
 /// no prompt. A ritual's own flags (`--add-dir`) come just before either. `notify` is the
-/// user's and left alone.
-pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
+/// user's and left alone. `env` is what it is started with, for [`shell_env`].
+pub fn argv(p: &Paths, o: &Options, env: &[(OsString, OsString)]) -> Result<Vec<OsString>, String> {
     check(o.mode, o.effort)?;
     // gensokyo's hooks run unreviewed: Codex would otherwise hold each new one for the user.
     let mut a: Vec<OsString> = vec!["--dangerously-bypass-hook-trust".into()];
@@ -118,6 +118,7 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
         "-c".into(),
         r#"tui.terminal_title=["run-state","thread-id","context-used"]"#.into(),
     ]);
+    a.extend(shell_env(env).into_iter().map(OsString::from));
     a.extend(o.mode.and_then(mode_flags).into_iter().flatten().map(OsString::from));
     if let Some(m) = o.model {
         a.extend(["-m".into(), m.into()]);
@@ -139,12 +140,14 @@ pub fn argv(p: &Paths, o: &Options) -> Result<Vec<OsString>, String> {
 /// which exec has none of: it never asks. No hooks and none of gensokyo's words, as `claude -p`
 /// has none: the role's alone, as its instructions. The ritual's directory is added for its
 /// notes. `--skip-git-repo-check` always: without it exec refuses a directory Codex has not
-/// trusted, and a headless run, Claude's too, starts with no trust dialog to pass.
+/// trusted, and a headless run, Claude's too, starts with no trust dialog to pass. Its commands
+/// get gensokyo's variables from `env` as `claude -p`'s do ([`shell_env`]).
 pub fn exec(
     r: &crate::ritual::Ritual,
     role: Option<&str>,
     dir: &Path,
     answer: &Path,
+    env: &[(OsString, OsString)],
 ) -> Result<Vec<String>, String> {
     check(r.mode.as_deref(), r.effort.as_deref())?;
     let mut a: Vec<String> = ["exec", "--json", "-o"].map(String::from).into();
@@ -165,9 +168,27 @@ pub fn exec(
     if let Some(w) = role {
         a.extend(["-c".into(), format!("developer_instructions={}", toml_str(w))]);
     }
+    a.extend(shell_env(env));
     a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
     a.push("--skip-git-repo-check".into());
     Ok(a)
+}
+
+/// `-c shell_environment_policy.set.<name>=<value>` for each of gensokyo's variables in `env`,
+/// by name. Codex's hooks see the environment it was started with, but its agent's commands
+/// get a filtered one, which leaves these out: a `gensokyo` run there would reach the daemon
+/// with no `GENSOKYO_RESIDENT`, and so with the user's rights.
+pub fn shell_env(env: &[(OsString, OsString)]) -> Vec<String> {
+    let mut ours: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+        .filter(|(k, _)| k.starts_with("GENSOKYO_"))
+        .collect();
+    ours.sort();
+    let set = |(k, v): (String, String)| {
+        ["-c".into(), format!("shell_environment_policy.set.{k}={}", toml_str(&v))]
+    };
+    ours.into_iter().flat_map(set).collect()
 }
 
 /// What a `codex exec --json` run's events say: its thread, whether its turn completed or why it

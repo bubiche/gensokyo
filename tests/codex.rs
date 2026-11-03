@@ -35,8 +35,35 @@ fn opts<'a>() -> Options<'a> {
 
 fn argv(exe: &str, o: &Options) -> Vec<String> {
     let p = Paths { exe: Path::new(exe), share: Path::new("/share"), socket: Path::new("/s") };
-    let a = codex::argv(&p, o).unwrap();
+    let a = codex::argv(&p, o, &[]).unwrap();
     a.into_iter().map(|a| a.into_string().unwrap()).collect()
+}
+
+/// A resident's environment as the daemon builds it, from a daemon's own with a state and a
+/// config dir of its own, the socket's path holding a space and a quote.
+fn resident_env() -> Vec<(OsString, OsString)> {
+    let base = [
+        ("HOME", "/h"),
+        ("PATH", "/usr/bin"),
+        ("GENSOKYO_STATE_DIR", "/st"),
+        ("GENSOKYO_CONFIG_DIR", "/conf"),
+        ("GENSOKYO_CLAUDE", "/c"),
+        ("GENSOKYO_RESIDENT", "the-daemons-own"),
+    ];
+    let base = base.map(|(k, v)| (OsString::from(k), OsString::from(v)));
+    let socket = Path::new("/run/my \"s\".sock");
+    launch::env(base, "R43", Path::new("/g"), Path::new("/shim"), socket)
+}
+
+/// Each `-c shell_environment_policy.set.<name>=<value>` in `a`, the value unquoted.
+fn shell_set(a: &[String]) -> Vec<(String, String)> {
+    let set = |w: &[String]| {
+        let kv = w[1].strip_prefix("shell_environment_policy.set.").filter(|_| w[0] == "-c")?;
+        let (k, v) = kv.split_once('=')?;
+        let (v, rest) = codex::toml_unquote(v)?;
+        rest.is_empty().then(|| (k.to_string(), v))
+    };
+    a.windows(2).filter_map(set).collect()
 }
 
 /// The `-c` value whose key is `key`.
@@ -213,6 +240,54 @@ fn a_resumed_codex_argv_has_its_flags_then_resume_and_its_thread_and_no_prompt()
     assert_eq!(back[back.len() - 4..], ["--add-dir", "/s/rituals/r", "resume", "019a-thread"]);
 }
 
+/// Codex hands its agent's commands a filtered environment, its hooks the whole one: every
+/// gensokyo variable a Claude resident's commands get goes in by `shell_environment_policy`,
+/// at a start and at a resume, before the flags that end the argv.
+#[test]
+fn a_codex_residents_commands_get_every_gensokyo_variable_a_claude_residents_do() {
+    let env = resident_env();
+    let want = [
+        ("GENSOKYO_CONFIG_DIR", "/conf"),
+        ("GENSOKYO_RESIDENT", "R43"),
+        ("GENSOKYO_SOCKET", "/run/my \"s\".sock"),
+        ("GENSOKYO_STATE_DIR", "/st"),
+    ];
+    let want: Vec<(String, String)> = want.map(|(k, v)| (k.into(), v.into())).into();
+    let mut ours: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| (k.clone().into_string().unwrap(), v.clone().into_string().unwrap()))
+        .filter(|(k, _)| k.starts_with("GENSOKYO_"))
+        .collect();
+    ours.sort();
+    assert_eq!(ours, want, "launch::env gives a resident these");
+
+    let p = Paths { exe: Path::new("/g"), share: Path::new("/share"), socket: Path::new("/s") };
+    let o = Options { mode: Some("bypassPermissions"), prompt: Some("go"), ..opts() };
+    let strings = |a: Vec<OsString>| -> Vec<String> {
+        a.into_iter().map(|a| a.into_string().unwrap()).collect()
+    };
+    let first = strings(codex::argv(&p, &o, &env).unwrap());
+    let back = strings(codex::argv(&p, &Options { resume: true, ..o }, &env).unwrap());
+    assert_eq!(shell_set(&first), want);
+    assert_eq!(shell_set(&back), want);
+    assert!(first.contains(&r#"shell_environment_policy.set.GENSOKYO_RESIDENT="R43""#.into()));
+    assert!(
+        first.contains(
+            &r#"shell_environment_policy.set.GENSOKYO_SOCKET="/run/my \"s\".sock""#.into()
+        )
+    );
+    let n = first.len();
+    assert_eq!(first[n - 3..], ["--dangerously-bypass-approvals-and-sandbox", "--", "go"]);
+    assert_eq!(
+        back[back.len() - 3..],
+        ["--dangerously-bypass-approvals-and-sandbox", "resume", "id"]
+    );
+    // Nothing else of the environment goes in.
+    assert!(!first.iter().any(|a| a.contains("/usr/bin") || a.contains("GENSOKYO_CLAUDE")));
+    // None given, none set.
+    assert!(shell_set(&argv("/g", &o)).is_empty());
+}
+
 /// A thread is resumed only when Codex kept it: its rollout, by name, three levels down.
 #[test]
 fn a_codex_thread_is_found_by_its_rollouts_name_in_its_days_directory_only() {
@@ -269,9 +344,9 @@ fn each_mode_has_codex_flags_that_read_back_as_it() {
     let a: Vec<String> = ["--", "--approve-for-me"].map(String::from).into();
     assert_eq!(codex::mode_of(&a), None);
     // A mode Codex has no flags for, or an effort that is not one word, starts nothing.
-    let e = codex::argv(&p, &Options { mode: Some("dontAsk"), ..opts() }).unwrap_err();
+    let e = codex::argv(&p, &Options { mode: Some("dontAsk"), ..opts() }, &[]).unwrap_err();
     assert!(e.contains("Codex has no dontAsk mode"), "{e}");
-    let e = codex::argv(&p, &Options { effort: Some("high x=1"), ..opts() }).unwrap_err();
+    let e = codex::argv(&p, &Options { effort: Some("high x=1"), ..opts() }, &[]).unwrap_err();
     assert!(e.contains("effort high x=1"), "{e}");
 }
 
@@ -1095,13 +1170,15 @@ fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
     let (repo, tree) = repo_and_worktree(&std::fs::canonicalize(&d.dir).unwrap());
     let modes = codex::MODES.iter().map(|(m, _)| Some(*m)).chain([None]);
     for (i, mode) in modes.enumerate() {
-        // Its argv, its name taken out of it.
+        // Its argv, its name and id taken out of it.
         let argv = |name: &str, cwd: &Path| {
             let r = d.req(json!({"t": "summon", "id": 7, "cwd": cwd, "agent": "codex",
                                  "name": name, "mode": mode}));
             assert_eq!(r["t"], "summoned", "{r}");
-            let a = strings(&record(&d, &r["resident"]["id"])["argv"]);
-            a.into_iter().map(|w| w.replace(name, "<name>")).collect::<Vec<_>>()
+            let id = &r["resident"]["id"];
+            let a = strings(&record(&d, id)["argv"]);
+            let anon = |w: String| w.replace(name, "<name>").replace(id.as_str().unwrap(), "<id>");
+            a.into_iter().map(anon).collect::<Vec<_>>()
         };
         let here = argv(&format!("Kappa{i}"), &tree);
         assert_eq!(here, argv(&format!("Kogasa{i}"), &repo), "{mode:?}");
@@ -1338,7 +1415,7 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
     let (dir, answer) = (Path::new("/s/rituals/r"), Path::new("/s/rituals/r/runs/1.txt"));
     let r = at("model: gpt-x\neffort: high\nmode: default\n");
     assert_eq!(
-        codex::exec(&r, Some("Be \"brief\".\nOnly read."), dir, answer).unwrap(),
+        codex::exec(&r, Some("Be \"brief\".\nOnly read."), dir, answer, &[]).unwrap(),
         [
             "exec",
             "--json",
@@ -1358,7 +1435,7 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
         ]
     );
     let tail = |r: &gensokyo::ritual::Ritual| {
-        let a = codex::exec(r, None, dir, answer).unwrap();
+        let a = codex::exec(r, None, dir, answer, &[]).unwrap();
         a[4..].to_vec()
     };
     assert_eq!(tail(&at("mode: acceptEdits\n"))[..2], ["-s", "workspace-write"]);
@@ -1371,13 +1448,21 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
     let repo = fresh("cx-exec-repo");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     let inside = ritual(&format!("cwd: {}\nmode: acceptEdits\n", repo.display()));
-    let a = codex::exec(&inside, None, dir, answer).unwrap();
+    let a = codex::exec(&inside, None, dir, answer, &[]).unwrap();
     assert_eq!(a.last().map(String::as_str), Some("--skip-git-repo-check"), "{a:?}");
-    for a in codex::exec(&r, Some("x"), dir, answer).unwrap() {
+    for a in codex::exec(&r, Some("x"), dir, answer, &[]).unwrap() {
         assert!(!a.contains("hook") && a != "-a", "{a}");
     }
-    let e = codex::exec(&at("mode: dontAsk\n"), None, dir, answer).unwrap_err();
+    let e = codex::exec(&at("mode: dontAsk\n"), None, dir, answer, &[]).unwrap_err();
     assert!(e.contains("Codex has no dontAsk mode"), "{e}");
+    // Its commands get gensokyo's variables as `claude -p`'s do, before the flags that end it.
+    let a = codex::exec(&r, None, dir, answer, &resident_env()).unwrap();
+    let names: Vec<String> = shell_set(&a).into_iter().map(|(k, _)| k).collect();
+    let want =
+        ["GENSOKYO_CONFIG_DIR", "GENSOKYO_RESIDENT", "GENSOKYO_SOCKET", "GENSOKYO_STATE_DIR"];
+    assert_eq!(names, want, "{a:?}");
+    assert!(a.contains(&r#"shell_environment_policy.set.GENSOKYO_RESIDENT="R43""#.into()));
+    assert_eq!(a[a.len() - 3..], ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
 }
 
 /// A run is done when it exits 0 and its turn completed; a failed turn says why. Error items

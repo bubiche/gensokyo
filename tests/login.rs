@@ -210,6 +210,9 @@ fn doctor_reads_without_starting_anything() {
         assert!(has(l), "no `{l}` in:\n{text}");
     }
     assert!(text.contains("(a build from source)"), "{text}");
+    let codex = "  codex      0.154.0-alpha.6.2  ";
+    assert!(text.contains(codex) && text.contains("/tests/stub-codex (from GENSOKYO_CODEX)"));
+    assert!(text.contains("no hooks of Codex's own") && text.contains("sets no notify;"), "{text}");
     assert!(!e.up() && !e.dir.join("daemon.log").exists(), "doctor started a daemon");
     e.ok(&["list"]);
     let text = e.ok(&["doctor"]);
@@ -221,6 +224,17 @@ fn doctor_reads_without_starting_anything() {
     let size = text.lines().find(|l| l.trim_start().starts_with("size")).unwrap_or_default();
     assert!(size.contains(" MB; largest rituals/big/runs/1.log 3.0 MB, "), "{text}");
     assert!(!text.contains("never reach residents"), "{text}");
+    // Codex's own hooks run unreviewed beside gensokyo's; `notify` shows by its name alone.
+    let home = e.dir.join("codex");
+    let config = "notify = [\"SECRET\"]\n[plugins.\"p@m\"]\nenabled = true\n[hooks.Stop]\n";
+    std::fs::create_dir_all(home.join("plugins/cache/m/p/1/hooks")).unwrap();
+    std::fs::write(home.join("plugins/cache/m/p/1/hooks/hooks.json"), "{}").unwrap();
+    std::fs::write(home.join("config.toml"), config).unwrap();
+    std::fs::write(home.join("hooks.json"), "{}").unwrap();
+    let text = e.ok(&["doctor"]);
+    let own = "runs unreviewed under gensokyo: plugin p@m, ";
+    assert!(text.contains(own) && text.contains("/hooks.json, [hooks] in config.toml\n"), "{text}");
+    assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);
     let o =

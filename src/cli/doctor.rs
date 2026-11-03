@@ -1,9 +1,12 @@
-//! `gensokyo doctor`: which binary, which `claude`, and whether what gensokyo leans on is there.
+//! `gensokyo doctor`: which binary, which `claude` and `codex`, and whether what gensokyo leans on
+//! is there.
 //! It only reads: it never starts the daemon or loads anything.
 
 use super::{Error, login, request};
+use crate::daemon::codex;
 use crate::paths;
 use crate::proto::{Reply, Request};
+use std::ffi::OsStr;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -52,6 +55,9 @@ pub fn main() -> Result<(), String> {
             }
         },
     );
+    for (i, l) in codex(path.as_deref()).into_iter().enumerate() {
+        line(if i == 0 { "codex" } else { "" }, l);
+    }
     // The registry is undocumented: a change in it shows here first.
     if let Some(c) = &claude {
         let out = run(c, &["agents", "--json"], Duration::from_secs(5));
@@ -137,6 +143,44 @@ pub fn main() -> Result<(), String> {
         line("shell env", format!("{n} CLAUDE* variables here, all kept from residents"));
     }
     Ok(())
+}
+
+/// Which codex gensokyo would run and by which rule, then what of Codex's own runs in its
+/// residents: every launch bypasses hook review for gensokyo's hooks, and so for all the others.
+/// Codex is optional: none found is no fault.
+fn codex(path: Option<&OsStr>) -> Vec<String> {
+    let Some(c) = codex::program(path) else {
+        return vec![
+            "none (optional): not in GENSOKYO_CODEX, on PATH or in the ChatGPT app".into(),
+        ];
+    };
+    let rule = match () {
+        _ if std::env::var_os("GENSOKYO_CODEX").is_some() => "GENSOKYO_CODEX",
+        _ if c == Path::new(codex::APP) => "the ChatGPT app",
+        _ => "PATH",
+    };
+    let v = run(&c, &["--version"], Duration::from_secs(10));
+    let v = v.map(|o| o.lines().next().unwrap_or("").replace("codex-cli ", ""));
+    let c = paths::short(&c.to_string_lossy());
+    let mut out = vec![format!("{}  {c} (from {rule})", v.as_deref().unwrap_or("?"))];
+    let Some(home) = codex::home() else { return out };
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    let setup = codex::setup(&config);
+    let hooked = setup.plugins.into_iter().filter(|p| codex::plugin_hooks(&home, p));
+    let mut own: Vec<String> = hooked.map(|p| format!("plugin {p}")).collect();
+    if home.join("hooks.json").is_file() {
+        own.push(paths::short(&home.join("hooks.json").to_string_lossy()));
+    }
+    if setup.hooks {
+        own.push("[hooks] in config.toml".into());
+    }
+    out.push(match own.is_empty() {
+        true => "no hooks of Codex's own: no enabled plugin ships any".into(),
+        false => format!("runs unreviewed under gensokyo: {}", own.join(", ")),
+    });
+    let notify = if setup.notify { "config.toml sets" } else { "config.toml sets no" };
+    out.push(format!("{notify} notify; gensokyo leaves it alone"));
+    out
 }
 
 /// The daemon as it is, asked without starting one.

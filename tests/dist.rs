@@ -64,13 +64,15 @@ impl Home {
     }
 
     /// `prog args…` with nothing of the caller's environment but TMPDIR: a system PATH (so no
-    /// gensokyo, tmux or claude of the machine's is seen), this home, and the releases tree.
+    /// gensokyo, tmux or claude of the machine's is seen), this home, and the releases tree. Nor
+    /// is the ChatGPT app's codex, which writes into the home it runs with.
     fn command(&self, prog: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Command {
         let mut c = Command::new(prog);
         c.args(args)
             .env_clear()
             .env("HOME", self.home())
             .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("GENSOKYO_CODEX", "/usr/bin/false")
             .env("TMPDIR", std::env::temp_dir())
             .env("GENSOKYO_RELEASE_BASE", format!("file://{}", releases().display()))
             .env("GENSOKYO_LAUNCHCTL", self.dir.join("launchctl"))

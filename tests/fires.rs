@@ -1586,6 +1586,9 @@ fn a_headless_codex_run_is_codex_exec_and_logs_its_answer() {
     assert!(has(&["--add-dir", &notes, "--skip-git-repo-check", "--"]), "{args:?}");
     assert!(args.iter().any(|a| a.starts_with("developer_instructions=\"You are a researcher.")));
     assert!(!args.iter().any(|a| a.contains("hook")), "no hooks: {args:?}");
+    // Its commands are told whose they are, as a `claude -p` run's are.
+    let id = r#"shell_environment_policy.set.GENSOKYO_RESIDENT="quiet""#;
+    assert!(has(&["-c", id]), "{args:?}");
     assert!(args.last().unwrap().starts_with("Do the rounds.\nThen report.\n\nYour notes"));
     // Nothing for it on stdin, which exec would read.
     assert_eq!(std::fs::read_to_string(d.dir.join("stub/exec.stdin")).unwrap(), "");

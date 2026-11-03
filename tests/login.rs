@@ -124,6 +124,10 @@ fn setup_writes_an_agent_launchd_can_load_and_remove_takes_it_out() {
     assert_eq!(extract(&p, "EnvironmentVariables.PATH", "raw"), path);
     let state = e.dir.display().to_string();
     assert_eq!(extract(&p, "EnvironmentVariables.GENSOKYO_STATE_DIR", "raw"), state);
+    // The codex residents run, and its home, are the ones this shell's doctor describes.
+    for (k, v) in stub_env(&e.dir).into_iter().filter(|(k, _)| k.contains("CODEX")) {
+        assert_eq!(extract(&p, &format!("EnvironmentVariables.{k}"), "raw"), v);
+    }
     assert_eq!(extract(&p, "StandardErrorPath", "raw"), format!("{state}/login.log"));
     let target = format!("gui/{}/{}", uid(), e.label);
     let boot = format!("bootout {target}\nbootstrap gui/{} {}\n", uid(), p.display());

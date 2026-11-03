@@ -392,7 +392,8 @@ scheduled?" work the same way.
 - **`headless: true`** (with `target: new`): no resident at all; the run is a `claude -p` (for
   Codex, `codex exec`) in the background, what it said goes to a log beside the ritual's notes, and
   a run still going after an hour is stopped. Nobody is there to answer a permission prompt, so what
-  it needs goes in `allowed_tools` (for Codex, its `mode`); the log names any tool it was refused.
+  it needs goes in `allowed_tools` (for Codex, its `mode`); the log names any tool it was refused
+  (for Codex, only in what the run says).
 - **`worktree`** (with `target: new`): every run works in that worktree of `cwd`'s repository,
   made the first time as `new --worktree` makes one, and in the same subdirectory as `cwd`. One
   checkout for all its runs, so not with `overlap: parallel`.

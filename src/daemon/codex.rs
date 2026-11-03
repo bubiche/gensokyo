@@ -72,10 +72,11 @@ pub fn launched(argv: &[String]) -> Launched {
 /// What a launch or a `say` is told when `program` finds none.
 pub const MISSING: &str = "codex not found: not on PATH, in GENSOKYO_CODEX or in the ChatGPT app";
 
-/// The `codex` to run: `$GENSOKYO_CODEX`, else the first on PATH that is not in gensokyo's own
-/// shim directory, else the ChatGPT app's.
+/// The `codex` to run: `$GENSOKYO_CODEX` unless empty, else the first on PATH that is not in
+/// gensokyo's own shim directory, else the ChatGPT app's.
 pub fn program(path: Option<&OsStr>) -> Option<PathBuf> {
-    find(std::env::var_os("GENSOKYO_CODEX"), path, &crate::shim::dir(), Path::new(APP))
+    let set = std::env::var_os("GENSOKYO_CODEX").filter(|c| !c.is_empty());
+    find(set, path, &crate::shim::dir(), Path::new(APP))
 }
 
 /// `set` when given, else the first `codex` on `path` outside `skip`, else `app` if it runs.

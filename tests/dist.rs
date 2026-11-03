@@ -65,7 +65,7 @@ impl Home {
 
     /// `prog args…` with nothing of the caller's environment but TMPDIR: a system PATH (so no
     /// gensokyo, tmux or claude of the machine's is seen), this home, and the releases tree. Nor
-    /// is the ChatGPT app's codex, which writes into the home it runs with.
+    /// is the ChatGPT app's codex, found whatever PATH says.
     fn command(&self, prog: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Command {
         let mut c = Command::new(prog);
         c.args(args)

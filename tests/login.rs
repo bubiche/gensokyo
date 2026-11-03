@@ -216,7 +216,12 @@ fn doctor_reads_without_starting_anything() {
     assert!(text.contains("(a build from source)"), "{text}");
     let codex = "  codex      0.154.0-alpha.6.2  ";
     assert!(text.contains(codex) && text.contains("/tests/stub-codex (from GENSOKYO_CODEX)"));
-    assert!(text.contains("no hooks of Codex's own") && text.contains("sets no notify;"), "{text}");
+    for l in ["no hooks in ", "no enabled plugin declares hooks", "config.toml has no notify;"] {
+        assert!(text.contains(l), "no `{l}` in:\n{text}");
+    }
+    // Asked for its version in a home that is not there, Codex leaves nothing in any.
+    let asked = std::fs::read_to_string(e.dir.join("stub/version.home")).unwrap();
+    assert!(!asked.is_empty() && !Path::new(&asked).exists(), "{asked}");
     assert!(!e.up() && !e.dir.join("daemon.log").exists(), "doctor started a daemon");
     e.ok(&["list"]);
     let text = e.ok(&["doctor"]);
@@ -232,12 +237,15 @@ fn doctor_reads_without_starting_anything() {
     let home = e.dir.join("codex");
     let config = "notify = [\"SECRET\"]\n[plugins.\"p@m\"]\nenabled = true\n[hooks.Stop]\n";
     std::fs::create_dir_all(home.join("plugins/cache/m/p/1/hooks")).unwrap();
-    std::fs::write(home.join("plugins/cache/m/p/1/hooks/hooks.json"), "{}").unwrap();
+    let hooks = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}"#;
+    std::fs::write(home.join("plugins/cache/m/p/1/hooks/hooks.json"), hooks).unwrap();
     std::fs::write(home.join("config.toml"), config).unwrap();
-    std::fs::write(home.join("hooks.json"), "{}").unwrap();
+    std::fs::write(home.join("hooks.json"), hooks).unwrap();
     let text = e.ok(&["doctor"]);
-    let own = "runs unreviewed under gensokyo: plugin p@m, ";
-    assert!(text.contains(own) && text.contains("/hooks.json, [hooks] in config.toml\n"), "{text}");
+    let own = "/hooks.json, [hooks] in config.toml (a trusted project's .codex/ is not read)\n";
+    assert!(text.contains("runs unreviewed under gensokyo: ") && text.contains(own), "{text}");
+    let plugins = "plugins that declare hooks: plugin p@m (should Codex load them, they run";
+    assert!(text.contains(plugins), "{text}");
     assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
     e.ok(&["login", "setup"]);
     let mut c = e.command(Path::new(BIN), &["doctor"]);

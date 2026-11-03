@@ -416,6 +416,9 @@ fn a_string_a_comment_or_an_array_over_lines_hides_no_table_after_it() {
     // Nor one inside its table.
     let inside = "[projects.\"/a\"]\nx = [\n  [1, 2],\n]\ntrust_level = \"trusted\"\n";
     assert_eq!(codex::projects(inside), [Path::new("/a")]);
+    // A relative one is none: the daemon's own directory would be where it is read from.
+    assert!(codex::projects("[projects.dev]\ntrust_level = \"trusted\"\n").is_empty());
+    assert!(codex::projects("[projects.\"a/b\"]\ntrust_level = \"trusted\"\n").is_empty());
     // An unclosed multi-line string runs to the end.
     assert!(codex::projects(&format!("x = \"\"\"\n{trust}")).is_empty());
 }

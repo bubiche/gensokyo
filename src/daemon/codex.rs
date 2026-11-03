@@ -374,7 +374,8 @@ pub fn trusted_in(config: &str, cwd: &Path, root: Option<&Path>) -> bool {
 }
 
 /// The directories `config` has `trust_level = "trusted"` for, each as `[projects."<dir>"]`:
-/// how Codex writes a trust it was given. A small scan, not a TOML parser: any other table
+/// how Codex writes a trust it was given. Absolute ones only: a relative one would be read from
+/// the daemon's own directory. A small scan, not a TOML parser: any other table
 /// (`[projects."<dir>".x]` too) ends the one before it, and multi-line strings are skipped.
 pub fn projects(config: &str) -> Vec<PathBuf> {
     let (mut found, mut table) = (Vec::new(), None::<String>);
@@ -392,6 +393,7 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
             found.push(PathBuf::from(t));
         }
     }
+    found.retain(|p| p.is_absolute());
     found
 }
 

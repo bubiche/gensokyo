@@ -184,8 +184,8 @@ fn codex(path: Option<&OsStr>) -> Vec<String> {
         ),
         false => format!("runs unreviewed under gensokyo: {} ({unread})", own.join(", ")),
     });
-    let hooked = setup.plugins.into_iter().filter(|p| codex::plugin_hooks(&home, p));
-    let hooked: Vec<String> = hooked.map(|p| format!("plugin {p}")).collect();
+    let hooked: Vec<String> =
+        setup.plugins.into_iter().filter(|p| codex::plugin_hooks(&home, p)).collect();
     out.push(match hooked.is_empty() {
         true => "no enabled plugin declares hooks".into(),
         false => format!(

@@ -244,7 +244,7 @@ fn doctor_reads_without_starting_anything() {
     let text = e.ok(&["doctor"]);
     let own = "/hooks.json, [hooks] in config.toml (a trusted project's .codex/ is not read)\n";
     assert!(text.contains("runs unreviewed under gensokyo: ") && text.contains(own), "{text}");
-    let plugins = "plugins that declare hooks: plugin p@m (should Codex load them, they run";
+    let plugins = "plugins that declare hooks: p@m (should Codex load them, they run";
     assert!(text.contains(plugins), "{text}");
     assert!(text.contains("config.toml sets notify;") && !text.contains("SECRET"), "{text}");
     e.ok(&["login", "setup"]);

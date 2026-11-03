@@ -30,6 +30,8 @@ shrine. It needs macOS on Apple silicon and is made for iTerm2; other terminals 
 - **Roles** are standing instructions (reviewer, implementer, debugger, …) that last through a
   `/clear` or a `/compact`.
 - **The Mac stays awake while sessions work**, and sleeps once the work is done.
+- **Codex too.** `gensokyo new --agent codex` runs OpenAI's Codex as a resident or a helper, or
+  for a ritual, followed and read as Claude Code is.
 - **Everything is a command** (`list --json`, `new`, `wait`, `read`, `tag`, …), for your scripts
   and for the sessions themselves.
 
@@ -189,14 +191,14 @@ for. The setting is kept in the config (`KEEP_AWAKE=off`).
 
 ## When a resident needs you
 
-Every resident is launched with `--settings` carrying a few hooks and a status line (they merge
-with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a resident is
-doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished turn you
-have not seen, `✧` a question it asked. A resident that needs you is gold. When there are more
-than the sidebar has room for, it keeps the one on screen in view and says how many are above
-and below (gold when one of those needs you; a click shows it). When it is not the one on
-screen in a focused terminal, the shrine rings the bell and posts an iTerm2 notification
-(OSC 9). `~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
+Every Claude Code resident is launched with `--settings` carrying a few hooks and a status line
+(they merge with your own; nothing in `~/.claude` is written). The hooks tell the daemon what a
+resident is doing, and its sidebar line shows it: `●` busy, `✦` a permission prompt or a finished
+turn you have not seen, `✧` a question it asked. A resident that needs you is gold. When there are
+more than the sidebar has room for, it keeps the one on screen in view and says how many are above
+and below (gold when one of those needs you; a click shows it). When it is not the one on screen in
+a focused terminal, the shrine rings the bell and posts an iTerm2 notification (OSC 9).
+`~/.config/gensokyo/config` can set `NOTIFY_BELL=off` or `NOTIFY_DESKTOP=off`.
 
 ![Marisa on screen at a permission prompt, gold in the sidebar with Sakuya and Youmu](docs/needs-you.svg)
 
@@ -608,10 +610,58 @@ done so. Its permission prompts and questions always ring: only you can answer t
 whose lead has left for good is closed after two hours idle (a cloud session once its turn
 ends); a lead recalled before then keeps it.
 
+## Codex
+
+OpenAI's Codex can be a resident too: `gensokyo new ~/dev/x --agent codex`, from a shell (the
+summon dialog starts Claude Code). It runs `$GENSOKYO_CODEX`, else the first `codex` on `PATH`,
+else `/Applications/ChatGPT.app/Contents/Resources/codex`. `-m` reaches it as `-m`, and `-e` as
+`-c model_reasoning_effort=…` (one word). It takes no `--allowed-tools`, and is never a cloud
+session or a run taken over. Its hooks, gensokyo's words and its mode go in as flags; nothing in
+`~/.codex` is written. The permission mode becomes Codex's sandbox and approvals:
+
+| `-p` | Codex runs with |
+|---|---|
+| `plan`, `default` | `-s read-only -a on-request` |
+| `acceptEdits` | `-s workspace-write -a on-request` |
+| `auto` | `--approve-for-me`: Codex's reviewer answers its requests |
+| `bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` |
+
+With none, Codex's own config decides. Its sandbox keeps git's own files read-only, so outside
+`bypassPermissions` a Codex resident can't commit: it is told to leave its changes uncommitted,
+and a lead commits its helper's work. In a worktree it starts as it would anywhere else.
+
+- **Trust.** A lead's Codex helper, and a Codex ritual's resident, need a directory Codex
+  trusts: `[projects."<dir>"] trust_level = "trusted"` in `$CODEX_HOME/config.toml` (`~/.codex`
+  by default), for it or its repository's main checkout, as Codex writes once you trust it there.
+  gensokyo only reads that file, and leaves its `notify` alone. Your own summon shows Codex's
+  trust prompt in the pane.
+- **Hooks.** Every launch passes `--dangerously-bypass-hook-trust`, with gensokyo's hooks as
+  `-c hooks.<Event>=…`, so Codex does not hold them for review. Any other hook Codex has enabled
+  then runs unreviewed too. `gensokyo doctor` lists what it found: `hooks.json`, `[hooks]` in
+  `config.toml`, and enabled plugins that declare hooks; a project's `.codex/` is not read.
+- **What it is told.** gensokyo's paragraph, then a role and your words, as its
+  `developer_instructions`: its name, and for a helper who its lead is and that its last message
+  is its report, since it can message nobody. It gets none of the skills, so it is no lead or
+  peer, and it can't be a pair card's peer.
+- **In the shrine.** Its state comes from its hooks and its terminal title; an approval is a
+  permission prompt, counted in `needs`. Its sidebar line has its model, by Codex's name, and its
+  context. It has no status line, cost or cache rate, adds nothing to the usage bars, and has no
+  Remote Control. `wait`, `read` and `close` work as for Claude Code; `renew` does not.
+- **`say`** runs `codex queue`: Codex takes the words as its next prompt once its turn is over.
+  It refuses before the first prompt (Codex names its thread then), once the resident has
+  departed, and after an interrupted turn until someone types in its pane.
+- **Coming back.** A recall, and the comeback after a crash or a stop, resume the same thread
+  (`codex resume`), which keeps the instructions it started with. Words queued while it was gone
+  run once it is up, unless its last turn was interrupted.
+- **Rituals.** `agent: codex` (`ritual add --agent codex`), with `target: new` or `persistent`; a
+  headless run is `codex exec`. A run writes its notes, so its mode must be `acceptEdits`, `auto`
+  or `bypassPermissions`. `allowed_tools`, `mcp_config` and a resident or `branch` as target are
+  refused.
+
 ## What residents are told
 
-Almost nothing, on purpose: a resident's context window is your budget. Each is launched,
-without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
+Almost nothing, on purpose: a resident's context window is your budget. Each Claude Code one is
+launched, without touching `~/.claude`, with `--plugin-dir share/plugin` and a short
 `--append-system-prompt`: the name it lives under, that the first message of an exchange with
 another session is the `gensokyo-peers` skill's to write, that standing schedules are
 gensokyo's (Claude Code's own `CronCreate`, `CronList`, `CronDelete` and `RemoteTrigger` are

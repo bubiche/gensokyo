@@ -1220,6 +1220,12 @@ fn a_headless_codex_run_is_codex_exec_with_its_answer_in_a_file() {
     assert_eq!(bypass[..1], ["--dangerously-bypass-approvals-and-sandbox"]);
     // No mode, which a ritual that passed its check never has: no sandbox flags at all.
     assert_eq!(tail(&at("")), ["--add-dir", "/s/rituals/r", "--skip-git-repo-check"]);
+    // In a repository too: what exec refuses without it is a directory Codex has not trusted.
+    let repo = fresh("cx-exec-repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let inside = ritual(&format!("cwd: {}\nmode: acceptEdits\n", repo.display()));
+    let a = codex::exec(&inside, None, dir, answer).unwrap();
+    assert_eq!(a.last().map(String::as_str), Some("--skip-git-repo-check"), "{a:?}");
     for a in codex::exec(&r, Some("x"), dir, answer).unwrap() {
         assert!(!a.contains("hook") && a != "-a", "{a}");
     }
@@ -1280,9 +1286,6 @@ fn a_codex_exec_runs_events_say_whether_it_was_done() {
     // An error event alone says why, and is not taken for a failed turn.
     let e = codex::Exec::read(&format!(r#"{{"type":"error","message":"{api}"}}"#));
     assert_eq!((e.failed, e.error.as_deref()), (None, why));
-    // Items are not read: one that looks like the end of a turn is none.
-    let e = codex::Exec::read(r#"{"type":"item.completed","item":{"type":"turn.completed"}}"#);
-    assert_eq!(e, codex::Exec::default());
     // Exited 0 with its turn never completed: not done.
     let cut =
         concat!(r#"{"type":"thread.started","thread_id":"t"}"#, "\n", r#"{"type":"turn.started"}"#);

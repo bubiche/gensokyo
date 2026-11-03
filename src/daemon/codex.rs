@@ -395,9 +395,9 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
 }
 
 /// What a user's `config.toml` has that runs beside gensokyo, by name only, no value kept: the
-/// plugins it enables, as `<name>@<marketplace>`; whether it has hooks of its own (`[hooks]`,
-/// `[hooks.<Event>]` or a top-level `hooks…` key, not the trust Codex keeps in `hooks.state`);
-/// and whether it sets `notify` at its top level.
+/// plugins it enables, as `<name>@<marketplace>`; whether it has hooks of its own (under
+/// `hooks`, but not the trust Codex keeps in `hooks.state`); and whether it sets `notify` at
+/// its top level.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Setup {
     pub plugins: Vec<String>,
@@ -405,39 +405,109 @@ pub struct Setup {
     pub notify: bool,
 }
 
-/// `config`'s [`Setup`], by a small scan as `projects` is: a plugin is enabled by
-/// `enabled = true` in its `[plugins."<name>@<marketplace>"]` table, as Codex writes one.
+/// `config`'s [`Setup`], by a small scan as `projects` is: each key is read with the table it is
+/// in, so `[plugins."<name>@<marketplace>"]` then `enabled = true`, as Codex writes one, is the
+/// same as `plugins."<name>@<marketplace>".enabled = true` or an inline table of it.
 pub fn setup(config: &str) -> Setup {
     let mut s = Setup::default();
-    // The table each line is in: none at the top, a plugin's name, or `Some(None)` for another.
-    let mut table = None::<Option<String>>;
+    let mut table = Vec::new();
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            s.hooks |= hooks_key(line.trim_start_matches('[').split(']').next().unwrap_or(""));
-            table = Some(named_header(line, "plugins"));
+            // A header not read is a table that is none of these.
+            table = header(line).unwrap_or_else(|| vec![String::new()]);
+            s.hooks |= hooks_in(&table, "");
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
-        let on = v.split('#').next().unwrap_or("").trim() == "true";
-        match &table {
-            None => {
-                s.hooks |= hooks_key(k);
-                s.notify |= bare_key(k).as_deref() == Some("notify");
+        let Some((key, v)) = dotted(line) else { continue };
+        let Some(v) = v.strip_prefix('=') else { continue };
+        let path: Vec<String> = table.iter().cloned().chain(key).collect();
+        s.notify |= path == ["notify"];
+        s.hooks |= hooks_in(&path, v);
+        if let [p, name, rest @ ..] = &path[..] {
+            let on = |rest: &[String], v: &str| rest == ["enabled"] && scalar(v) == "true";
+            let on = on(rest, v) || rest.is_empty() && inline(v).iter().any(|(k, v)| on(k, v));
+            if p == "plugins" && on && !s.plugins.contains(name) {
+                s.plugins.push(name.clone());
             }
-            Some(Some(p)) if on && bare_key(k).as_deref() == Some("enabled") => {
-                s.plugins.push(p.clone())
-            }
-            _ => {}
         }
     }
     s
 }
 
-/// Whether a dotted key or table name is Codex's hooks: `hooks` or `hooks.<Event>…`, not
-/// `hooks.state…`.
-fn hooks_key(k: &str) -> bool {
-    let mut parts = k.split('.').map(str::trim);
-    parts.next() == Some("hooks") && parts.next() != Some("state")
+/// Whether the key or table at `path`, its value `v`, holds hooks: anything under `hooks` but
+/// `hooks.state`.
+fn hooks_in(path: &[String], v: &str) -> bool {
+    match path {
+        [h, e, ..] => h == "hooks" && e != "state",
+        [h] => h == "hooks" && inline(v).iter().any(|(k, _)| k[0] != "state"),
+        [] => false,
+    }
+}
+
+/// A value with its comment cut off.
+fn scalar(v: &str) -> &str {
+    v.split('#').next().unwrap_or("").trim()
+}
+
+/// The keys of the inline table `v` is, with their values, at its own level only.
+fn inline(v: &str) -> Vec<(Vec<String>, &str)> {
+    let Some(body) = v.trim_start().strip_prefix('{') else { return Vec::new() };
+    let (b, mut parts) = (body.as_bytes(), Vec::new());
+    let (mut i, mut depth, mut start) = (0, 0, 0);
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                let q = if q == b'"' { "\"" } else { "'" };
+                i += 1 + close(&body[i + 1..], q).unwrap_or(b.len());
+            }
+            b'[' | b'{' => depth += 1,
+            b']' | b'}' if depth > 0 => depth -= 1,
+            b'}' => {
+                parts.push(&body[start..i]);
+                break;
+            }
+            b',' if depth == 0 => {
+                parts.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let pairs = parts.into_iter().filter_map(|p| dotted(p));
+    pairs.filter_map(|(k, r)| Some((k, r.strip_prefix('=')?.trim()))).collect()
+}
+
+/// A key's parts, each bare or quoted, joined by dots, and what follows it, trimmed.
+fn dotted(s: &str) -> Option<(Vec<String>, &str)> {
+    let (mut parts, mut s) = (Vec::new(), s.trim_start());
+    loop {
+        let (part, rest) = match toml_unquote(s) {
+            Some(q) => q,
+            None => {
+                let bare = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+                let end = s.find(|c| !bare(c)).unwrap_or(s.len());
+                (end > 0).then(|| (s[..end].to_string(), &s[end..]))?
+            }
+        };
+        parts.push(part);
+        s = rest.trim_start();
+        match s.strip_prefix('.') {
+            Some(r) => s = r.trim_start(),
+            None => return Some((parts, s)),
+        }
+    }
+}
+
+/// The parts of the table a `[...]` or `[[...]]` header names.
+fn header(line: &str) -> Option<Vec<String>> {
+    let (inner, end) = match line.strip_prefix("[[") {
+        Some(inner) => (inner, "]]"),
+        None => (line.strip_prefix('[')?, "]"),
+    };
+    let (parts, rest) = dotted(inner)?;
+    let rest = rest.strip_prefix(end)?.trim();
+    (rest.is_empty() || rest.starts_with('#')).then_some(parts)
 }
 
 /// Whether `plugin`, `<name>@<marketplace>`, ships hooks in any version `home` caches in
@@ -513,16 +583,12 @@ fn close(s: &str, q: &str) -> Option<usize> {
     None
 }
 
-/// The name a `[<table>."<name>"]` header gives, quoted; none for any other header.
+/// The name a `[<table>.<name>]` header gives; none for any other header.
 fn named_header(line: &str, table: &str) -> Option<String> {
-    let rest = line.strip_prefix('[')?.trim_start();
-    if rest.starts_with('[') {
-        return None;
+    match header(line).filter(|_| !line.starts_with("[["))?.as_slice() {
+        [t, name] if t == table => Some(name.clone()),
+        _ => None,
     }
-    let rest = rest.strip_prefix(table)?.trim_start().strip_prefix('.')?.trim_start();
-    let (dir, rest) = toml_unquote(rest)?;
-    let rest = rest.trim_start().strip_prefix(']')?.trim();
-    (rest.is_empty() || rest.starts_with('#')).then_some(dir)
 }
 
 /// The main checkout `dir` belongs to: the directory holding the common git dir, read from the

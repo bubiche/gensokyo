@@ -508,15 +508,46 @@ trusted_hash = "h"
 notify = true
 "#;
     let s = codex::setup(config);
-    assert_eq!(s.plugins, ["a@market", "c@x@market"]);
+    assert_eq!(s.plugins, ["a@market", "c@x@market", "bare"]);
     assert!(s.notify && !s.hooks, "{s:?}");
-    // Codex's trust is not a hook; a hooks table or key is, wherever it starts.
-    let tables = ["[hooks]", "[hooks.Stop]", "[[hooks.Stop]]", "hooks.Stop = []", "hooks = {}"];
-    for h in tables {
+    // However the key is spelt: dotted, quoted, under `[plugins]` or as an inline table.
+    let spelt = r#"
+plugins."f@m".enabled = true
+"plugins".'g@m'.enabled = true # quoted
+plugins."off@m" = { enabled = false, x = "enabled = true" }
+[plugins]
+"h@m".enabled = true
+"i@m" = { x = [1, { y = 2 }], "enabled" = true }
+"j@m" = { x = "}", enabled = true }
+"#;
+    assert_eq!(codex::setup(spelt).plugins, ["f@m", "g@m", "h@m", "i@m", "j@m"]);
+    // A hooks table or key is Codex's own hooks; one holding only its trust, or nothing, is not.
+    let hooks = [
+        "[hooks.Stop]",
+        "[[hooks.Stop]]",
+        "[\"hooks\".Stop]",
+        "hooks.Stop = []",
+        "\"hooks\" . 'Stop' = []",
+        "hooks = { Stop = [], state = {} }",
+        "[hooks]\nStop = []",
+    ];
+    for h in hooks {
         assert!(codex::setup(&format!("{h}\n")).hooks, "{h}");
     }
-    assert!(!codex::setup("hooks.state.k.trusted_hash = \"h\"\n[x]\nhooks = 1\n").hooks);
+    let not = [
+        "[hooks]",
+        "hooks = {}",
+        "hooks = { state = { k = { trusted_hash = \"h\" } } }",
+        "[hooks]\nstate.k.trusted_hash = \"h\"",
+        "[\"hooks\".state.\"k\"]\ntrusted_hash = \"h\"",
+        "hooks.state.k.trusted_hash = \"h\"\n[x]\nhooks = { Stop = [] }",
+        "x = [\n  [hooks.Stop],\n]",
+    ];
+    for h in not {
+        assert!(!codex::setup(&format!("{h}\n")).hooks, "{h}");
+    }
     assert_eq!(codex::setup("[tui]\nnotify = []\n"), codex::Setup::default());
+    assert!(codex::setup("\"notify\" = [\n  \"a\",\n]\n").notify);
 }
 
 #[test]

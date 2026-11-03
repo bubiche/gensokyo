@@ -51,10 +51,10 @@ pub struct Paths<'a> {
     pub socket: &'a Path,
 }
 
-/// The `claude` to run: `$GENSOKYO_CLAUDE`, else the first on PATH that is not gensokyo's own,
-/// which a daemon started from a resident's shell has on its PATH.
+/// The `claude` to run: `$GENSOKYO_CLAUDE` unless empty, else the first on PATH that is not
+/// gensokyo's own, which a daemon started from a resident's shell has on its PATH.
 pub fn claude(path: Option<&OsStr>) -> Option<PathBuf> {
-    if let Some(c) = std::env::var_os("GENSOKYO_CLAUDE") {
+    if let Some(c) = std::env::var_os("GENSOKYO_CLAUDE").filter(|c| !c.is_empty()) {
         return Some(c.into());
     }
     on_path(path, &crate::shim::dir(), "claude")

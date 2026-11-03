@@ -253,6 +253,20 @@ fn doctor_reads_without_starting_anything() {
         c.env("ANTHROPIC_BASE_URL", "http://x").env("https_proxy", "http://y").output().unwrap();
     let want = "ANTHROPIC_BASE_URL https_proxy set here never reach residents launchd starts";
     assert!(out(&o).contains(want), "{}", out(&o));
+    // An empty GENSOKYO_CLAUDE or GENSOKYO_CODEX is unset: PATH's are found.
+    let bin = e.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stubs = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    for name in ["claude", "codex"] {
+        std::os::unix::fs::symlink(stubs.join(format!("stub-{name}")), bin.join(name)).unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let mut c = e.command(Path::new(BIN), &["doctor"]);
+    let o = c.env("GENSOKYO_CLAUDE", "").env("GENSOKYO_CODEX", "").env("PATH", path).output();
+    let text = out(&o.unwrap());
+    let bin = e.dir.file_name().unwrap().to_string_lossy();
+    assert!(text.contains(&format!("/{bin}/bin/claude\n")), "{text}");
+    assert!(text.contains(&format!("/{bin}/bin/codex (from PATH)\n")), "{text}");
 }
 
 #[test]

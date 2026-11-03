@@ -385,7 +385,12 @@ fn notices_nobody_watched_are_missed_until_a_client_has_them_and_only_the_last_t
 }
 
 fn headless_run(name: &str, env: &[(&str, &str)]) -> (Daemon, String) {
-    let text = hourly("headless: true\nrole: researcher\n");
+    headless_with(name, "", env)
+}
+
+/// A headless run of a ritual with these lines too, and its log.
+fn headless_with(name: &str, extra: &str, env: &[(&str, &str)]) -> (Daemon, String) {
+    let text = hourly(&format!("headless: true\nrole: researcher\n{extra}"));
     let d = Daemon::start(name, T0 + 120, &[("quiet", &text)], env);
     wait(|| d.stamp("quiet").is_some(), "first sight");
     d.clock(T0 + 3600 + 5);
@@ -1497,4 +1502,46 @@ fn a_persistent_codex_ritual_types_into_its_session_and_resumes_its_thread() {
     let args = codex_args(&d, &id);
     let notes = d.dir.join("rituals/diary").display().to_string();
     assert_eq!(args[args.len() - 4..], ["--add-dir", notes.as_str(), "resume", thread.as_str()]);
+}
+
+#[test]
+fn a_headless_codex_run_is_codex_exec_and_logs_its_answer() {
+    let (d, log) = headless_with("cx-hl", "agent: codex\nmode: acceptEdits\n", &[]);
+    let args = std::fs::read_to_string(d.dir.join("stub/exec.args")).unwrap();
+    let args: Vec<&str> = args.split('\0').filter(|a| !a.is_empty()).collect();
+    let runs = d.dir.join("rituals/quiet/runs");
+    assert_eq!(args[..3], ["--json", "-o", args[2]]);
+    assert!(args[2].starts_with(&runs.display().to_string()) && args[2].ends_with(".txt"));
+    let notes = d.dir.join("rituals/quiet").display().to_string();
+    let has = |w: &[&str]| args.windows(w.len()).any(|a| a == w);
+    assert!(has(&["-s", "workspace-write", "-c"]), "no approval policy: {args:?}");
+    assert!(has(&["--add-dir", &notes, "--skip-git-repo-check", "--"]), "{args:?}");
+    assert!(args.iter().any(|a| a.starts_with("developer_instructions=\"You are a researcher.")));
+    assert!(!args.iter().any(|a| a.contains("hook")), "no hooks: {args:?}");
+    assert!(args.last().unwrap().starts_with("Do the rounds.\nThen report.\n\nYour notes"));
+    // Nothing for it on stdin, which exec would read.
+    assert_eq!(std::fs::read_to_string(d.dir.join("stub/exec.stdin")).unwrap(), "");
+    assert!(log.contains("\nstub exec ran in "), "{log}");
+    assert!(log.contains(", 120 tokens in, 7 out\nto read the whole transcript: codex resume "));
+    let done = d.evs("quiet", "done");
+    assert!(
+        done[0].starts_with("done (headless, ") && done[0].contains("): stub exec ran in "),
+        "{done:?}"
+    );
+}
+
+#[test]
+fn a_headless_codex_run_that_fails_says_why_either_way() {
+    let codex = "agent: codex\n";
+    let (d, log) = headless_with("cx-hl-fail", codex, &[("STUB_EXEC_FAIL", "unsupported model")]);
+    assert!(
+        log.contains("--- codex exited 1, and said:\nunsupported model\nstub-codex: unsupported"),
+        "{log}"
+    );
+    let failed = d.evs("quiet", "failed");
+    assert!(failed[0].ends_with("): codex exited 1: unsupported model"), "{failed:?}");
+    drop(d);
+    let (d, _) = headless_with("cx-hl-cut", codex, &[("STUB_EXEC_CUT", "1")]);
+    let failed = d.evs("quiet", "failed");
+    assert!(failed[0].ends_with("): codex exited 0: its turn never completed"), "{failed:?}");
 }

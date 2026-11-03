@@ -1,10 +1,11 @@
-//! Headless ritual runs: `claude -p` with no pane, its files in the ritual's `runs/`, a time
-//! limit, and the journal line and notice when it ends. A run outlives the daemon that started
-//! it, and the next daemon sees it out.
+//! Headless ritual runs: `claude -p` or `codex exec` with no pane, its files in the ritual's
+//! `runs/`, a time limit, and the journal line and notice when it ends. A run outlives the
+//! daemon that started it, and the next daemon sees it out.
 
 use super::log::log;
 use super::rituals::{notice, now, repush};
 use super::shrine::{Shared, touch};
+use crate::proto::Agent;
 use crate::ritual::{self, Dir, Ritual, when};
 use crate::tele;
 use jiff::tz::TimeZone;
@@ -42,19 +43,22 @@ fn headless_limit() -> Duration {
     })
 }
 
-/// `claude -p` with no pane. Its answer goes to a file rather than a pipe, so a run the daemon
+/// `claude -p`, or for `agent: codex` `codex exec` (its events in `.jsonl`, its answer in
+/// `.txt`), with no pane. Its answer goes to a file rather than a pipe, so a run the daemon
 /// stops under still leaves it (the child is not killed: cutting a turn off halfway would leave
 /// the ritual's notes half written for nothing), and its `.pid` file lets the next daemon see it
 /// out. One still going after `HEADLESS_LIMIT` is stopped, by whichever daemon is there.
 pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result<(), String> {
-    let (claude, env) = shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH")?;
+    let codex = r.agent() == Agent::Codex;
+    let found = match codex {
+        true => shrine.borrow().codex(&r.slug).ok_or(super::codex::MISSING),
+        false => shrine.borrow().claude(&r.slug).ok_or("claude not found on PATH"),
+    };
+    let (program, env) = found?;
     // Found before any of the run's files is made, so a role gone leaves none behind.
-    let mut args = Vec::new();
-    if let Some(role) = &r.role {
-        let role = crate::role::find(role, shrine.borrow().share.as_deref())?;
-        args.extend(["--append-system-prompt".into(), crate::role::read(&role)?.words]);
-    }
-    args.extend(ritual::args(r, &d.path));
+    let share = shrine.borrow().share.clone();
+    let role = r.role.as_ref().map(|role| crate::role::find(role, share.as_deref()));
+    let words = role.transpose()?.map(|f| crate::role::read(&f)).transpose()?.map(|w| w.words);
     let cwd = r.cwd.clone().unwrap_or_default();
     let tz = TimeZone::system();
     let started = now();
@@ -62,9 +66,24 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
         .map(|t| t.to_zoned(tz.clone()).strftime("%Y%m%d-%H%M%S").to_string())
         .unwrap_or_else(|_| started.to_string());
     let stem = d.runs().join(format!("{stamp}.{:06x}", super::store::random(1 << 24)));
+    let (pre, args, out) = match codex {
+        true => (
+            vec![],
+            super::codex::exec(r, words.as_deref(), &d.path, &part(&stem, "txt"))?,
+            "jsonl",
+        ),
+        false => {
+            let mut pre: Vec<String> =
+                ["-p", "--output-format", "json", "--disallowed-tools"].map(String::from).into();
+            pre.extend(super::launch::DISALLOWED.map(String::from));
+            let role = words.map(|w| ["--append-system-prompt".to_string(), w]);
+            let args = role.into_iter().flatten().chain(ritual::args(r, &d.path)).collect();
+            (pre, args, "json")
+        }
+    };
     std::fs::create_dir_all(d.runs()).map_err(|e| e.to_string())?;
     let file = |ext: &str| std::fs::File::create(part(&stem, ext)).map_err(|e| e.to_string());
-    let (out, err, mut logf) = (file("json")?, file("err")?, file("log")?);
+    let (out, err, mut logf) = (file(out)?, file("err")?, file("log")?);
     let prompt = ritual::prompt_text(r, &d.memory());
     let _ = write!(
         logf,
@@ -76,9 +95,8 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
         args.join(" "),
         d.memory().display(),
     );
-    let mut cmd = tokio::process::Command::new(&claude);
-    cmd.args(["-p", "--output-format", "json", "--disallowed-tools"])
-        .args(super::launch::DISALLOWED)
+    let mut cmd = tokio::process::Command::new(&program);
+    cmd.args(&pre)
         .args(&args)
         .arg("--")
         .arg(&prompt)
@@ -90,8 +108,8 @@ pub(super) fn start(shrine: &Shared, r: &Ritual, d: &Dir, label: &str) -> Result
         .stderr(err)
         // Its own group: whatever stops the daemon's group does not cut the run off.
         .process_group(0);
-    let child =
-        super::pty::locked(|| cmd.spawn()).map_err(|e| format!("could not start claude: {e}"))?;
+    let child = super::pty::locked(|| cmd.spawn())
+        .map_err(|e| format!("could not start {}: {e}", r.agent().program()))?;
     let pid = child.id().map_or(0, |p| p as i32);
     let run = Run {
         stem,
@@ -282,7 +300,7 @@ async fn stop_group(pid: i32, child: Option<&mut tokio::process::Child>) {
 /// When a run last wrote its answer or its errors, epoch seconds.
 fn last_write(stem: &Path) -> Option<i64> {
     let at = |ext| std::fs::metadata(part(stem, ext)).and_then(|m| m.modified()).ok();
-    let t = ["json", "err"].into_iter().filter_map(at).max()?;
+    let t = ["json", "jsonl", "txt", "err"].into_iter().filter_map(at).max()?;
     t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
 }
 
@@ -291,20 +309,35 @@ fn part(stem: &Path, ext: &str) -> PathBuf {
     PathBuf::from(format!("{}.{ext}", stem.display()))
 }
 
-/// A run's answer as its log copies it: past `run_most()`, the rest is only in its `.json`.
-fn shown(s: &str, stem: &Path) -> String {
+/// A run's answer as its log copies it: past `run_most()`, the rest is only in `whole`.
+fn shown(s: &str, whole: &Path) -> String {
     match crate::hooks::cap(s, run_most() as usize) {
         c if c.len() < s.len() => {
-            let json = part(stem, "json");
-            format!("{c}\n--- cut at {} KB: all of it is in {}\n", run_most() >> 10, json.display())
+            format!(
+                "{c}\n--- cut at {} KB: all of it is in {}\n",
+                run_most() >> 10,
+                whole.display()
+            )
         }
         c => format!("{c}\n"),
+    }
+}
+
+/// How it ended, as the log and journal say it.
+fn exited(ended: Ended) -> String {
+    match ended {
+        Ended::Exit(c) => format!("exited {c}"),
+        Ended::Signal => "exited with a signal".into(),
+        Ended::Unseen => "ended while no daemon was watching".into(),
     }
 }
 
 /// From a finished headless run's files: the journal line, the notice, and what the log ends
 /// with. A run that fails can still print its object (`is_error`, the message as `result`).
 fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
+    if part(stem, "jsonl").exists() {
+        return codex_report(stem, ended, took);
+    }
     let raw = std::fs::read(part(stem, "json")).unwrap_or_default();
     let v: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
     let err = std::fs::read_to_string(part(stem, "err")).unwrap_or_default();
@@ -317,15 +350,11 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
         _ => true,
     };
     if failed {
-        let code = match ended {
-            Ended::Exit(c) => format!("exited {c}"),
-            Ended::Signal => "exited with a signal".into(),
-            Ended::Unseen => "ended while no daemon was watching".into(),
-        };
+        let code = exited(ended);
         let said: Vec<&str> = err.lines().take(20).collect();
         let mut tail = format!("--- claude {code}, and said:\n");
         if !result.is_empty() {
-            tail += &shown(&result, stem);
+            tail += &shown(&result, &part(stem, "json"));
         }
         tail += &format!("{}\n---\nfailed after {took}\n", said.join("\n"));
         let why = if first.is_empty() { tele::clean(&err, 120) } else { first };
@@ -346,10 +375,10 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
     let mut tail = if v.is_null() {
         format!(
             "gensokyo could not read the result as JSON; it is here as claude printed it.\n\n{}",
-            shown(&String::from_utf8_lossy(&raw), stem)
+            shown(&String::from_utf8_lossy(&raw), &part(stem, "json"))
         )
     } else {
-        shown(&result, stem)
+        shown(&result, &part(stem, "json"))
     };
     tail += &format!("\n---\ndone in {took}");
     if let Some(c) = &cost {
@@ -376,6 +405,54 @@ fn report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
     }
     if !denied.is_empty() {
         told += &format!(" (it needed {denied} and had nobody to ask)");
+    }
+    (journal, told, tail)
+}
+
+/// A `codex exec` run's report, from its events and its answer: done once its turn completed
+/// and it exited 0, else failed with why its turn failed, or what it said on stderr.
+fn codex_report(stem: &Path, ended: Ended, took: &str) -> (String, String, String) {
+    let events = std::fs::read_to_string(part(stem, "jsonl")).unwrap_or_default();
+    let e = super::codex::Exec::read(&events);
+    let answer = std::fs::read_to_string(part(stem, "txt")).unwrap_or_default();
+    let answer = answer.trim_end();
+    let err = std::fs::read_to_string(part(stem, "err")).unwrap_or_default();
+    let ok = match ended {
+        Ended::Exit(c) => e.ok(Some(c)),
+        Ended::Signal => false,
+        Ended::Unseen => e.ok(None),
+    };
+    if !ok {
+        let code = exited(ended);
+        let why =
+            e.failed.clone().map(|f| tele::clean(&f, 120)).unwrap_or_else(|| match err.trim() {
+                "" => "its turn never completed".into(),
+                err => tele::clean(err, 120),
+            });
+        let said: Vec<&str> = err.lines().take(20).collect();
+        let mut tail = format!("--- codex {code}, and said:\n");
+        if let Some(f) = &e.failed {
+            tail += &format!("{f}\n");
+        }
+        tail += &format!("{}\n---\nfailed after {took}\n", said.join("\n"));
+        let journal = format!("failed (headless, {took}): codex {code}: {why}");
+        let told = "the headless run failed; gensokyo ritual log says what it said".to_string();
+        return (journal, told, tail);
+    }
+    let first = tele::clean(answer, 120);
+    let mut tail = shown(answer, &part(stem, "txt")) + &format!("\n---\ndone in {took}");
+    if let Some((i, o)) = e.tokens {
+        tail += &format!(", {i} tokens in, {o} out");
+    }
+    tail.push('\n');
+    if let Some(t) = &e.thread {
+        tail += &format!("to read the whole transcript: codex resume {t}\n");
+    }
+    let mut journal = format!("done (headless, {took})");
+    let mut told = "done".to_string();
+    if !first.is_empty() {
+        journal += &format!(": {first}");
+        told += &format!(": {}", tele::clean(&first, 90));
     }
     (journal, told, tail)
 }

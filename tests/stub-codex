@@ -12,6 +12,13 @@
 #                             that starts with `-` is refused as an argument, as codex's parser
 #                             does. With queue.fail there it queues nothing: its text goes to
 #                             stderr and it exits 1, as codex does while an app-server runs
+#   exec [flags] -- <prompt>  `codex exec --json -o <file>`: its argv, each arg ended by a NUL, in
+#                             exec.args and what it read on stdin in exec.stdin; prints the
+#                             events of one turn as JSONL, a warning among them as an error
+#                             item, and writes "stub exec ran in <dir>: <prompt's first line>" to
+#                             the -o file. STUB_EXEC_FAIL=<text> fails the turn with it
+#                             (turn.failed, the text on stderr too, exit 1); STUB_EXEC_CUT=1
+#                             exits 0 before the turn completes
 #   [flags] resume <thread>   starts on that thread, the flags before or after it: its first
 #                             SessionStart says "resume", and comes with its first prompt, as
 #                             Codex sends it, none while it waits for one
@@ -77,6 +84,34 @@ case ${1:-} in
     echo "Queued message $(uuid) for thread $thread."
     exit 0 ;;
 esac
+
+if [ "${1:-}" = exec ]; then
+  shift
+  printf '%s\0' "$@" > "$STUB_STATE/exec.args"
+  if [ -t 0 ]; then : > "$STUB_STATE/exec.stdin"; else cat > "$STUB_STATE/exec.stdin"; fi
+  out='' prompt=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -o|--output-last-message) shift; out=${1:-} ;;
+      --) shift; prompt=$*; break ;;
+      -m|-s|-c|-p|--add-dir|-C|--cd) shift ;;
+    esac
+    shift
+  done
+  printf '{"type":"thread.started","thread_id":"%s"}\n{"type":"turn.started"}\n' "$(uuid)"
+  printf '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"a warning"}}\n'
+  if [ -n "${STUB_EXEC_FAIL:-}" ]; then
+    echo "stub-codex: $STUB_EXEC_FAIL" >&2
+    printf '{"type":"turn.failed","error":{"message":"%s"}}\n' "$(json "$STUB_EXEC_FAIL")"
+    exit 1
+  fi
+  said="stub exec ran in $PWD: ${prompt%%$'\n'*}"
+  printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"%s"}}\n' "$(json "$said")"
+  [ -z "${STUB_EXEC_CUT:-}" ] || exit 0
+  [ -z "$out" ] || printf '%s\n' "$said" > "$out"
+  printf '{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":0,"output_tokens":7}}\n'
+  exit 0
+fi
 
 res=${GENSOKYO_RESIDENT:-stub-$$}
 printf '%s\0' "$@" > "$STUB_STATE/$res.args"

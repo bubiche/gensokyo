@@ -379,7 +379,7 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
     let (mut found, mut table) = (Vec::new(), None::<String>);
     for line in plain_lines(config) {
         if line.starts_with('[') {
-            table = project_header(line);
+            table = named_header(line, "projects");
             continue;
         }
         let Some((k, v)) = line.split_once('=') else { continue };
@@ -392,6 +392,68 @@ pub fn projects(config: &str) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// What a user's `config.toml` has that runs beside gensokyo, by name only, no value kept: the
+/// plugins it enables, as `<name>@<marketplace>`; whether it has hooks of its own (`[hooks]`,
+/// `[hooks.<Event>]` or a top-level `hooks…` key, not the trust Codex keeps in `hooks.state`);
+/// and whether it sets `notify` at its top level.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Setup {
+    pub plugins: Vec<String>,
+    pub hooks: bool,
+    pub notify: bool,
+}
+
+/// `config`'s [`Setup`], by a small scan as `projects` is: a plugin is enabled by
+/// `enabled = true` in its `[plugins."<name>@<marketplace>"]` table, as Codex writes one.
+pub fn setup(config: &str) -> Setup {
+    let mut s = Setup::default();
+    // The table each line is in: none at the top, a plugin's name, or `Some(None)` for another.
+    let mut table = None::<Option<String>>;
+    for line in plain_lines(config) {
+        if line.starts_with('[') {
+            s.hooks |= hooks_key(line.trim_start_matches('[').split(']').next().unwrap_or(""));
+            table = Some(named_header(line, "plugins"));
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let on = v.split('#').next().unwrap_or("").trim() == "true";
+        match &table {
+            None => {
+                s.hooks |= hooks_key(k);
+                s.notify |= bare_key(k).as_deref() == Some("notify");
+            }
+            Some(Some(p)) if on && bare_key(k).as_deref() == Some("enabled") => {
+                s.plugins.push(p.clone())
+            }
+            _ => {}
+        }
+    }
+    s
+}
+
+/// Whether a dotted key or table name is Codex's hooks: `hooks` or `hooks.<Event>…`, not
+/// `hooks.state…`.
+fn hooks_key(k: &str) -> bool {
+    let mut parts = k.split('.').map(str::trim);
+    parts.next() == Some("hooks") && parts.next() != Some("state")
+}
+
+/// Whether `plugin`, `<name>@<marketplace>`, ships hooks in any version `home` caches in
+/// `plugins/cache/<marketplace>/<name>/<version>/`: a `hooks/hooks.json`, or a `hooks` in its
+/// `.codex-plugin/plugin.json`, a path or the hooks themselves. Only that manifest is opened.
+pub fn plugin_hooks(home: &Path, plugin: &str) -> bool {
+    let Some((name, market)) = plugin.rsplit_once('@') else { return false };
+    if [name, market].iter().any(|p| p.is_empty() || p.starts_with('.') || p.contains('/')) {
+        return false;
+    }
+    let versions = std::fs::read_dir(home.join("plugins/cache").join(market).join(name));
+    versions.into_iter().flatten().flatten().map(|v| v.path()).filter(|v| v.is_dir()).any(|v| {
+        let manifest = std::fs::read_to_string(v.join(".codex-plugin/plugin.json")).ok();
+        let manifest = manifest.and_then(|m| serde_json::from_str::<serde_json::Value>(&m).ok());
+        v.join("hooks/hooks.json").is_file() || manifest.is_some_and(|m| !m["hooks"].is_null())
+    })
 }
 
 /// `config`'s lines, trimmed, but those inside a multi-line string.
@@ -412,13 +474,13 @@ fn plain_lines(config: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// The directory a `[projects."<dir>"]` header names; none for any other header.
-fn project_header(line: &str) -> Option<String> {
+/// The name a `[<table>."<name>"]` header gives, quoted; none for any other header.
+fn named_header(line: &str, table: &str) -> Option<String> {
     let rest = line.strip_prefix('[')?.trim_start();
     if rest.starts_with('[') {
         return None;
     }
-    let rest = rest.strip_prefix("projects")?.trim_start().strip_prefix('.')?.trim_start();
+    let rest = rest.strip_prefix(table)?.trim_start().strip_prefix('.')?.trim_start();
     let (dir, rest) = toml_unquote(rest)?;
     let rest = rest.trim_start().strip_prefix(']')?.trim();
     (rest.is_empty() || rest.starts_with('#')).then_some(dir)

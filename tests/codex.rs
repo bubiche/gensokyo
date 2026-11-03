@@ -462,6 +462,67 @@ approval_policy = "never"
 }
 
 #[test]
+fn the_config_says_which_plugins_it_enables_its_own_hooks_and_notify_by_name() {
+    let config = r#"
+notify = ["/bin/notifier", "SECRET"] # its value is never kept
+model = "o4"
+[plugins."a@market"]
+enabled = true # on
+[plugins."b@market"]
+enabled = false
+[plugins."c@x@market"]
+"enabled" = true
+[plugins.bare]
+enabled = true
+[plugins."d@market".extra]
+enabled = true
+x = """
+[plugins."e@market"]
+enabled = true
+"""
+[hooks.state."k"]
+trusted_hash = "h"
+[tui]
+notify = true
+"#;
+    let s = codex::setup(config);
+    assert_eq!(s.plugins, ["a@market", "c@x@market"]);
+    assert!(s.notify && !s.hooks, "{s:?}");
+    // Codex's trust is not a hook; a hooks table or key is, wherever it starts.
+    let tables = ["[hooks]", "[hooks.Stop]", "[[hooks.Stop]]", "hooks.Stop = []", "hooks = {}"];
+    for h in tables {
+        assert!(codex::setup(&format!("{h}\n")).hooks, "{h}");
+    }
+    assert!(!codex::setup("hooks.state.k.trusted_hash = \"h\"\n[x]\nhooks = 1\n").hooks);
+    assert_eq!(codex::setup("[tui]\nnotify = []\n"), codex::Setup::default());
+}
+
+#[test]
+fn a_plugin_ships_hooks_by_its_hooks_file_or_its_manifest_in_any_version_cached() {
+    let home = fresh("cx-plugins");
+    let cache = home.join("plugins/cache/market");
+    let manifest = |p: &str, json: &str| {
+        let d = cache.join(p).join(".codex-plugin");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("plugin.json"), json).unwrap();
+    };
+    manifest("inline/1.0", r#"{"name":"inline","hooks":{"Stop":[]}}"#);
+    manifest("path/1.0", r#"{"name":"path","hooks":"./hooks.json"}"#);
+    manifest("none/1.0", r#"{"name":"none","skills":"./skills/"}"#);
+    manifest("broken/1.0", "{");
+    manifest("old/1.0", r#"{"name":"old"}"#);
+    std::fs::create_dir_all(cache.join("old/2.0/hooks")).unwrap();
+    std::fs::write(cache.join("old/2.0/hooks/hooks.json"), "{}").unwrap();
+    std::fs::write(cache.join("old/.codex-remote-plugin-install.json"), "{}").unwrap();
+    let has = |p: &str| codex::plugin_hooks(&home, p);
+    assert!(has("inline@market") && has("path@market") && has("old@market"));
+    assert!(!has("none@market") && !has("broken@market") && !has("gone@market"));
+    // A name that is not `<name>@<marketplace>`, or that would leave the cache, is none.
+    std::fs::create_dir_all(home.join("plugins/hooks")).unwrap();
+    assert!(!has("inline") && !has("..@cache") && !has("old@../cache/market") && !has("@market"));
+}
+
+#[test]
 fn a_codex_model_is_made_fit_to_show_as_claudes_is() {
     let home = fresh("cx-clean");
     let h = Some(home.as_path());

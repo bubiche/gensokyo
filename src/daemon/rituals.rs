@@ -836,9 +836,10 @@ fn held(
     else {
         return;
     };
+    // A prompt on its way in is a moment's state: the line waits for what holds it after that.
     let theirs = why.is_some_and(|w| w != STARTING && w != TYPING);
-    let (journal, tell) = (!w.held, !w.told && theirs);
-    w.held = true;
+    let (journal, tell) = (!w.held && why != Some(TYPING), !w.told && theirs);
+    w.held |= journal;
     w.told |= tell;
     if journal {
         let why = why.unwrap_or("is busy");

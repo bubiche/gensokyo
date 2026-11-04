@@ -31,9 +31,9 @@
 # busy in the registry until its idle_prompt Notification $STUB_IDLE seconds later (default 2);
 # /flood <n> one whose answer is <n> bytes; /busy <s> one whose tools fire PreToolUse every 0.1 s
 # for <s> seconds, Ctrl-C or not, as a turn started again by a queued message does (each hook on
-# its own, so one slow to run on a loaded runner leaves no gap the daemon could miss); a paste
-# meanwhile is queued, with no Stop of its own. With STUB_HOLD=1 the command line's prompt gets no
-# Stop until /finish: a run still going.
+# its own, so one slow to run on a loaded runner leaves no gap the daemon could miss), busy in
+# the registry meanwhile; a paste meanwhile is queued, with no Stop of its own. With STUB_HOLD=1
+# the command line's prompt gets no Stop until /finish: a run still going.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -413,12 +413,13 @@ $more"
                echo "flooded $n" ;;
     /ask\ *) fire PreToolUse ", \"tool_name\": \"AskUserQuestion\", \"tool_input\": {\"questions\": [{\"question\": \"$(json_str "${line#/ask }")\"}]}"; echo "asked" ;;
     /answer) fire PostToolUse ', "tool_name": "AskUserQuestion"'; echo "answered" ;;
-    /busy\ *) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/busy"'; echo "> $line"; submitted "$line"
+    /busy\ *) printf 'busy\n' > "$STUB_STATE/$session.status"
+             fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/busy"'; echo "> $line"; submitted "$line"
              : > "$STUB_STATE/$id.turn"
              # The beat is perl's: a `sleep` per tick would take as long as an exec, not 0.1 s.
              ( perl -e '$|=1; for (1..$ARGV[0] * 10) { select(undef, undef, undef, 0.1); print "\n" }' "${line#/busy }" |
                { while read -r _; do fire PreToolUse ', "tool_name": "Bash", "tool_input": {}' & done; wait; }
-               rm -f "$STUB_STATE/$id.turn" ) & ;;
+               rm -f "$STUB_STATE/$id.turn"; printf 'idle\n' > "$STUB_STATE/$session.status" ) & ;;
     /finish) fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "finished"'; echo "finished" ;;
     # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
     # exec can take longer than the daemon's hold on a loaded runner.

@@ -33,7 +33,8 @@
 # for <s> seconds, Ctrl-C or not, as a turn started again by a queued message does (each hook on
 # its own, so one slow to run on a loaded runner leaves no gap the daemon could miss), busy in
 # the registry meanwhile; a paste meanwhile is queued, with no Stop of its own. With STUB_HOLD=1
-# the command line's prompt gets no Stop until /finish: a run still going.
+# the command line's prompt gets no Stop until /finish: a run still going; /work is a prompt
+# whose turn goes on so, a paste queued behind it.
 # Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
 # tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
 # of the line read so far, so it is off by default.
@@ -420,7 +421,10 @@ $more"
              ( perl -e '$|=1; for (1..$ARGV[0] * 10) { select(undef, undef, undef, 0.1); print "\n" }' "${line#/busy }" |
                { while read -r _; do fire PreToolUse ', "tool_name": "Bash", "tool_input": {}' & done; wait; }
                rm -f "$STUB_STATE/$id.turn"; printf 'idle\n' > "$STUB_STATE/$session.status" ) & ;;
-    /finish) fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "finished"'; echo "finished" ;;
+    /work) fire UserPromptSubmit ', "permission_mode": "'"$mode"'", "prompt": "/work"'; echo "> $line"; submitted "$line"
+           : > "$STUB_STATE/$id.turn" ;;
+    /finish) rm -f "$STUB_STATE/$id.turn"
+             fire Stop ', "permission_mode": "'"$mode"'", "last_assistant_message": "finished"'; echo "finished" ;;
     # `/sync 0` parts the two writes by a few milliseconds of builtins: a `sleep` to fork and
     # exec can take longer than the daemon's hold on a loaded runner.
     /sync\ 0) printf '%s[?2026hSYNC-MID\n' "$esc"; n=0; while [ $n -lt 3000 ]; do n=$((n + 1)); done

@@ -824,14 +824,21 @@ fn feeding(name: &str, extra: &str, env: &[(&str, &str)]) -> Daemon {
 }
 
 impl Daemon {
-    /// Resident `id` mid-turn, as Claude Code's registry shows it, until it is told otherwise:
-    /// then a prompt and its Stop end the turn.
+    /// Resident `id` mid-turn, as Claude Code's hooks and registry show it, until it is told
+    /// otherwise: then the turn's Stop ends it. Each waits for its hook to be in, and the turn
+    /// for a registry read after it: the two must agree, or which wins turns on whether a hook
+    /// is stamped before or after a registry read starts.
     fn busy(&self, id: &Value, on: bool) {
         let status = self.dir.join(format!("stub/{}.status", id.as_str().unwrap()));
         std::fs::write(&status, if on { "busy" } else { "idle" }).unwrap();
+        let event = if on { "UserPromptSubmit" } else { "Stop" };
+        let hooks =
+            || self.log().iter().filter(|l| l["ev"] == "hook" && l["event"] == event).count();
+        let n = hooks();
         // Typing is what has the registry asked again.
         let name = self.live()[0]["name"].as_str().unwrap().to_string();
-        self.input(&name, if on { "work\r" } else { "and done\r" });
+        self.input(&name, if on { "/work\r" } else { "/finish\r" });
+        wait(|| hooks() > n, event);
         if on {
             self.listed();
             wait(|| self.live()[0]["state"] == "busy", "the turn");

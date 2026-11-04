@@ -985,9 +985,12 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     at_one(&d, "Reimu", |r| r["state"] == "busy");
     // Idle, it is looked at again when its lead says more.
     let more = || assert!(inside(&d, &lead, &["cloud", "say", "Aya", "more"]).status.success());
+    let t = std::time::Instant::now();
     logs(&d, &turns(3));
     more();
     at_one(&d, "Aya", |r| r["turns"] == 3);
+    // What saying more and the look it brings take here: couriers are a chain of execs.
+    let look = t.elapsed();
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert_eq!(told(&d).len(), 1, "held");
     status("idle");
@@ -1004,7 +1007,9 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
 
     // Waited on with another that has no news: held, and rung when the wait times out.
     local(&d, &work, "Patchouli", Some(&lead));
-    let bg = waiting(&d, &lead, &["Aya", "Patchouli", "--timeout", "3s"]);
+    // Long enough for the same again to land before the wait ends.
+    let most = format!("{}s", (3 * look.as_secs() + 1).max(3));
+    let bg = waiting(&d, &lead, &["Aya", "Patchouli", "--timeout", &most]);
     logs(&d, &turns(4));
     more();
     at_one(&d, "Aya", |r| r["turns"] == 4);

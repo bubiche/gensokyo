@@ -16,10 +16,13 @@ BRIEF
   `auto` or `bypassPermissions`. In a narrower mode, suggest the command to the user instead.
 - **No role, system prompt, mode, effort or allowed tools**: claude.ai sets the session up.
   `--model` and `--env env_…` work.
-- **The brief says**, in place of the usual file report and "no commit or push":
+- **The brief says** what a local helper's system prompt would, since it gets none, and, in
+  place of the usual file report and "no commit or push":
+  - its last message is its report, **under 1500 characters**: its log cuts longer ones;
+  - it leaves no background task running: one ends its turn, and you would read a report from
+    halfway through;
   - it commits and pushes its work: its pushed branch is all you get back. The `--worktree`
     branch is only its base; it works on a `claude/…` branch of its own;
-  - its last message is its report, **under 1500 characters**: its log cuts longer ones;
   - detail goes in commits and the PR description, on its branch;
   - it uses connectors only when the task needs them: each one's tools run unasked there.
 - **Wait and read** as for any helper. `read` ends with the session's link, where the whole report

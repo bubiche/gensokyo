@@ -18,30 +18,32 @@ helpers. After a `/compact` or `/clear`, gensokyo lists your helpers back to you
   turn: find where X is defined, summarise this file. It is invisible and dies with your turn.
 - **A helper** for work that takes a while, changes files, or that the user may want to watch
   or answer: a refactor in one package while you do another, a review, a long test hunt. Each
-  costs a full session, so a handful at most: you may have 10 live at once (config `HELPERS`).
+  costs a full session, so a handful at most: how many may be live at once is config
+  `HELPERS`, 10 by default.
 
-A helper cannot summon helpers of its own, but it keeps subagents.
+A helper cannot summon helpers of its own, but it keeps subagents. To watch a pull request until
+it goes quiet, use a ritual (the `gensokyo-ritual` skill, whose PR watcher covers the user's own
+PRs), or one helper per round: it looks, acts, reports and is closed. Not one helper looping for
+hours.
 
 ## Brief it, in one command
 
 The brief is its first prompt and goes on stdin. It starts with none of this conversation, so
-the brief says everything: the goal, the absolute paths, what done looks like, what not to touch.
-End every brief with these, in your words:
+the brief says everything: the goal, the absolute paths, what done looks like, what not to touch,
+and **what its report must contain**. Its system prompt already tells it that its last message
+is its report to you, read as it stands, and to leave no background task running, so the brief
+need not (a cloud helper gets no such prompt: see below). Say these too, in your words:
 
-- **its last message is its report to you**, read as it stands: what it did, what it found,
-  what is left. A report is kept up to 64 KB; a longer one goes in a file outside the
-  repository, even from a read-only role, and its last message names the path. A Codex helper
-  cannot message anyone, so its last message is the only report it has;
-- it leaves **no background task running** when it finishes: a background task ends a turn too,
-  and you would read a report from halfway through;
+- a report is kept up to 64 KB; a longer one goes in a file outside the repository, even from a
+  read-only role, and its last message names the path. A Codex helper cannot message anyone, so
+  its last message is the only report it has;
 - it does not commit or push unless you say so. In its sandbox (every mode but
   `bypassPermissions`) a Codex helper cannot commit, so you commit its work.
 
 ```bash
 gensokyo new /abs/path/to/repo --json --name Patchouli --model sonnet --prompt-file - <<'BRIEF'
 You are helping Reimu. Goal: … Done when: … Do not touch: …
-Your last message is your report to Reimu: what you changed (paths), what you checked, what is
-left. Leave no background task running when you finish.
+Your report: what you changed (paths), what you checked, what is left.
 BRIEF
 ```
 
@@ -120,10 +122,22 @@ SendMessage, and never by typing into its pane. Claude Code gets the words typed
 prompt, refused while something is in the way (a dialog, or a prompt the user has half typed:
 `say` says which); Codex runs them once its turn is over, and takes none before its first prompt
 is in, nor after an interrupted turn until a new one starts (someone types in its pane), even
-after a recall. They arrive as a prompt, much as the user's would: start with your name, say
-what you want, and that the answer comes as its last message. Then `wait` on it again, as many
-rounds as the work needs. A helper asks you something by ending its turn with the question:
-`read` it and answer with `say`. A cloud helper's follow-ups go by `gensokyo cloud say` instead.
+after a recall. They are typed in as its next prompt, where the user's own words go; only what
+you write marks them as yours, so start with your name, say what you want, and that the answer
+comes as its last message.
+Then `wait` on it again, as many rounds as the work needs. A helper asks you something by ending
+its turn with the question: `read` it and answer with `say`. A cloud helper's follow-ups go by
+`gensokyo cloud say` instead.
+
+Never widen a helper's work by follow-up to something hard to undo (a push or force-push, a
+rebase of a pushed branch, a deploy, infrastructure or credentials, opening a PR): its
+permission checks weigh each step against the task it was briefed with, and a later prompt
+asking for more may be refused. Do it yourself, hand the user the command, or summon a fresh
+helper whose brief asks for that step.
+
+When a helper's context grows large, ask it to write a handover file (what is done, what is
+next, where things are) in your scratchpad or its own, never inside a worktree, then summon a
+fresh helper briefed from that file and close the old one.
 
 ## When a helper needs the user
 

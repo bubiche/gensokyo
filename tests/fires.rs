@@ -600,15 +600,24 @@ fn a_headless_codex_run_that_ended_between_daemons_is_journaled_by_the_next() {
 }
 
 #[test]
-fn a_ritual_that_cannot_fire_says_so_once() {
+fn a_ritual_that_cannot_fire_or_whose_directory_is_untrusted_says_so_once() {
     let text = "---\nschedule: \"0 * * * *\"\ncwd: /no/such/dir\n---\nDo the rounds.\n";
-    let d = Daemon::start("problem", T0 + 120, &[("broken", text)], &[]);
-    wait(|| d.stamp("broken").is_some(), "first sight");
+    let rituals = [("broken", text), ("rounds", &hourly(""))];
+    let d = Daemon::new("problem", T0 + 120, &rituals, &[]);
+    // Nothing is trusted: rounds' own directory is refused, while broken's is not there at all.
+    std::fs::create_dir_all(d.dir.join("claude")).unwrap();
+    std::fs::write(d.dir.join("claude/.claude.json"), r#"{"projects": {}}"#).unwrap();
+    d.cli(&["list"]);
+    wait(|| d.stamp("broken").is_some() && d.stamp("rounds").is_some(), "first sight");
     let (mut w, mut events) = d.connect();
     writeln!(w, "{}", json!({"t": "watch"})).unwrap();
     d.clock(T0 + 3600 + 5);
-    let n = watch_for(&mut events, |v| v["t"] == "notice");
+    // Both fail on the same tick, so either notice may come first.
+    let broken = |v: &Value| v["text"].as_str().is_some_and(|t| t.starts_with("⏲ broken:"));
+    let n = watch_for(&mut events, |v| v["t"] == "notice" && broken(v));
     assert_eq!(n["text"], "⏲ broken: cwd: /no/such/dir is not a directory");
+    wait(|| !d.evs("rounds", "not-run").is_empty(), "the refusal");
+    d.clock(T0 + 7200 + 5);
     d.settle();
     assert_eq!(
         d.evs("broken", "not-run"),
@@ -616,6 +625,13 @@ fn a_ritual_that_cannot_fire_says_so_once() {
     );
     // Not stamped: it has not run.
     assert_eq!(d.stamp("broken"), Some(T0 + 120));
+    let not = d.evs("rounds", "not-run");
+    assert_eq!(not.len(), 1, "said once: {not:?}");
+    assert!(
+        not[0].starts_with("not run: cwd: nothing has answered Claude Code's trust"),
+        "{not:?}"
+    );
+    assert!(d.live().is_empty());
 }
 
 #[test]
@@ -770,26 +786,6 @@ fn a_resident_at_a_dialog_is_not_typed_into() {
     let not = d.evs("ask", "not-sent");
     assert_eq!(not.len(), 1, "{not:?}");
     assert!(!d.stub(&id, "input").contains("Do the rounds."), "typed into a dialog");
-}
-
-#[test]
-fn a_directory_claude_code_has_not_trusted_is_refused_by_the_clock() {
-    let d = Daemon::new("untrusted", T0 + 120, &[("rounds", &hourly(""))], &[]);
-    std::fs::create_dir_all(d.dir.join("claude")).unwrap();
-    std::fs::write(d.dir.join("claude/.claude.json"), r#"{"projects": {}}"#).unwrap();
-    d.cli(&["list"]);
-    wait(|| d.stamp("rounds").is_some(), "first sight");
-    d.clock(T0 + 3600 + 5);
-    wait(|| !d.evs("rounds", "not-run").is_empty(), "the refusal");
-    d.clock(T0 + 7200 + 5);
-    d.settle();
-    let not = d.evs("rounds", "not-run");
-    assert_eq!(not.len(), 1, "said once: {not:?}");
-    assert!(
-        not[0].starts_with("not run: cwd: nothing has answered Claude Code's trust"),
-        "{not:?}"
-    );
-    assert!(d.live().is_empty());
 }
 
 /// Started at T0 with a minutely ritual on a probe in the config dir's `probes/`, which counts

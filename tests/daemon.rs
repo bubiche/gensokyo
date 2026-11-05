@@ -810,7 +810,7 @@ impl Screen {
 }
 
 #[test]
-fn a_watcher_sees_the_shrine_and_a_viewer_the_screen() {
+fn a_watcher_sees_the_shrine_and_a_viewer_the_screen_until_it_unviews() {
     let d = Daemon::start("view", &[]);
     let mut c = Client::new(&d);
     c.send(json!({"t": "watch"}));
@@ -844,6 +844,21 @@ fn a_watcher_sees_the_shrine_and_a_viewer_the_screen() {
     c.send(json!({"t": "input", "who": "nobody", "id": 4, "bytes": b"x"}));
     let e = c.until("an input error", |v| v["t"] == "error");
     assert_eq!((e["id"].as_u64(), &e["error"]), (Some(4), &json!("no resident nobody")));
+
+    // Once it unviews, the screen stops; the shrine does not.
+    c.send(json!({"t": "unview"}));
+    c.send(json!({"t": "list", "id": 3}));
+    c.until("the list after unview", |v| v["t"] == "list");
+    c.send(json!({"t": "input", "who": id, "bytes": b"quiet\r"}));
+    wait(|| std::fs::read_to_string(&input).is_ok_and(|i| i.contains("quiet")), "the input");
+    std::thread::sleep(Duration::from_millis(300));
+    while let Some(ev) = c.next(Duration::from_millis(100)) {
+        assert!(!["frame", "damage"].contains(&ev["t"].as_str().unwrap()), "{ev}");
+    }
+    // Viewing again starts over with a whole frame.
+    c.send(json!({"t": "view", "who": id}));
+    let f = c.until("a new frame", |v| v["t"] == "frame");
+    assert_eq!(f["rev"], 1);
 
     // A banish is answered on its own time; the shrine event says who left.
     c.send(json!({"t": "banish", "id": 8, "who": "Reimu"}));
@@ -923,31 +938,6 @@ fn a_synchronized_block_is_shown_whole_unless_it_never_ends() {
     });
     assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
     assert_eq!(s.rows.iter().filter(|r| r.contains("SYNC-END")).count(), 1);
-}
-
-#[test]
-fn unview_stops_the_screen() {
-    let d = Daemon::start("unview", &[]);
-    let r = d.summon(json!({}));
-    d.stub(&r["id"], "ready");
-    let mut c = Client::new(&d);
-    c.send(json!({"t": "view", "who": r["id"]}));
-    let mut s = Screen::default();
-    s.wait_for(&mut c, "stub-claude");
-    c.send(json!({"t": "unview"}));
-    c.send(json!({"t": "list", "id": 3}));
-    c.until("the list after unview", |v| v["t"] == "list");
-    c.send(json!({"t": "input", "who": r["id"], "bytes": b"quiet\r"}));
-    let input = d.dir.join(format!("stub/{}.input", r["id"].as_str().unwrap()));
-    wait(|| std::fs::read_to_string(&input).is_ok_and(|i| i.contains("quiet")), "the input");
-    std::thread::sleep(Duration::from_millis(300));
-    while let Some(ev) = c.next(Duration::from_millis(100)) {
-        assert!(!["frame", "damage"].contains(&ev["t"].as_str().unwrap()), "{ev}");
-    }
-    // Viewing again starts over with a whole frame.
-    c.send(json!({"t": "view", "who": r["id"]}));
-    let f = c.until("a new frame", |v| v["t"] == "frame");
-    assert_eq!(f["rev"], 1);
 }
 
 /// How far back a frame or a damage says the view is.

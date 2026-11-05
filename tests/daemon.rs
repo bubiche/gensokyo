@@ -637,9 +637,9 @@ fn a_resident_that_stops_reading_does_not_hold_up_the_connection() {
 }
 
 #[test]
-fn a_ritual_keeps_its_newest_runs_in_departed_and_every_other_record() {
+fn a_starting_daemon_trims_a_rituals_runs_stray_answers_and_a_long_login_log() {
     let d = Daemon::new("trim", &[]);
-    for dir in ["residents", "departed", "rituals/rounds"] {
+    for dir in ["residents", "departed", "rituals/rounds", "answers"] {
         std::fs::create_dir_all(d.dir.join(dir)).unwrap();
     }
     let rec = |id: &str, ritual: Option<&str>, at: Option<i64>| {
@@ -661,6 +661,12 @@ fn a_ritual_keeps_its_newest_runs_in_departed_and_every_other_record() {
     std::fs::write(d.dir.join("rituals/rounds/session"), "run00\n").unwrap();
     // Retired at start, as the newest run.
     std::fs::write(d.dir.join("residents/last.json"), rec("last", Some("rounds"), None)).unwrap();
+    // An answer goes with its record: mine's is kept, one with no record is swept.
+    for id in ["mine", "stray"] {
+        std::fs::write(d.dir.join(format!("answers/{id}.json")), "{}").unwrap();
+    }
+    let log = d.dir.join("login.log");
+    std::fs::write(&log, "launchd caught this\n".repeat(60_000)).unwrap();
     d.cli(&["list"]);
     let mut left: Vec<String> = std::fs::read_dir(d.dir.join("departed"))
         .unwrap()
@@ -674,6 +680,13 @@ fn a_ritual_keeps_its_newest_runs_in_departed_and_every_other_record() {
     let all =
         d.req(json!({"t": "list", "id": 1, "all": true}))["residents"].as_array().unwrap().len();
     assert_eq!(all, 52);
+    assert!(d.dir.join("answers/mine.json").exists());
+    assert!(!d.dir.join("answers/stray.json").exists());
+    assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+    std::fs::write(&log, "launchd caught this\n").unwrap();
+    d.cli(&["quit"]);
+    d.cli(&["list"]);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "launchd caught this\n");
 }
 
 /// `gensokyo <args>` as Claude Code runs it inside a resident: `stdin` in, stdout back.
@@ -1589,23 +1602,6 @@ fn hooks_and_the_status_line_say_where_a_resident_works_and_the_newer_wins() {
 }
 
 #[test]
-fn a_restart_sweeps_answers_whose_record_is_gone() {
-    let d = Daemon::new("answers", &[]);
-    for dir in ["departed", "answers"] {
-        std::fs::create_dir_all(d.dir.join(dir)).unwrap();
-    }
-    let rec = json!({"id": "kept", "session": "kept", "name": "Cirno", "slot": null, "cwd": "/",
-                     "program": "claude", "argv": [], "launched": 1, "departed": 2});
-    std::fs::write(d.dir.join("departed/kept.json"), rec.to_string()).unwrap();
-    for id in ["kept", "stray"] {
-        std::fs::write(d.dir.join(format!("answers/{id}.json")), "{}").unwrap();
-    }
-    d.cli(&["list"]);
-    assert!(d.dir.join("answers/kept.json").exists());
-    assert!(!d.dir.join("answers/stray.json").exists());
-}
-
-#[test]
 fn the_log_moves_aside_once_past_its_size() {
     let d = Daemon::start("logsize", &[("GENSOKYO_LOG_BYTES", "2000")]);
     // Each new asker in another protocol is one line.
@@ -1634,19 +1630,6 @@ fn a_release_whose_selection_went_says_so_and_a_resident_cannot_select() {
     let e = back.iter().find(|v| v["id"] == 2).unwrap();
     assert!(e["error"].as_str().unwrap().starts_with("the screens and keyboards"), "{e}");
     assert!(e["error"].as_str().unwrap().contains("gensokyo say reaches a helper"), "{e}");
-}
-
-#[test]
-fn a_long_login_log_is_emptied_as_the_daemon_starts_and_a_short_one_kept() {
-    let d = Daemon::new("loginlog", &[]);
-    let log = d.dir.join("login.log");
-    std::fs::write(&log, "launchd caught this\n".repeat(60_000)).unwrap();
-    d.cli(&["list"]);
-    assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
-    std::fs::write(&log, "launchd caught this\n").unwrap();
-    d.cli(&["quit"]);
-    d.cli(&["list"]);
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), "launchd caught this\n");
 }
 
 /// The JSON of the first `--settings` in `args` (the stub's `$*`).

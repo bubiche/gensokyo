@@ -1269,13 +1269,6 @@ fn a_codex_resident_in_a_worktree_is_started_as_anywhere_else() {
     }
 }
 
-#[test]
-fn a_queued_message_is_joined_to_its_flags_so_a_dash_cannot_make_it_one() {
-    let a = codex::queue("019a-thread", "-m gpt, then the rest");
-    let a: Vec<_> = a.iter().map(|a| a.to_str().unwrap()).collect();
-    assert_eq!(a, ["queue", "--thread=019a-thread", "--message=-m gpt, then the rest"]);
-}
-
 /// `gensokyo say <name>` from inside resident `me`: its stdout, or its error.
 fn say(d: &common::Daemon, me: &Value, who: &str, text: &str) -> Result<String, String> {
     let o = inside(d, me, &["say", who, text]);

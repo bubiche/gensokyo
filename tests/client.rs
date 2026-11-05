@@ -443,7 +443,7 @@ async fn the_timetable_runs_pauses_and_removes_a_ritual_and_keeps_the_examples()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn a_search_moves_the_view_to_each_match_and_its_keys_never_reach_the_resident() {
+async fn a_search_moves_to_each_match_the_wheel_scrolls_back_for_all_and_a_letter_goes_on() {
     let dir = state("search");
     let _quit = Quit(dir.clone());
     cli(&dir, &["new", "work", "-n", "Reimu"]);
@@ -486,22 +486,10 @@ async fn a_search_moves_the_view_to_each_match_and_its_keys_never_reach_the_resi
     c.send(b"n\r").await;
     c.wait("the n read", |_| stub(&dir, "input").lines().last() == Some("n")).await;
     assert!(!stub(&dir, "input").contains("mark\n"), "the search went to the resident");
-    c.send(b"\x1dd").await;
-    assert!(c.exit().await.success());
-}
 
-#[tokio::test(flavor = "current_thread")]
-async fn the_wheel_scrolls_back_for_every_client_and_a_letter_goes_home_and_on() {
-    let dir = state("scroll");
-    let _quit = Quit(dir.clone());
-    cli(&dir, &["new", "work", "-n", "Reimu"]);
-    let mut c = Client::spawn(&dir, 120, 40);
+    // A second client, on the live screen as the first is.
     let mut c2 = Client::spawn(&dir, 120, 40);
-    c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
-    c2.wait("Reimu, twice", |s| s.contains("stub-claude Reimu")).await;
-    c.wait("the stub reading", |_| ready(&dir) == 1).await;
-    let t = Instant::now();
-    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c2.wait("Reimu, twice", |s| s.contains("> line119")).await;
     // One paste, which the stub echoes whole: 60 lines, more than the screen holds.
     let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
     c.send(format!("\x1b[200~{}\x1b[201~\r", lines.join("\r")).as_bytes()).await;

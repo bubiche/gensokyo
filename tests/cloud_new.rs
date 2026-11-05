@@ -1008,7 +1008,7 @@ fn a_cloud_helpers_turn_wakes_its_leads_wait_and_rings_only_when_the_lead_will_n
     // Waited on with another that has no news: held, and rung when the wait times out.
     local(&d, &work, "Patchouli", Some(&lead));
     // Long enough for the same again to land before the wait ends.
-    let most = format!("{}s", (3 * look.as_secs() + 1).max(3));
+    let most = format!("{}s", ((3 * look.as_millis()).div_ceil(1000) as u64).max(3));
     let bg = waiting(&d, &lead, &["Aya", "Patchouli", "--timeout", &most]);
     logs(&d, &turns(4));
     more();

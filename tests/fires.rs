@@ -1193,46 +1193,36 @@ fn a_fire_waits_for_its_residents_turn_to_end_and_the_newest_one_is_typed() {
 }
 
 #[test]
-fn a_fire_waits_no_longer_than_its_limit_and_deliver_now_does_not_wait() {
+fn held_fires_are_given_up_four_hours_from_the_first_and_deliver_now_does_not_wait() {
+    // `ask` is daily, so no later fire takes its place; `chain` is hourly, so each one does.
     let ask = hourly("target: Sakuya\n").replace("0 * * * *", "0 16 * * *");
-    let rituals = [("ask", ask.as_str()), ("now", &hourly("target: Sakuya\ndeliver: now\n"))];
+    let (chain, now) = (hourly("target: Sakuya\n"), hourly("target: Sakuya\ndeliver: now\n"));
+    let rituals = [("ask", ask.as_str()), ("chain", &chain), ("now", &now)];
     let d = Daemon::start("idle-most", T0 + 120, &rituals, &[]);
-    let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
-    d.stub(&r["resident"]["id"], "ready");
-    d.listed();
-    wait(|| d.stamp("ask").is_some() && d.stamp("now").is_some(), "first sight");
-    d.input("Sakuya", "/busy 60\r");
-    wait(|| d.live()[0]["state"] == "busy", "the turn");
-    // `now` types into the turn, which Claude Code queues; `ask` waits.
-    d.clock(T0 + 3600 + 5);
-    wait(|| d.evs("now", "sent").len() == 1, "deliver: now sent mid-turn");
-    wait(|| d.evs("ask", "held").len() == 1, "the daily fire held");
-    assert!(d.evs("ask", "held")[0].contains("which is busy"), "{:?}", d.evs("ask", "held"));
-    // Four hours on, by the ritual clock, it gives up.
-    d.clock(T0 + 3600 + 4 * 3600 + 10);
-    wait(|| d.evs("ask", "not-sent").len() == 1, "the held fire dropped");
-    assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h: it is busy"]);
-    assert!(d.evs("ask", "sent").is_empty());
-}
-
-#[test]
-fn fires_that_take_each_others_place_are_given_up_four_hours_from_the_first() {
-    let d = Daemon::start("idle-chain", T0 + 120, &[("ask", &hourly("target: Sakuya\n"))], &[]);
     let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Sakuya"}));
     let id = r["resident"]["id"].clone();
     d.stub(&id, "ready");
     d.listed();
-    wait(|| d.stamp("ask").is_some(), "first sight");
+    let slugs = ["ask", "chain", "now"];
+    wait(|| slugs.iter().all(|s| d.stamp(s).is_some()), "first sight");
     d.busy(&id, true);
+    // `now` types into the turn, which Claude Code queues; `ask` and `chain` wait.
     d.clock(T0 + 3600 + 5);
-    wait(|| d.evs("ask", "held").len() == 1, "held");
-    // The next hour's fire takes its place, and the hour after the fourth gives up on both.
+    wait(|| d.evs("now", "sent").len() == 1, "deliver: now sent mid-turn");
+    wait(|| d.evs("ask", "held").len() == 1, "the daily fire held");
+    wait(|| d.evs("chain", "held").len() == 1, "the hourly fire held");
+    assert!(d.evs("ask", "held")[0].contains("which is busy"), "{:?}", d.evs("ask", "held"));
+    // The next hour's fire takes chain's place, and the hour after the fourth gives up on both.
     d.clock(T0 + 2 * 3600 + 5);
     wait(|| d.log().iter().any(|l| l["replaced"].is_string()), "replaced");
+    // Four hours on from the first, by the ritual clock, each gives up.
     d.clock(T0 + 3600 + 4 * 3600 + 10);
-    wait(|| d.evs("ask", "not-sent").len() == 1, "the held fires dropped");
+    wait(|| d.evs("ask", "not-sent").len() == 1, "the held fire dropped");
+    wait(|| d.evs("chain", "not-sent").len() == 1, "the held fires dropped");
     assert_eq!(d.evs("ask", "not-sent"), ["not sent: Sakuya was not idle for 4h: it is busy"]);
-    assert_eq!(d.evs("ask", "held").len(), 1, "said once for the run of them");
+    assert!(d.evs("ask", "sent").is_empty());
+    assert_eq!(d.evs("chain", "not-sent"), ["not sent: Sakuya was not idle for 4h: it is busy"]);
+    assert_eq!(d.evs("chain", "held").len(), 1, "said once for the run of them");
 }
 
 #[test]

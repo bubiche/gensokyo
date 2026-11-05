@@ -46,9 +46,21 @@ fn alive(r: &Value) -> bool {
 }
 
 #[test]
-fn a_resident_may_not_quit_type_into_or_close_the_others() {
+fn a_resident_may_not_quit_type_into_or_close_the_others_and_is_left_out_of_its_own_cast() {
     let d = daemon("rights");
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
     let (a, b) = (summon(&d, "Reimu"), summon(&d, "Marisa"));
+    wait(|| d.list().iter().all(|r| r["state"] == "resting"), "both resting");
+    let o = inside(&d, &a, &["broadcast", "hi", "all"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o).trim(), "cast Hi on Marisa");
+    wait(|| d.stub(&b["id"], "input").contains("Hello Marisa."), "Marisa's card");
+    assert!(!d.stub(&a["id"], "input").contains("Hello"));
+    let o = inside(&d, &a, &["broadcast", "hi", "Reimu"]);
+    assert!(err(&o).contains("Hi reached nobody; Reimu is you; not cast at"), "{}", err(&o));
+
     let refused = |args: &[&str], want: &str| {
         let o = inside(&d, &a, args);
         assert!(!o.status.success() && err(&o).contains(want), "{args:?}: {}", err(&o));
@@ -95,23 +107,6 @@ fn a_resident_may_not_quit_type_into_or_close_the_others() {
     // The user can.
     let o = d.cli(&["close", "Marisa"]);
     assert!(out(&o).contains("Marisa has left"), "{}", out(&o));
-}
-
-#[test]
-fn a_resident_casting_at_everyone_is_left_out_itself() {
-    let d = daemon("cast");
-    let cards = d.dir.join("conf/spellcards");
-    std::fs::create_dir_all(&cards).unwrap();
-    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
-    let (a, b) = (summon(&d, "Reimu"), summon(&d, "Marisa"));
-    wait(|| d.list().iter().all(|r| r["state"] == "resting"), "both resting");
-    let o = inside(&d, &a, &["broadcast", "hi", "all"]);
-    assert!(o.status.success(), "{}", err(&o));
-    assert_eq!(out(&o).trim(), "cast Hi on Marisa");
-    wait(|| d.stub(&b["id"], "input").contains("Hello Marisa."), "Marisa's card");
-    assert!(!d.stub(&a["id"], "input").contains("Hello"));
-    let o = inside(&d, &a, &["broadcast", "hi", "Reimu"]);
-    assert!(err(&o).contains("Hi reached nobody; Reimu is you; not cast at"), "{}", err(&o));
 }
 
 #[test]

@@ -1159,22 +1159,6 @@ fn a_codex_approval_is_needed_until_it_is_granted() {
     assert_eq!((&k["state"], &k["needs"]), (&json!("resting"), &json!(1)), "{k}");
 }
 
-#[test]
-fn a_codex_approval_refused_ends_the_turn_interrupted() {
-    let d = daemon_with("esc", true, &[("STUB_TAIL", TAIL)]);
-    let lead = lead(&d);
-    helper(&d, &lead, "Kappa", "/perm");
-    let (code, _) = waited(&d, &lead, &["Kappa", "--until", "needs", "--timeout", "60s"]);
-    assert_eq!(code, 0);
-    keys(&d, "Kappa", b"\x1b");
-    let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
-    assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
-    assert_eq!(l[0]["answer"], Value::Null);
-    // Codex draws Working a while longer after the Interrupt: not working for it.
-    let why = "a Working title after Interrupt made it busy";
-    stays(&d, "Kappa", "resting", BEAT + BEAT / 2, why);
-}
-
 /// With no prompt there is no thread until one comes, but its title says it has started; and a
 /// Ctrl-C at its empty prompt is all a close takes.
 #[test]
@@ -1410,12 +1394,13 @@ fn a_codex_helper_whose_turn_was_interrupted_is_said_nothing_until_a_turn_begins
     assert_eq!((code, &l[0]["answer"]), (0, &json!("echo: carry on")), "{l:?}");
 }
 
-/// Closed and recalled, a Codex helper resumes its own thread: the same session, its hooks say
-/// so at its next prompt. An interrupted turn holds what is queued on the thread through the
-/// resume, so `say` is refused until a turn begins; then what was queued for its thread while
-/// it was gone, its last turn over, runs as a turn once it is back.
+/// An approval refused ends a Codex helper's turn interrupted, with no answer. Closed and
+/// recalled, it resumes its own thread: the same session, its hooks say so at its next prompt.
+/// An interrupted turn holds what is queued on the thread through the resume, so `say` is
+/// refused until a turn begins; then what was queued for its thread while it was gone, its last
+/// turn over, runs as a turn once it is back.
 #[test]
-fn a_recalled_codex_helper_resumes_its_thread_and_an_interrupt_before_still_holds_its_queue() {
+fn a_codex_helper_refused_approval_is_interrupted_and_recalled_resumes_holding_its_queue() {
     let d = daemon_with("resume", true, &[("STUB_TAIL", TAIL)]);
     let lead = lead(&d);
     let h = helper(&d, &lead, "Kappa", "/perm");
@@ -1424,6 +1409,10 @@ fn a_recalled_codex_helper_resumes_its_thread_and_an_interrupt_before_still_hold
     keys(&d, "Kappa", b"\x1b");
     let (code, l) = waited(&d, &lead, &["Kappa", "--until", "done", "--timeout", "60s"]);
     assert_eq!((code, &l[0]["ended"]), (0, &json!("interrupted")), "{l:?}");
+    assert_eq!(l[0]["answer"], Value::Null);
+    // Codex draws Working a while longer after the Interrupt: not working for it.
+    let why = "a Working title after Interrupt made it busy";
+    stays(&d, "Kappa", "resting", BEAT + BEAT / 2, why);
     let thread = d.stub(&h["id"], "thread").trim().to_string();
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));

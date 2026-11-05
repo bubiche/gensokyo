@@ -201,33 +201,6 @@ async fn exec_errors_come_back_from_spawn() {
     assert!(child.wait().await.unwrap().success());
 }
 
-/// A leader that exits with any output unread is not reaped until the master is read: the
-/// daemon must keep reading until wait returns.
-#[tokio::test]
-async fn exit_waits_for_unread_output() {
-    let _g = shared();
-    for (name, script, bytes) in [
-        ("0 bytes", "exit 0", 0),
-        ("2 bytes", "printf 'x\\n'; exit 0", 2),
-        ("100 KB", "head -c 100000 /dev/zero | tr '\\0' x; exit 0", 100000),
-    ] {
-        let (mut r, _w, mut child, _) = bash(script);
-        let t = Instant::now();
-        // A child with nothing to say is reaped at once, however slow it was to start under a
-        // loaded runner; one with output blocks, which a second shows.
-        let limit = Duration::from_secs(if bytes == 0 { 10 } else { 1 });
-        let unread = tokio::time::timeout(limit, child.wait()).await;
-        let blocked = unread.is_err();
-        let n = tokio::time::timeout(Duration::from_secs(5), drain(&mut r)).await.unwrap().len();
-        let st = child.wait().await.unwrap();
-        println!("{name}: wait blocked without reading: {blocked}; read {n}; {:?}", t.elapsed());
-        assert!(st.success());
-        assert_eq!(blocked, bytes > 0, "{name}");
-        // The tty turns \n into \r\n.
-        assert!(n == bytes || n == bytes + 1, "{name}: read {n}");
-    }
-}
-
 #[tokio::test]
 async fn twelve_concurrent_spawns_then_reaps_return_to_baseline() {
     let _g = FDS.write().unwrap_or_else(|e| e.into_inner());

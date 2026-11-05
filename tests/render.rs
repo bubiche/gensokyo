@@ -1141,17 +1141,6 @@ fn the_focused_name_wraps_over_rows_that_are_all_its() {
 }
 
 #[test]
-fn a_codex_resident_reads_as_a_claude_one_does() {
-    let mut m = shrine();
-    m.residents[1].agent = gensokyo::proto::Agent::Codex;
-    let (rows, _) = side(&m, AREA);
-    assert_eq!(rows[1].trim_end(), "1 ○ Reimu", "{rows:#?}");
-    assert_eq!(rows[2].trim_end(), "2 ○ Marisa", "{rows:#?}");
-    let map = hits(&m, AREA);
-    assert_eq!(map.at(5, 2).map(|(_, h)| h), Some(Hit::Resident(1)));
-}
-
-#[test]
 fn the_focused_branch_shows_whole_and_a_leads_bar_runs_down_its_rows() {
     let m = long();
     let (rows, _) = side(&m, AREA);

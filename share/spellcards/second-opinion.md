@@ -14,13 +14,15 @@ says all of this:
 - **that the reply must come back to you as a `SendMessage` addressed to {self}** - without
   that sentence {peer} will write its findings into its own pane, where you will never see
   them, and you will wait for a reply that is not coming;
-- that the reply must be either the single word `LGTM` or a numbered list of findings;
+- that the reply's first line must be `LGTM`, `LGTM with nits`, `CHANGES NEEDED` or `BLOCKED`,
+  then any findings, numbered;
 - that the exchange is capped at 3 rounds.
 
 When {peer}'s reply reaches you: if it lists findings, fix the ones you agree with, say so
 for any you do not, and then send {peer} another `SendMessage` tagged
 `[second-opinion round 2/3]` asking it to look at the diff again. Do the same for round 3 if
-it is still not satisfied. Stop as soon as {peer} says `LGTM`, or when round 3 is done.
+it is still not satisfied. Stop as soon as {peer} answers `LGTM`, or `LGTM with nits` once you
+have weighed the nits, or when round 3 is done. If it answers `BLOCKED`, stop and tell me why.
 
 Then tell me in one short paragraph what {peer} found, what you changed and how many rounds
 it took. Do not ask me anything before then. If no reply arrives from {peer} at all, tell me

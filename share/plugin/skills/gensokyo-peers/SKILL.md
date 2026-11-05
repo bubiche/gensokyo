@@ -18,7 +18,8 @@ conversation attached, so the exchange only holds together if you carry it yours
    sender it knows;
 2. **what you want** - a review of the uncommitted diff in a named absolute directory, an
    opinion on a specific question. Point at a path, never at "my changes";
-3. **the reply shape** - "either the single word `LGTM` or a numbered list of findings";
+3. **the reply shape** - "a first line of `LGTM`, `LGTM with nits`, `CHANGES NEEDED` or
+   `BLOCKED`, then any findings, numbered";
 4. **the reply channel** - *that the reply must come back as a `SendMessage` addressed to
    you, by name*;
 5. **the cap** - "this exchange is capped at 3 rounds".
@@ -35,7 +36,9 @@ this is the first thing to suspect - and you cannot fix it by asking again the s
   the other side reads it as the same exchange rather than a new request.
 - Answer what came back. If it found something, fix it and say what you changed; if you disagree,
   say why rather than complying - a peer is a reviewer, not an authority.
-- Stop at the first of: it says `LGTM`, the cap is reached, or either of you needs the user.
+- Stop at the first of: it answers `LGTM`, or `LGTM with nits` once you have weighed the nits;
+  it answers `BLOCKED`, which you tell the user; the cap is reached; or either of you needs the
+  user.
 - Then tell the user, in your own pane, what was asked, what came back and where it landed. The
   user watched none of it.
 

@@ -206,20 +206,15 @@ fn the_toggle_lets_go_at_once_takes_hold_again_and_is_kept_in_the_config() {
 }
 
 #[test]
-fn a_config_with_no_line_for_it_gets_one_and_none_at_all_is_made() {
+fn a_config_with_no_line_for_it_gets_one() {
     let d = daemon("append", Some("NOTIFY_BELL=off"), &[]);
     awake(&d, Some(false));
     let conf = std::fs::read_to_string(d.dir.join("conf/config")).unwrap();
     assert_eq!(conf, "NOTIFY_BELL=off\nKEEP_AWAKE=off\n");
-
-    let d = daemon("none", None, &[]);
-    awake(&d, Some(false));
-    let conf = std::fs::read_to_string(d.dir.join("conf/config")).unwrap();
-    assert_eq!(conf, "KEEP_AWAKE=off\n");
 }
 
 #[test]
-fn a_resident_may_ask_but_not_turn_it_on_or_off() {
+fn a_resident_may_only_ask_and_the_cli_says_and_sets_it_in_a_config_made_for_it() {
     let d = daemon("rights", None, &[]);
     let r = summon(&d, json!({"name": "Reimu"}));
     let (mut w, mut lines) = {
@@ -239,15 +234,14 @@ fn a_resident_may_ask_but_not_turn_it_on_or_off() {
     writeln!(w, "{}", json!({"t": "awake", "id": 2})).unwrap();
     assert_eq!(next(&mut lines)["t"], "done");
     assert!(!d.dir.join("conf/config").exists());
-}
 
-#[test]
-fn the_cli_says_and_sets_it() {
-    let d = daemon("cli", None, &[]);
+    // The user's CLI: with no config at all, one is made holding just its line.
     let out = common::out(&d.cli(&["awake"]));
     assert!(out.contains("keep-awake is on"), "{out}");
     let out = common::out(&d.cli(&["awake", "off"]));
     assert!(out.contains("keep-awake is off"), "{out}");
+    let conf = std::fs::read_to_string(d.dir.join("conf/config")).unwrap();
+    assert_eq!(conf, "KEEP_AWAKE=off\n");
     let out = common::out(&d.cli(&["doctor"]));
     assert!(out.contains("awake") && out.contains("keep-awake is off"), "{out}");
     let refused = d.command(&["awake", "on"]).env("GENSOKYO_RESIDENT", "someone").output().unwrap();

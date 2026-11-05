@@ -308,7 +308,7 @@ to go with it ("focus on the SQL layer"); either, both or neither. Five ship wit
 
 | Role | It |
 |---|---|
-| `reviewer` | reviews a diff, branch or PR, changes nothing, and reports confirmed findings with file, line and a failing case, or `LGTM` |
+| `reviewer` | reviews a diff, branch or PR, changes nothing, and reports a verdict (`LGTM`, `LGTM with nits`, `CHANGES NEEDED` or `BLOCKED`) on its first line, then confirmed findings, each graded, with file, line and a failing case |
 | `implementer` | makes the change asked for and only that, tests it, and reports what changed and how it was checked |
 | `debugger` | reproduces the failure, finds the cause, fixes it with a test that fails without the fix |
 | `researcher` | answers a question with evidence and changes nothing |

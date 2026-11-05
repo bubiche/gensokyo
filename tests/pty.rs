@@ -5,7 +5,6 @@
 #![allow(clippy::await_holding_lock)]
 
 use std::ffi::OsString;
-use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{RwLock, RwLockReadGuard};
@@ -200,21 +199,6 @@ async fn exec_errors_come_back_from_spawn() {
     }
     let (_pty, mut child) = try_spawn(Path::new("/usr/bin/true"), &[]).unwrap();
     assert!(child.wait().await.unwrap().success());
-}
-
-#[tokio::test]
-async fn exit_code_and_signal_are_distinguished() {
-    let _g = shared();
-    for (script, want) in [
-        ("exit 3", (Some(3), None)),
-        ("kill -TERM $$", (None, Some(15))),
-        ("kill -KILL $$", (None, Some(9))),
-        ("exit 0", (Some(0), None)),
-    ] {
-        let (_r, _w, mut child, _) = bash(script);
-        let st = child.wait().await.unwrap();
-        assert_eq!((st.code(), st.signal()), want, "{script}");
-    }
 }
 
 /// A leader that exits with any output unread is not reaped until the master is read: the

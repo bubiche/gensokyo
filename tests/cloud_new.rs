@@ -135,7 +135,7 @@ fn what_claude_prints_for_a_new_session_is_read_strictly() {
 }
 
 #[test]
-fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process() {
+fn a_cloud_session_starts_from_the_pushed_branch_as_an_entry_with_no_process_and_from_the_cli() {
     let (d, work) = setup("new", "CLOUD_ENV=env_01A\n");
     // A tag of the branch's name changes nothing.
     git(&work, &["tag", "main"]);
@@ -174,6 +174,21 @@ fn a_cloud_session_starts_from_the_pushed_branch_and_is_an_entry_with_no_process
     assert_eq!(r["t"], "summoned", "{r}");
     assert_eq!(made(&d).unwrap().0, ["--model", "sonnet", "--cloud", "three"]);
     assert_eq!(record(&d, &r["resident"]["id"])["cloud"].get("env"), None);
+
+    // The same from the command line, which takes no --env without --cloud and no --role with it.
+    std::fs::remove_file(d.dir.join("stub/cloud.new")).unwrap();
+    let o = d
+        .command(&["new", "--cloud", "-n", "Hatate", "--prompt", "go"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o).trim(), format!("started Hatate in the cloud: {LINK}"));
+    let o = d.command(&["new", "--env", "env_01A", "--prompt", "go"]).output().unwrap();
+    assert!(!o.status.success() && err(&o).contains("--cloud"), "{}", err(&o));
+    let o =
+        d.command(&["new", "--cloud", "--role", "reviewer", "--prompt", "go"]).output().unwrap();
+    assert!(!o.status.success() && err(&o).contains("cannot be used with"), "{}", err(&o));
 }
 
 #[test]
@@ -455,23 +470,6 @@ fn a_cloud_entry_comes_back_after_a_crash_and_a_logout() {
         assert_eq!((&listed[0]["name"], &listed[0]["cloud"]["url"]), (&json!("Aya"), &json!(LINK)));
         assert!(listed[0]["departed"].is_null(), "{sig}: {}", listed[0]);
     }
-}
-
-#[test]
-fn new_cloud_on_the_command_line() {
-    let (d, work) = setup("cli", "");
-    let o = d
-        .command(&["new", "--cloud", "-n", "Aya", "--prompt", "go"])
-        .current_dir(&work)
-        .output()
-        .unwrap();
-    assert!(o.status.success(), "{}", err(&o));
-    assert_eq!(out(&o).trim(), format!("started Aya in the cloud: {LINK}"));
-    let o = d.command(&["new", "--env", "env_01A", "--prompt", "go"]).output().unwrap();
-    assert!(!o.status.success() && err(&o).contains("--cloud"), "{}", err(&o));
-    let o =
-        d.command(&["new", "--cloud", "--role", "reviewer", "--prompt", "go"]).output().unwrap();
-    assert!(!o.status.success() && err(&o).contains("cannot be used with"), "{}", err(&o));
 }
 
 /// On the hour, UTC: the daemon's clock, moved by hand.

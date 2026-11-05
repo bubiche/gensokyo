@@ -449,7 +449,7 @@ fn quit_asks_everyone_to_leave_and_stops() {
 }
 
 #[test]
-fn ten_clients_at_once_start_one_daemon() {
+fn ten_clients_at_once_start_one_daemon_and_a_second_daemon_leaves_quietly() {
     let d = Daemon::new("ten", &[]);
     let kids: Vec<_> = (0..10)
         .map(|_| d.command(&["list", "--json"]).stdout(Stdio::piped()).spawn().unwrap())
@@ -461,11 +461,7 @@ fn ten_clients_at_once_start_one_daemon() {
     }
     let started = d.log().into_iter().filter(|e| e["ev"] == "started").count();
     assert_eq!(started, 1);
-}
 
-#[test]
-fn a_second_daemon_leaves_quietly() {
-    let d = Daemon::start("second", &[]);
     let t = Instant::now();
     let out = d.command(&["daemon"]).output().unwrap();
     assert!(out.status.success() && t.elapsed() < Duration::from_secs(2));

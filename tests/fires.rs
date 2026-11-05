@@ -159,17 +159,24 @@ fn a_due_fire_starts_one_run_with_its_flags_and_its_notes() {
 }
 
 #[test]
-fn a_fire_missed_while_down_is_made_up_once_at_the_start() {
+fn a_fire_missed_while_down_is_made_up_once_at_the_start_unless_catch_up_is_false() {
     // Last run three hours before; the daemon comes up ten minutes after the newest fire.
-    let d = Daemon::new("catch", T0 + 600, &[("rounds", &hourly(""))], &[]);
-    std::fs::create_dir_all(d.dir.join("rituals/rounds")).unwrap();
-    std::fs::write(d.dir.join("rituals/rounds/stamp"), (T0 - 3 * 3600).to_string()).unwrap();
+    let nocatch = hourly("catch_up: false\n");
+    let d = Daemon::new("catch", T0 + 600, &[("rounds", &hourly("")), ("nocatch", &nocatch)], &[]);
+    for slug in ["rounds", "nocatch"] {
+        std::fs::create_dir_all(d.dir.join(format!("rituals/{slug}"))).unwrap();
+        let stamp = d.dir.join(format!("rituals/{slug}/stamp"));
+        std::fs::write(stamp, (T0 - 3 * 3600).to_string()).unwrap();
+    }
     d.cli(&["list"]);
     wait(|| d.live().len() == 1, "the catch-up run");
     d.settle();
-    assert_eq!(d.live().len(), 1);
+    let live = d.live();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0]["name"], "rounds", "caught up although catch_up is false");
     assert_eq!(d.evs("rounds", "ran"), vec!["ran (catch-up 2026-09-21 15:00)".to_string()]);
     assert_eq!(d.stamp("rounds"), Some(T0));
+    assert!(d.evs("nocatch", "ran").is_empty());
 }
 
 #[test]
@@ -664,18 +671,6 @@ fn the_timetable_verbs_and_its_push() {
     assert!(!d.dir.join("conf/rituals/mine.md").exists());
     assert!(!d.dir.join("rituals/mine").exists());
     assert!(r["message"].as_str().unwrap().contains("a run of it is still in the shrine"), "{r}");
-}
-
-#[test]
-fn catch_up_false_makes_up_nothing() {
-    let d = Daemon::new("no-catch", T0 + 600, &[("rounds", &hourly("catch_up: false\n"))], &[]);
-    std::fs::create_dir_all(d.dir.join("rituals/rounds")).unwrap();
-    std::fs::write(d.dir.join("rituals/rounds/stamp"), (T0 - 3 * 3600).to_string()).unwrap();
-    d.cli(&["list"]);
-    wait(|| d.req(json!({"t": "rituals", "id": 1}))["t"] == "rituals", "the daemon");
-    d.settle();
-    assert!(d.live().is_empty(), "caught up although catch_up is false");
-    assert!(d.evs("rounds", "ran").is_empty());
 }
 
 #[test]

@@ -651,7 +651,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     let role = s.role.as_deref().map(|r| role::read(&role::find(r, Some(&share))?)).transpose()?;
     // A helper's project is its lead's to keep.
     let ledger = match role.as_ref().is_some_and(|r| r.ledger) && lead.is_none() {
-        true => Some(crate::ledger::make(&cwd)?),
+        true => Some(crate::ledger::make(&cwd, &name)?),
         false => None,
     };
     let opts = launch::Options {
@@ -871,7 +871,8 @@ pub(super) fn come_back(
     // Made again if it went; a role read no more keeps the one it had.
     let ledger = match &role {
         Some(r) => {
-            (r.ledger && rec.owner.is_none()).then(|| crate::ledger::make(&cwd)).transpose()?
+            let make = || crate::ledger::make(&cwd, &rec.name);
+            (r.ledger && rec.owner.is_none()).then(make).transpose()?
         }
         None => rec.ledger.as_ref().map(PathBuf::from),
     };

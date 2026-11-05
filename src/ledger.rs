@@ -1,7 +1,7 @@
-//! Ledgers: a file per project that a resident in a role with `ledger: project` keeps its running
-//! picture in, so a compaction, a `/clear` or a new session takes nothing it wrote down. It lives
-//! in the state dir, never the project, and every worktree of a repository shares the one of its
-//! main checkout.
+//! Ledgers: a file per resident and project that a resident in a role with `ledger: resident`
+//! keeps what it has in flight in, so a compaction or a `/clear` takes nothing it wrote down. It
+//! lives in the state dir, never the project. Two residents in one repository keep two; one
+//! summoned again under the same name in any worktree of it finds its own.
 
 use crate::paths;
 use std::path::{Path, PathBuf};
@@ -25,28 +25,30 @@ pub fn root(cwd: &Path) -> PathBuf {
     }
 }
 
-/// The ledger of the project at `root`: its directory's name, for a person reading the list,
-/// and a hash of its whole path, so that `/a-b` and `/a/b` keep two.
-pub fn file(root: &Path) -> PathBuf {
+/// The ledger of resident `name` in the project at `root`: the project's directory name and the
+/// resident's, for a person reading the list, and a hash of the project's whole path, so that
+/// `/a-b` and `/a/b` keep two. A name is matched without case, as the shrine matches it.
+pub fn file(root: &Path, name: &str) -> PathBuf {
     let path = root.to_string_lossy();
     // FNV-1a: the same in every build, which a std hasher does not promise.
     let hash = path.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
-    let name = root.file_name().map_or("root".into(), |n| n.to_string_lossy().into_owned());
-    paths::state_dir().join("ledgers").join(format!("{name}-{hash:08x}.md"))
+    let dir = root.file_name().map_or("root".into(), |n| n.to_string_lossy().into_owned());
+    let name = name.to_ascii_lowercase();
+    paths::state_dir().join("ledgers").join(format!("{dir}-{hash:08x}-{name}.md"))
 }
 
-/// The ledger for a resident in `cwd`, made with a heading naming its project when there is
-/// none: whoever reads it next should find a file, and know whose it is.
-pub fn make(cwd: &Path) -> Result<PathBuf, String> {
+/// The ledger of resident `name` in `cwd`, made with a heading naming it and its project when
+/// there is none: whoever reads it next should find a file, and know whose it is.
+pub fn make(cwd: &Path, name: &str) -> Result<PathBuf, String> {
     let root = root(cwd);
-    let f = file(&root);
+    let f = file(&root, name);
     let dir = f.parent().unwrap_or(Path::new("/"));
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     // Its real path, which is what a permission rule matches.
     let real = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let f = real.join(f.file_name().unwrap_or_default());
     if !f.exists() {
-        let head = format!("# Ledger for {}\n", root.display());
+        let head = format!("# Ledger of {name} in {}\n", root.display());
         std::fs::write(&f, head).map_err(|e| format!("{}: {e}", f.display()))?;
     }
     Ok(f)

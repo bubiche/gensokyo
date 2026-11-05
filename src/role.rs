@@ -1,6 +1,6 @@
 //! Roles: a paragraph appended to a resident's system prompt, which `/clear` and compaction keep
 //! where a first prompt is gone. A role is a markdown file, its words what follows an optional
-//! `---` block whose one setting is `ledger: project` (the `ledger` module). They ship in
+//! `---` block whose one setting is `ledger: resident` (the `ledger` module). They ship in
 //! `share/roles/`; the user's own in the config dir's `roles/` shadow those of the same file
 //! name. A role with a `/` in it is a file of the user's anywhere, by its full path.
 
@@ -58,7 +58,7 @@ pub fn find(role: &str, share: Option<&Path>) -> Result<PathBuf, String> {
 pub struct Role {
     /// What goes into the system prompt: the file under its `---` block.
     pub words: String,
-    /// `ledger: project`.
+    /// `ledger: resident`.
     pub ledger: bool,
 }
 
@@ -74,8 +74,8 @@ pub fn read(file: &Path) -> Result<Role, String> {
     let mut role = Role { words: front.body, ledger: false };
     for f in front.fields.iter().filter(|f| f.key == "ledger") {
         match f.text().as_str() {
-            "project" => role.ledger = true,
-            v => return bad(format!("ledger: {v} (ledger: project, or no ledger line)")),
+            "resident" => role.ledger = true,
+            v => return bad(format!("ledger: {v} (ledger: resident, or no ledger line)")),
         }
     }
     Ok(role)

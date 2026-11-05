@@ -30,7 +30,7 @@ pub struct Options<'a> {
     pub lead: Option<&'a str>,
     /// The role's words.
     pub role: Option<&'a str>,
-    /// The project's ledger, for a role that keeps one.
+    /// Its ledger, for a role that keeps one.
     pub ledger: Option<&'a Path>,
     /// The user's own words for the system prompt.
     pub system_prompt: Option<&'a str>,
@@ -177,6 +177,12 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
     a
 }
 
+/// What a ledger holds, in every agent's paragraph: what is in flight, never a second tracker.
+pub const LEDGER: &str = "It holds only what is in flight: each helper still out and where it \
+    works, decisions waiting on the user, commands you handed the user that they have not run \
+    yet, and what the next step needs to know. Done work shrinks to a line. If the user keeps a \
+    task tracker elsewhere, the ledger names it and does not copy its tasks.";
+
 /// One paragraph appended to the system prompt. A resident's context is the user's budget, so it
 /// says only what no button can: its name, that the others can be written to (through the skill,
 /// which is not reached for unless named here), where a standing schedule goes, and how to lead
@@ -196,10 +202,10 @@ pub fn system_paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>) -
     };
     let ledger = ledger.map_or(String::new(), |f| {
         format!(
-            " This project's ledger is `{}`: a file that outlasts this conversation, its \
-             compaction or `/clear`, and this session, for whoever holds your role here next. \
-             Read it before you start, keep it as your role says, and change it with the Edit \
-             tool, not the shell.",
+            " Your ledger is `{}`: a file of yours that outlasts this conversation, its \
+             compaction or `/clear`, and this session, for whoever comes back under your name. \
+             Read it before you start, and change it with the Edit tool, not the shell, as \
+             things change rather than at the end. {LEDGER}",
             f.display()
         )
     });

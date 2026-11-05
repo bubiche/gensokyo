@@ -365,6 +365,7 @@ fn a_codex_resident_hears_its_name_and_a_helper_how_to_report_and_ask() {
     }
     let ledger = codex::paragraph("Nitori", None, Some(Path::new("/l/proj.md")), false);
     assert!(ledger.contains("ledger is `/l/proj.md`"));
+    assert!(ledger.contains("in flight") && ledger.contains("does not copy its tasks"));
     // Nothing a Codex resident has no use for, in Codex's sandbox or out of it.
     let boxed = codex::paragraph("Nitori", None, None, true);
     let boxed_helper = codex::paragraph("Nitori", Some("Seiran"), None, true);

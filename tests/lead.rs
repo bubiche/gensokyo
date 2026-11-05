@@ -358,7 +358,7 @@ fn a_lead_with_a_ledger_is_pointed_back_to_it_after_a_compact_or_clear() {
     let d = daemon("ledger", &[]);
     let roles = d.dir.join("conf/roles");
     std::fs::create_dir_all(&roles).unwrap();
-    std::fs::write(roles.join("cos.md"), "---\nledger: project\n---\nKeep track.\n").unwrap();
+    std::fs::write(roles.join("cos.md"), "---\nledger: resident\n---\nKeep track.\n").unwrap();
     let r = d.req(json!({"t": "summon", "id": 7, "cwd": d.dir, "name": "Reimu", "role": "cos"}));
     assert_eq!(r["t"], "summoned", "{r}");
     let lead = r["resident"].clone();
@@ -376,7 +376,7 @@ fn a_lead_with_a_ledger_is_pointed_back_to_it_after_a_compact_or_clear() {
     assert_eq!(session_start(&d, &lead, "startup"), "");
     assert_eq!(session_start(&d, &lead, "resume"), "");
 
-    // A helper in the same role keeps no ledger of its own: the project's is its lead's.
+    // A helper in the same role keeps no ledger: what it has in flight is its lead's.
     let mut c = spawn(&d, &lead, &["new", "--json", "--name", "Marisa", "--role", "cos"]);
     c.stdin.take().unwrap().write_all(b"").unwrap();
     let o = c.wait_with_output().unwrap();

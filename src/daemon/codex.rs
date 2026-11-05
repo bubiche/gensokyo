@@ -2,7 +2,7 @@
 //! and the mode as `-c`s and flags, nothing written to `~/.codex`), and whether Codex trusts the
 //! directory it starts in.
 
-use super::launch::{Options, Paths, executable, on_path, sh_quote};
+use super::launch::{LEDGER, Options, Paths, executable, on_path, sh_quote};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -287,10 +287,11 @@ pub fn paragraph(name: &str, lead: Option<&str>, ledger: Option<&Path>, sandboxe
     });
     let ledger = ledger.map_or(String::new(), |f| {
         format!(
-            " This project's ledger is `{}`: a file that outlasts this conversation and this \
-             session, for whoever holds your role here next. Read it before you start, and keep \
-             it as your role says.",
-            f.display()
+            " Your ledger is `{}`: a file of yours that outlasts this conversation and this \
+             session, for whoever comes back under your name. Read it before you start, and \
+             change it as things change rather than at the end. {}",
+            f.display(),
+            LEDGER
         )
     });
     format!(

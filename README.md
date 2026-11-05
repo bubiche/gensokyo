@@ -320,12 +320,14 @@ the system prompt after gensokyo's own paragraph and before yours, and add to Cl
 system prompt rather than replacing it. From a shell, `gensokyo new --role reviewer
 --system-prompt "…"` does the same, and `--role` also takes a file by its path.
 
-A role whose block says `ledger: project`, as `chief-of-staff`'s does, keeps a **ledger**: one
-file per project in `~/.local/state/gensokyo/ledgers/`, shared by every worktree of a
-repository, where the resident keeps its running picture of the work. Its system prompt names
-the file, which it may read and edit without asking, and after a `/compact` or `/clear` it is
-told to read it again, so nothing it wrote down is lost, and a chief of staff summoned there
-next month starts where the last one stopped. A helper keeps none: the project is its lead's.
+A role of yours whose block says `ledger: resident` keeps a **ledger**: a file in
+`~/.local/state/gensokyo/ledgers/` for each resident name and project, so two residents in one
+repository keep two, and one summoned again under the same name, in any worktree of it, finds
+its own. It holds only what is in flight (helpers still out and where they work, decisions and
+commands waiting on you, what the next step needs), done work shrinks to a line, and a task
+tracker you keep elsewhere is named there, not copied. Its system prompt names the file, which
+it may read and edit without asking, and after a `/compact` or `/clear` it is told to read it
+again. No shipped role keeps one, and a helper never does.
 
 A resident keeps the system prompt it started with: Claude Code records it with the
 conversation, so a recall brings the same one back even if the file has changed since, until

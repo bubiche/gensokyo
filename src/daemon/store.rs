@@ -51,7 +51,7 @@ pub struct Record {
     /// update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    /// Its project's ledger, kept by its role: named in its system prompt and after a compact
+    /// Its own ledger, kept by its role: named in its system prompt and after a compact
     /// or a `/clear`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ledger: Option<String>,

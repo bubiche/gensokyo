@@ -1,9 +1,10 @@
-//! Which project a directory is in, for its ledger: real repositories, made with git.
+//! Whose a ledger is: a resident's, in the project its directory is in (real repositories, made
+//! with git).
 
 mod common;
 
 use common::fresh;
-use gensokyo::ledger::root;
+use gensokyo::ledger::{file, root};
 use std::path::Path;
 use std::process::Command;
 
@@ -57,4 +58,18 @@ fn a_project_is_its_repository_whichever_checkout_of_it_you_are_in() {
     std::fs::create_dir_all(&plain).unwrap();
     assert_eq!(root(&plain), plain);
     std::fs::remove_dir_all(&plain).unwrap();
+}
+
+#[test]
+fn a_ledger_is_one_residents_in_one_project() {
+    let proj = Path::new("/dev/proj");
+    let reimu = file(proj, "Reimu");
+    let base = reimu.file_name().unwrap().to_str().unwrap();
+    assert!(base.starts_with("proj-") && base.ends_with("-reimu.md"), "{base}");
+    // Its name matched as the shrine matches it, without case.
+    assert_eq!(file(proj, "reimu"), reimu);
+    // Two residents in one project keep two, as one resident in two projects does.
+    assert_ne!(file(proj, "Marisa"), reimu);
+    assert_ne!(file(Path::new("/other/proj"), "Reimu"), reimu);
+    assert_ne!(file(Path::new("/a-b"), "x"), file(Path::new("/a/b"), "x"));
 }

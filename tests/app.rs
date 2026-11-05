@@ -133,7 +133,7 @@ fn keys_go_to_the_resident_on_screen_and_the_leader_takes_the_next() {
 }
 
 #[test]
-fn esc_in_the_timetable_goes_back_one_stage_at_a_time() {
+fn esc_goes_back_one_stage_at_a_time_in_the_timetable_summon_and_cast() {
     let mut a = app();
     host(&mut a, b"t");
     let ritual = |name: &str| RitualInfo { name: name.into(), enabled: true, ..Default::default() };
@@ -162,6 +162,42 @@ fn esc_in_the_timetable_goes_back_one_stage_at_a_time() {
     assert_eq!(tt(&a), None);
     // Nothing was removed on the way.
     assert!(!sent(&mut a).iter().any(|r| r["t"] == "ritual"));
+
+    // Summon and cast, in an app of their own.
+    let mut a = shrine();
+    host(&mut a, b"\x1dn");
+    host(&mut a, b"/\r");
+    let stage = |a: &App| match &a.m.modal {
+        Some(Modal::Summon(s)) => Some(s.stage),
+        _ => None,
+    };
+    assert_eq!(stage(&a), Some(Stage::Name));
+    host(&mut a, b"\r");
+    assert_eq!(stage(&a), Some(Stage::Role));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), Some(Stage::Name));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), Some(Stage::Dir));
+    host(&mut a, b"\x1b");
+    assert_eq!(stage(&a), None);
+    host(&mut a, b"\x1dc");
+    let card =
+        Card { slug: "pair".into(), title: "Pair".into(), summary: String::new(), pair: true };
+    daemon(&mut a, Reply::Cards { id: 1, cards: vec![card], unusable: vec![] });
+    let cast = |a: &App| match &a.m.modal {
+        Some(Modal::Cast(c)) => Some((c.card.is_some(), c.target.clone())),
+        _ => None,
+    };
+    host(&mut a, b"\r");
+    host(&mut a, b"\r");
+    assert_eq!(cast(&a), Some((true, Some("id-Reimu".into()))));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), Some((true, None)));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), Some((false, None)));
+    host(&mut a, b"\x1b");
+    assert_eq!(cast(&a), None);
+    assert!(!sent(&mut a).iter().any(|r| r["t"] == "cast"));
 }
 
 /// What the app draws at 120x40, row by row.
@@ -658,44 +694,6 @@ fn a_cast_starts_on_the_resident_on_screen_and_a_double_enter_casts_nothing() {
     let out: Vec<Value> = sent(&mut a).into_iter().filter(|r| r["t"] == "cast").collect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["targets"], serde_json::json!(["id-Marisa"]));
-}
-
-#[test]
-fn esc_goes_back_one_stage_in_summon_and_cast_too() {
-    let mut a = shrine();
-    host(&mut a, b"\x1dn");
-    host(&mut a, b"/\r");
-    let stage = |a: &App| match &a.m.modal {
-        Some(Modal::Summon(s)) => Some(s.stage),
-        _ => None,
-    };
-    assert_eq!(stage(&a), Some(Stage::Name));
-    host(&mut a, b"\r");
-    assert_eq!(stage(&a), Some(Stage::Role));
-    host(&mut a, b"\x1b");
-    assert_eq!(stage(&a), Some(Stage::Name));
-    host(&mut a, b"\x1b");
-    assert_eq!(stage(&a), Some(Stage::Dir));
-    host(&mut a, b"\x1b");
-    assert_eq!(stage(&a), None);
-    host(&mut a, b"\x1dc");
-    let card =
-        Card { slug: "pair".into(), title: "Pair".into(), summary: String::new(), pair: true };
-    daemon(&mut a, Reply::Cards { id: 1, cards: vec![card], unusable: vec![] });
-    let cast = |a: &App| match &a.m.modal {
-        Some(Modal::Cast(c)) => Some((c.card.is_some(), c.target.clone())),
-        _ => None,
-    };
-    host(&mut a, b"\r");
-    host(&mut a, b"\r");
-    assert_eq!(cast(&a), Some((true, Some("id-Reimu".into()))));
-    host(&mut a, b"\x1b");
-    assert_eq!(cast(&a), Some((true, None)));
-    host(&mut a, b"\x1b");
-    assert_eq!(cast(&a), Some((false, None)));
-    host(&mut a, b"\x1b");
-    assert_eq!(cast(&a), None);
-    assert!(!sent(&mut a).iter().any(|r| r["t"] == "cast"));
 }
 
 #[test]

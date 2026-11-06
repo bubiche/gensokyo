@@ -650,11 +650,10 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
     let lead = s.owner.as_deref().and_then(|o| lead_name(&sh, o));
     let role = s.role.as_deref().map(|r| role::read(&role::find(r, Some(&share))?)).transpose()?;
     // A helper's project is its lead's to keep.
-    let ledger = match role.as_ref().is_some_and(|r| r.ledger) && lead.is_none() {
-        true => Some(crate::ledger::make(&cwd, &name)?),
-        false => None,
-    };
-    // The file for this name is still the ledger of a resident that had the name and was renamed.
+    let ledger = (role.as_ref().is_some_and(|r| r.ledger) && lead.is_none())
+        .then(|| crate::ledger::named(&cwd, &name));
+    // The file for this name is still the ledger of a resident that had the name and was renamed:
+    // refused before anything is made.
     let mine = ledger.as_ref().map(|f| f.to_string_lossy().into_owned());
     if let Some(e) = sh.entries.iter().find(|e| mine.is_some() && e.rec.ledger == mine) {
         let had = e.rec.name.clone();
@@ -662,6 +661,7 @@ pub(super) fn start(shrine: &Shared, s: Start) -> Result<proto::Resident, String
             "{name}'s ledger is still {had}'s, from before a rename: pick another name"
         ));
     }
+    let ledger = ledger.map(|f| crate::ledger::keep(&f, &cwd, &name)).transpose()?;
     let opts = launch::Options {
         id: &id,
         session: &id,
@@ -877,9 +877,17 @@ pub(super) fn come_back(
         }
     };
     // The one it was given, under whatever name it has taken since, made again if it went; one
-    // named for it now if it had none; a role read no more keeps the one it had.
+    // named for it now if it had none, or if a resident summoned under its old name while it
+    // was closed has that one now; a role read no more keeps the one it had.
+    let held = |f: &String| {
+        sh.entries.iter().any(|e| e.rec.id != rec.id && e.rec.ledger.as_ref() == Some(f))
+    };
     let ledger = match &role {
         Some(r) if r.ledger && rec.owner.is_none() => Some(match &rec.ledger {
+            Some(f) if held(f) => {
+                log(json!({"ev": "ledger_taken", "id": rec.id, "ledger": f}));
+                crate::ledger::make(&cwd, &rec.name)?
+            }
             Some(f) => crate::ledger::keep(Path::new(f), &cwd, &rec.name)?,
             None => crate::ledger::make(&cwd, &rec.name)?,
         }),

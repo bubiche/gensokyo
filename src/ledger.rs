@@ -37,6 +37,17 @@ pub fn file(root: &Path, name: &str) -> PathBuf {
     paths::state_dir().join("ledgers").join(format!("{dir}-{hash:08x}-{name}.md"))
 }
 
+/// Where the ledger of resident `name` in `cwd` is, by the real path a record keeps, whether or
+/// not it has been made: a summon checks it before making it.
+pub fn named(cwd: &Path, name: &str) -> PathBuf {
+    let f = file(&root(cwd), name);
+    let real = f.ancestors().skip(1).find_map(|a| Some((a, std::fs::canonicalize(a).ok()?)));
+    match real {
+        Some((a, r)) => r.join(f.strip_prefix(a).unwrap_or(&f)),
+        None => f,
+    }
+}
+
 /// The ledger of resident `name` in `cwd`, made with a heading naming it and its project when
 /// there is none: whoever reads it next should find a file, and know whose it is.
 pub fn make(cwd: &Path, name: &str) -> Result<PathBuf, String> {

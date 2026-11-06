@@ -338,19 +338,37 @@ fn a_role_that_keeps_a_ledger_gets_one_file_per_resident() {
     let renamed = || d.list().iter().any(|x| x["name"] == "Hatate");
     // Seen at the registry's next ask, which a loaded machine may time out more than once.
     common::wait_for(Duration::from_secs(60), renamed, "the rename");
-    let e = d.req(json!({"t": "summon", "id": 3, "cwd": proj, "name": "Aya", "role": "cos"}));
-    assert_eq!(e["t"], "error");
-    let why = "Aya's ledger is still Hatate's, from before a rename: pick another name";
-    assert!(e["error"].as_str().unwrap().contains(why), "{e}");
+    let refused = || {
+        let e = d.req(json!({"t": "summon", "id": 3, "cwd": proj, "name": "Aya", "role": "cos"}));
+        assert_eq!(e["t"], "error");
+        let why = "Aya's ledger is still Hatate's, from before a rename: pick another name";
+        assert!(e["error"].as_str().unwrap().contains(why), "{e}");
+    };
+    refused();
     recall("Hatate", &a);
     assert!(at(&a["id"], "--settings").unwrap().contains(&edit(&hers)));
     assert_eq!(std::fs::read_to_string(&hers).unwrap(), "# Aya's\n");
-    assert!(!dir.join(format!("{project}hatate.md")).exists());
-    // Gone since, it is made again where it was.
+    let fresh = dir.join(format!("{project}hatate.md"));
+    assert!(!fresh.exists());
+    // Gone since, a summon refused makes nothing, and a recall makes it again where it was.
     std::fs::remove_file(&hers).unwrap();
+    refused();
+    assert!(!hers.exists());
     recall("Hatate", &a);
     assert!(at(&a["id"], "--settings").unwrap().contains(&edit(&hers)));
     assert!(std::fs::read_to_string(&hers).unwrap().starts_with("# Ledger of Hatate in "));
+    // Closed, it leaves the name and the file to a new resident under its old name; recalled
+    // after that, it gets a fresh one under the name it has now, rather than sharing one.
+    gone("Hatate", &a);
+    d.cli(&["close", "Hatate"]);
+    let b = summon("Aya", "cos", &proj);
+    assert_eq!(ledger(&b), Some(hers.clone()));
+    let o = d.command(&["resume", "Hatate"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(ledger(&a), Some(fresh.clone()));
+    assert!(!at(&a["id"], "--settings").unwrap().contains(&edit(&hers)));
+    assert!(std::fs::read_to_string(&fresh).unwrap().starts_with("# Ledger of Hatate in "));
+    assert!(d.log().iter().any(|l| l["ev"] == "ledger_taken" && l["id"] == a["id"]));
 
     // A setting it does not know refuses the summon, and a ledger per project is no more.
     std::fs::write(roles.join("odd.md"), "---\nledger: project\n---\nx\n").unwrap();

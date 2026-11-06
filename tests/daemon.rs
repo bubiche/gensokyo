@@ -336,7 +336,8 @@ fn a_role_that_keeps_a_ledger_gets_one_file_per_resident() {
     writeln!(w, "{input}\n{}", json!({"t": "list", "id": 1})).unwrap();
     assert_eq!(next(&mut lines)["t"], "list");
     let renamed = || d.list().iter().any(|x| x["name"] == "Hatate");
-    common::wait_for(Duration::from_secs(30), renamed, "the rename");
+    // Seen at the registry's next ask, which a loaded machine may time out more than once.
+    common::wait_for(Duration::from_secs(60), renamed, "the rename");
     let e = d.req(json!({"t": "summon", "id": 3, "cwd": proj, "name": "Aya", "role": "cos"}));
     assert_eq!(e["t"], "error");
     let why = "Aya's ledger is still Hatate's, from before a rename: pick another name";

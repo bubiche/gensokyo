@@ -1,6 +1,6 @@
 //! Residents from gensokyo 0.7.1, recalled by this build as `restart` brings them back after an
 //! update: their records as 0.7.1 wrote them (tests/fixtures/v0.7.1), a chief of staff's role in
-//! the words 0.7.1 shipped, and no ledger made for anyone.
+//! the words 0.7.1 shipped, its helpers still its own, and no ledger made for anyone.
 
 mod common;
 
@@ -11,6 +11,7 @@ use std::process::{Output, Stdio};
 
 const COS: &str = "5b0c3e9a-7d21-4f6e-8a43-c1d2e3f4a5b6";
 const HELPER: &str = "9e8d7c6b-5a49-4382-b1a0-f9e8d7c6b5a4";
+const LIVE: &str = "3c2b1a09-8f7e-4d6c-b5a4-938271605f4e";
 
 fn fixture(f: &str) -> String {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v0.7.1");
@@ -40,9 +41,13 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     let dir = fresh("up-071");
     let proj = dir.join("proj");
     std::fs::create_dir_all(proj.join(".git")).unwrap();
-    for (sub, file, id) in
-        [("residents", "resident.json", COS), ("departed", "helper.json", HELPER)]
-    {
+    // It leads a helper still at work and one that has left.
+    let records = [
+        ("residents", "resident.json", COS),
+        ("residents", "live-helper.json", LIVE),
+        ("departed", "helper.json", HELPER),
+    ];
+    for (sub, file, id) in records {
         let mut r: Value = serde_json::from_str(&fixture(file)).unwrap();
         assert!(r["pid"].is_null() && r.get("ledger").is_none(), "{file}");
         r["cwd"] = json!(proj);
@@ -53,22 +58,27 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     for (file, id) in [("answer.json", COS), ("helper-answer.json", HELPER)] {
         std::fs::write(dir.join(format!("answers/{id}.json")), fixture(file)).unwrap();
     }
-    // A conversation to resume, under the name Claude Code has it by, and `restart`'s list of
+    // Conversations to resume, under the names Claude Code has them by, and `restart`'s list of
     // who comes back.
     std::fs::create_dir_all(dir.join("claude/projects/stub")).unwrap();
-    std::fs::write(dir.join(format!("claude/projects/stub/{COS}.jsonl")), "").unwrap();
     std::fs::create_dir_all(dir.join("stub")).unwrap();
-    std::fs::write(dir.join(format!("stub/{COS}.name")), "ops_cos\n").unwrap();
+    for (id, name) in [(COS, "ops_cos"), (LIVE, "auth-fix")] {
+        std::fs::write(dir.join(format!("claude/projects/stub/{id}.jsonl")), "").unwrap();
+        std::fs::write(dir.join(format!("stub/{id}.name")), format!("{name}\n")).unwrap();
+    }
     std::fs::create_dir_all(dir.join("run")).unwrap();
-    std::fs::write(dir.join("run/comeback"), format!("{COS}\n")).unwrap();
+    std::fs::write(dir.join("run/comeback"), format!("{COS}\n{LIVE}\n")).unwrap();
 
     let d = Daemon::at(dir, vec![("STUB_HOOKS".into(), "1".into())]);
     d.cli(&["list"]);
-    let args = d.stub(&json!(COS), "args");
-    assert!(args.contains(&format!("--resume {COS}")), "{args}");
+    for id in [COS, LIVE] {
+        let args = d.stub(&json!(id), "args");
+        assert!(args.contains(&format!("--resume {id}")), "{args}");
+    }
 
-    // Back in its own conversation, with the flags it had and the role's words in the one
-    // appended prompt, after gensokyo's paragraph: no file, and nothing of a ledger.
+    // Back in its own conversation, with the flags it had and one appended prompt: gensokyo's
+    // paragraph as 0.7.1 recorded it, then the role's words as 0.7.1 shipped them, which 0.7.1
+    // passed as a file. Nothing of a ledger.
     let file = d.dir.join(format!("residents/{COS}.json"));
     let rec: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
     let argv: Vec<&str> =
@@ -77,9 +87,12 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     assert_eq!(flag("--resume"), Some(COS));
     assert_eq!(flag("--permission-mode"), Some("auto"));
     assert_eq!(flag("--append-system-prompt-file"), None);
+    let then: Value = serde_json::from_str(&fixture("resident.json")).unwrap();
+    let then: Vec<&str> =
+        then["argv"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
+    let i = then.iter().position(|a| *a == "--append-system-prompt").unwrap();
     let system = flag("--append-system-prompt").unwrap();
-    assert!(system.contains("your resident name is ops_cos."), "{system}");
-    assert!(system.ends_with(&format!("\n\n{}", words.trim_end())), "{system}");
+    assert_eq!(system, format!("{}\n\n{}", then[i + 1], words.trim_end()));
     assert!(!system.contains("ledger"), "{system}");
     assert!(!flag("--settings").unwrap().contains("ledger"));
     assert!(rec.get("ledger").is_none(), "{rec}");
@@ -98,6 +111,8 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     assert!(cos["owner"].is_null() && cos["state"] != "departed", "{cos}");
     let helper = me("flaky-ci");
     assert_eq!((helper["owner"].as_str(), helper["state"].as_str()), (Some(COS), Some("departed")));
+    let live = me("auth-fix");
+    assert!(live["owner"] == COS && live["state"] != "departed", "{live}");
 
     // `read` has its last answer, from the user's terminal, and its helper's, from inside it.
     let o = d.cli(&["read", "ops_cos"]);
@@ -106,10 +121,13 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("LGTM: the retry is bounded"), "{}", out(&o));
 
-    // After its next compaction it is pointed to no ledger.
+    // After its next compaction it hears of the helper still out, and of no ledger.
     let hook = json!({"hook_event_name": "SessionStart", "session_id": COS, "source": "compact"});
     let o = inside(&d, COS, &["_hook"], &hook.to_string());
     assert!(o.status.success(), "{}", err(&o));
-    assert!(!out(&o).contains("ledger"), "{}", out(&o));
+    let told: Value = serde_json::from_str(&out(&o)).unwrap_or_else(|_| panic!("{}", out(&o)));
+    let told = told["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+    assert!(told.contains("helpers you summoned") && told.contains("\n- auth-fix: "), "{told}");
+    assert!(!told.contains("ledger"), "{told}");
     assert!(!d.dir.join("ledgers").exists());
 }

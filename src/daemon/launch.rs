@@ -181,7 +181,9 @@ pub fn argv(p: &Paths, o: &Options, cwd: &Path) -> Vec<OsString> {
 pub const LEDGER: &str = "It holds only what is in flight: each helper still out and where it \
     works, decisions waiting on the user, commands you handed the user that they have not run \
     yet, and what the next step needs to know. Done work shrinks to a line. If the user keeps a \
-    task tracker elsewhere, the ledger names it and does not copy its tasks.";
+    task tracker elsewhere, the ledger names it and does not copy its tasks. A helper named there \
+    is yours only if its `owner` in `gensokyo list --json` is your entry's `id`; any other was an \
+    earlier session's.";
 
 /// One paragraph appended to the system prompt. A resident's context is the user's budget, so it
 /// says only what no button can: its name, that the others can be written to (through the skill,

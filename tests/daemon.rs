@@ -214,10 +214,14 @@ fn a_role_and_the_users_words_join_the_system_prompt_and_come_back_with_a_recall
 #[test]
 fn a_role_that_keeps_a_ledger_gets_one_file_per_resident() {
     let d = Daemon::start("ledger", &[]);
+    // From its record, which holds the argv the stub got: the paragraph has flags in it.
     let at = |id: &Value, f: &str| {
-        let args = d.stub(id, "args");
-        let i = args.find(&format!("{f} "))? + f.len() + 1;
-        Some(args[i..].split(" --").next().unwrap().to_string())
+        d.stub(id, "ready");
+        let file = d.dir.join(format!("residents/{}.json", id.as_str().unwrap()));
+        let rec: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let argv = rec["argv"].as_array().unwrap();
+        let i = argv.iter().position(|a| a == f)?;
+        Some(argv[i + 1].as_str().unwrap().to_string())
     };
     let ledger = |r: &Value| {
         let ours = at(&r["id"], "--append-system-prompt")?;
@@ -321,6 +325,31 @@ fn a_role_that_keeps_a_ledger_gets_one_file_per_resident() {
     std::fs::write(roles.join("plain.md"), "Keep track.\n").unwrap();
     recall("Kanako", &k);
     assert!(!at(&k["id"], "--settings").unwrap().contains("ledgers"));
+
+    // Renamed, it keeps the ledger it was given, through a recall too; a new resident under its
+    // old name is refused that file rather than handed it.
+    let a = summon("Aya", "cos", &proj);
+    let hers = ledger(&a).expect("its own ledger");
+    std::fs::write(&hers, "# Aya's\n").unwrap();
+    let (mut w, mut lines) = d.connect();
+    let input = json!({"t": "input", "id": 2, "who": "Aya", "bytes": b"/rename Hatate\r"});
+    writeln!(w, "{input}\n{}", json!({"t": "list", "id": 1})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    let renamed = || d.list().iter().any(|x| x["name"] == "Hatate");
+    common::wait_for(Duration::from_secs(30), renamed, "the rename");
+    let e = d.req(json!({"t": "summon", "id": 3, "cwd": proj, "name": "Aya", "role": "cos"}));
+    assert_eq!(e["t"], "error");
+    let why = "Aya's ledger is still Hatate's, from before a rename: pick another name";
+    assert!(e["error"].as_str().unwrap().contains(why), "{e}");
+    recall("Hatate", &a);
+    assert!(at(&a["id"], "--settings").unwrap().contains(&edit(&hers)));
+    assert_eq!(std::fs::read_to_string(&hers).unwrap(), "# Aya's\n");
+    assert!(!dir.join(format!("{project}hatate.md")).exists());
+    // Gone since, it is made again where it was.
+    std::fs::remove_file(&hers).unwrap();
+    recall("Hatate", &a);
+    assert!(at(&a["id"], "--settings").unwrap().contains(&edit(&hers)));
+    assert!(std::fs::read_to_string(&hers).unwrap().starts_with("# Ledger of Hatate in "));
 
     // A setting it does not know refuses the summon, and a ledger per project is no more.
     std::fs::write(roles.join("odd.md"), "---\nledger: project\n---\nx\n").unwrap();

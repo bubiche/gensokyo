@@ -41,7 +41,16 @@ pub fn file(root: &Path, name: &str) -> PathBuf {
 /// there is none: whoever reads it next should find a file, and know whose it is.
 pub fn make(cwd: &Path, name: &str) -> Result<PathBuf, String> {
     let root = root(cwd);
-    let f = file(&root, name);
+    open(&file(&root, name), name, &root)
+}
+
+/// A ledger a resident was already given, made again the same way if it has gone: it stays the
+/// resident's under a name it has taken since.
+pub fn keep(f: &Path, cwd: &Path, name: &str) -> Result<PathBuf, String> {
+    open(f, name, &root(cwd))
+}
+
+fn open(f: &Path, name: &str, root: &Path) -> Result<PathBuf, String> {
     let dir = f.parent().unwrap_or(Path::new("/"));
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     // Its real path, which is what a permission rule matches.

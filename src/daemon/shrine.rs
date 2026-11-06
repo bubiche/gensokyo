@@ -857,7 +857,7 @@ pub(super) fn come_back(
     // A resumed conversation keeps the system prompt Claude Code recorded, or the developer
     // instructions a Codex thread started with, the role's words in it, so a role file gone
     // since does not keep it away; a fresh start would go without, as would one taken over.
-    let found = |r: &str| role::read(&role::find(r, sh.share.as_deref())?);
+    let found = |r: &str| role::read_or_whole(&role::find(r, sh.share.as_deref())?);
     let role = match rec.role.as_deref().map(found).transpose() {
         Ok(found) => found,
         Err(e) if !resume || teleport.is_some() => {

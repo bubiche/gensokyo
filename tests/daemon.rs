@@ -336,6 +336,39 @@ fn a_role_that_keeps_a_ledger_gets_one_file_per_resident() {
 }
 
 #[test]
+fn a_role_whose_block_this_build_refuses_still_comes_back_whole_at_a_recall() {
+    let d = Daemon::start("whole", &[]);
+    let at = |id: &Value, f: &str| {
+        let args = d.stub(id, "args");
+        let i = args.find(&format!("{f} "))? + f.len() + 1;
+        Some(args[i..].split(" --").next().unwrap().to_string())
+    };
+    let roles = d.dir.join("conf/roles");
+    std::fs::create_dir_all(&roles).unwrap();
+    std::fs::write(roles.join("terse.md"), "Be terse.\n").unwrap();
+    let r = d.summon(json!({"name": "Reimu", "role": "terse"}));
+    assert!(at(&r["id"], "--append-system-prompt").unwrap().ends_with("\n\nBe terse."));
+
+    // Its file has since taken a block this build does not read, as a role file passed whole
+    // before there were role settings might. A new summon in it is refused...
+    let text = "---\ndescription: the terse one\n---\nBe terse.";
+    std::fs::write(roles.join("terse.md"), format!("{text}\n")).unwrap();
+    let e = d.req(json!({"t": "summon", "id": 3, "cwd": d.dir, "role": "terse"}));
+    assert!(e["error"].as_str().unwrap().contains("not a role setting: description"), "{e}");
+    // ...but the one summoned in it comes back with all of it, not without its role.
+    let gone = || d.list().iter().all(|x| x["name"] != "Reimu" || !x["departed"].is_null());
+    d.cli(&["banish", "Reimu"]);
+    wait(gone, "it gone");
+    let ready = d.dir.join("stub").join(format!("{}.ready", r["id"].as_str().unwrap()));
+    std::fs::remove_file(&ready).unwrap();
+    let o = d.command(&["resume", "Reimu"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let ours = at(&r["id"], "--append-system-prompt").unwrap();
+    assert!(ours.ends_with(&format!("\n\n{text}")), "{ours:?}");
+    assert!(!at(&r["id"], "--settings").unwrap().contains("ledgers"));
+}
+
+#[test]
 fn a_resident_marks_links_unless_the_user_said_otherwise() {
     use gensokyo::daemon::launch;
     let (bin, sock) = (Path::new("/bin"), Path::new("/s"));

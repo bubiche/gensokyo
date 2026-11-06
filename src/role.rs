@@ -80,3 +80,13 @@ pub fn read(file: &Path) -> Result<Role, String> {
     }
     Ok(role)
 }
+
+/// The role in `file` as a recall reads it. One whose `---` block this build refuses is still
+/// passed, whole and with no ledger, as builds before role settings passed every role file: a
+/// resident is not left without the role it was summoned in.
+pub fn read_or_whole(file: &Path) -> Result<Role, String> {
+    read(file).or_else(|e| match std::fs::read_to_string(file) {
+        Ok(text) => Ok(Role { words: text.trim_end().to_string(), ledger: false }),
+        Err(_) => Err(e),
+    })
+}

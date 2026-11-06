@@ -403,7 +403,11 @@ fn a_role_whose_block_this_build_refuses_still_comes_back_whole_at_a_recall() {
     std::fs::write(roles.join("terse.md"), format!("{text}\n")).unwrap();
     let e = d.req(json!({"t": "summon", "id": 3, "cwd": d.dir, "role": "terse"}));
     assert!(e["error"].as_str().unwrap().contains("not a role setting: description"), "{e}");
-    // ...but the one summoned in it comes back with all of it, not without its role.
+    // ...but the one summoned in it comes back to its conversation with all of it, not without
+    // its role.
+    let id = r["id"].as_str().unwrap();
+    std::fs::create_dir_all(d.dir.join("claude/projects/stub")).unwrap();
+    std::fs::write(d.dir.join(format!("claude/projects/stub/{id}.jsonl")), "").unwrap();
     let gone = || d.list().iter().all(|x| x["name"] != "Reimu" || !x["departed"].is_null());
     d.cli(&["banish", "Reimu"]);
     wait(gone, "it gone");
@@ -411,6 +415,7 @@ fn a_role_whose_block_this_build_refuses_still_comes_back_whole_at_a_recall() {
     std::fs::remove_file(&ready).unwrap();
     let o = d.command(&["resume", "Reimu"]).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(at(&r["id"], "--resume").as_deref().map(str::trim_end), Some(id));
     let ours = at(&r["id"], "--append-system-prompt").unwrap();
     assert!(ours.ends_with(&format!("\n\n{text}")), "{ours:?}");
     assert!(!at(&r["id"], "--settings").unwrap().contains("ledgers"));

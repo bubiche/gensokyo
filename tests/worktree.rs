@@ -23,13 +23,23 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// A daemon, and a repo `work` on main whose origin `remote.git` is one commit ahead of what
 /// `work` last fetched.
 fn setup(name: &str, prefix: &str) -> (Daemon, PathBuf) {
+    setup_with(name, prefix, |_| vec![])
+}
+
+/// `setup`, with what `extra` makes of the test's directory in the daemon's environment.
+fn setup_with(
+    name: &str,
+    prefix: &str,
+    extra: impl FnOnce(&Path) -> Vec<(&'static str, String)>,
+) -> (Daemon, PathBuf) {
     // Git never looks above the test's own directory: it sits inside this repository, where a
     // summon outside `work` would otherwise make a worktree.
     let dir = fresh(&format!("w-{name}"));
-    let env = vec![
+    let mut env = vec![
         ("GENSOKYO_FETCH_LIMIT_MS".into(), "5000".into()),
         ("GIT_CEILING_DIRECTORIES".into(), dir.display().to_string()),
     ];
+    env.extend(extra(&dir).into_iter().map(|(k, v)| (k.to_string(), v)));
     let d = Daemon::at(dir, env);
     std::fs::create_dir_all(d.dir.join("conf")).unwrap();
     std::fs::write(d.dir.join("conf/config"), format!("BRANCH_PREFIX={prefix}\n")).unwrap();
@@ -224,4 +234,222 @@ fn worktrees_go_under_the_main_checkout_and_broken_ones_are_refused() {
     git(&work, &[&args[..], &[half.to_str().unwrap()]].concat());
     let r = summon(&d, &work, json!({"worktree": {"slug": "half"}}));
     assert!(r["error"].as_str().unwrap().contains("its checkout was cut off"), "{r}");
+}
+
+/// A commit on origin's main with `files` in it, as `(path, content)`, and `links`, as
+/// `(path, target)`, pushed from a clone beside `work`: a new worktree starts from it.
+fn push_to_origin(d: &Daemon, files: &[(&str, &str)], links: &[(&str, &Path)]) {
+    let side = d.dir.join("side");
+    git(&d.dir, &["clone", "-q", "-b", "main", "remote.git", "side"]);
+    for (path, text) in files {
+        std::fs::write(side.join(path), text).unwrap();
+    }
+    for (path, to) in links {
+        std::os::unix::fs::symlink(to, side.join(path)).unwrap();
+    }
+    git(&side, &["add", "-A", "-f"]);
+    git(&side, &["commit", "-q", "-m", "tracked"]);
+    git(&side, &["push", "-q", "origin", "HEAD:main"]);
+}
+
+fn write(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A setup whose daemon runs tests/stub-cp as `cp`, logging each call to `cp.log`, in `mode`.
+fn setup_cp(name: &str, mode: &str, extra: Vec<(&'static str, String)>) -> (Daemon, PathBuf) {
+    setup_with(name, "", |dir| {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-cp");
+        std::os::unix::fs::symlink(stub, bin.join("cp")).unwrap();
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let mut env = vec![
+            ("PATH", path),
+            ("STUB_CP", mode.to_string()),
+            ("STUB_CP_LOG", dir.join("cp.log").display().to_string()),
+        ];
+        env.extend(extra);
+        env
+    })
+}
+
+/// The cp calls the stub logged that name `what`.
+fn cp_calls(d: &Daemon, what: &str) -> Vec<String> {
+    let log = std::fs::read_to_string(d.dir.join("cp.log")).unwrap_or_default();
+    log.lines().filter(|l| l.contains(what)).map(String::from).collect()
+}
+
+const IGNORE: &str = ".env\n/deps/\n/build/\n/cfg\n/.claude/settings.local.json\n";
+
+#[test]
+fn a_new_worktree_gets_the_ignored_files_worktreeinclude_names() {
+    let (d, work) = setup("include", "");
+    push_to_origin(&d, &[("cfg", "theirs"), (".gitignore", IGNORE)], &[]);
+    write(&work.join(".gitignore"), IGNORE);
+    write(
+        &work.join(".worktreeinclude"),
+        "# what a build needs\n.env\ndeps/\nnotes.txt\ncfg\n.claude/settings.local.json\n",
+    );
+    write(&work.join(".env"), "TOKEN=1");
+    write(&work.join("deps/a/b.txt"), "b");
+    write(&work.join("deps/c"), "c");
+    std::os::unix::fs::symlink("c", work.join("deps/l")).unwrap();
+    write(&work.join("build/out"), "not named");
+    write(&work.join("notes.txt"), "named, and not ignored");
+    write(&work.join("cfg"), "mine");
+    write(&work.join(".claude/settings.local.json"), "{}");
+
+    let r = summon(&d, &work, json!({"worktree": {"slug": "inc"}}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    let wt = work.join(".claude/worktrees/inc");
+    let read = |p: &str| std::fs::read_to_string(wt.join(p)).ok();
+    assert_eq!(read(".env").as_deref(), Some("TOKEN=1"));
+    assert_eq!(read("deps/a/b.txt").as_deref(), Some("b"));
+    assert_eq!(read("deps/c").as_deref(), Some("c"));
+    let link = std::fs::read_link(wt.join("deps/l")).expect("a link in a copied directory");
+    assert_eq!(link, Path::new("c"), "copied as the link it is");
+    assert_eq!(read(".claude/settings.local.json").as_deref(), Some("{}"), "named beside them");
+    assert_eq!(read("build/out"), None, "ignored, and not named");
+    assert_eq!(read("notes.txt"), None, "named, and not ignored");
+    assert_eq!(read("cfg").as_deref(), Some("theirs"), "the branch's own file stays");
+    let note = r["note"].as_str().unwrap_or_default();
+    assert!(note.contains("cfg") && note.contains("the branch has it"), "{r}");
+    assert!(git(&wt, &["status", "--porcelain"]).is_empty(), "all of it ignored there too");
+
+    // Its name again: the worktree is left as it is.
+    std::fs::remove_file(wt.join(".env")).unwrap();
+    let again = summon(&d, &work, json!({"worktree": {"slug": "inc"}}));
+    assert!(again["note"].as_str().unwrap().starts_with("reused "), "{again}");
+    assert_eq!(read(".env"), None);
+}
+
+#[test]
+fn without_a_worktreeinclude_nothing_is_copied() {
+    let (d, work) = setup("noinclude", "");
+    write(&work.join(".gitignore"), ".env\n");
+    write(&work.join(".env"), "TOKEN=1");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "plain"}}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    assert_eq!(r.get("note"), None, "{r}");
+    assert!(!work.join(".claude/worktrees/plain/.env").exists());
+}
+
+#[test]
+fn what_the_new_branch_does_not_ignore_is_not_copied() {
+    let (d, work) = setup("unignored", "");
+    // The checkout ignores both; the branch only one, so the other would be there to commit.
+    push_to_origin(&d, &[(".gitignore", "/deps/\n")], &[]);
+    write(&work.join(".gitignore"), ".env\n/deps/\n");
+    write(&work.join(".worktreeinclude"), ".env\ndeps/\n");
+    write(&work.join(".env"), "TOKEN=1");
+    write(&work.join("deps/a"), "a");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "u"}}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    let wt = work.join(".claude/worktrees/u");
+    assert!(!wt.join(".env").exists());
+    assert!(wt.join("deps/a").exists());
+    let note = r["note"].as_str().unwrap_or_default();
+    assert!(note.contains(".env not copied: the branch does not ignore it"), "{r}");
+}
+
+#[test]
+fn what_worktreeinclude_names_never_leaves_the_checkout() {
+    let (d, work) = setup("hostile", "");
+    let outside = d.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let ignore = "/a/\n/lnk\n-rf\n/.claude/\n";
+    // The new branch has `a` as a link out; the main checkout has a real, ignored `a/`.
+    push_to_origin(&d, &[(".gitignore", ignore)], &[("a", &outside)]);
+    write(&work.join(".gitignore"), ignore);
+    write(&work.join("a/b/f"), "through the link");
+    write(&work.join("a/other"), "not named");
+    write(&work.join("-rf"), "a file, not an option");
+    std::os::unix::fs::symlink(&outside, work.join("lnk")).unwrap();
+    write(&work.join(".claude/settings.local.json"), "{}");
+    write(
+        &work.join(".worktreeinclude"),
+        "a/b/\nlnk\n-rf\n../outside\n/etc/\n.claude/\n--exclude-standard\n",
+    );
+
+    let r = summon(&d, &work, json!({"worktree": {"slug": "h"}}));
+    assert_eq!(r["t"], "summoned", "{r}");
+    let wt = work.join(".claude/worktrees/h");
+    assert_eq!(std::fs::read_to_string(wt.join("-rf")).unwrap(), "a file, not an option");
+    assert!(wt.join("lnk").symlink_metadata().is_err(), "a link is not copied");
+    // Nothing went out through the branch's link, nor did the worktrees copy themselves in.
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    assert!(!wt.join(".claude").exists());
+    let note = r["note"].as_str().unwrap_or_default();
+    assert!(note.contains("a/b not copied: a is a link there"), "{r}");
+    assert!(note.contains("lnk not copied: it is a link"), "{r}");
+    // `.claude/` holds the worktrees: left out, settings and all, and the note says so.
+    assert!(note.contains(".claude not copied: it holds worktrees"), "{r}");
+}
+
+#[test]
+fn a_copy_that_fails_leaves_nothing_of_itself_and_a_note() {
+    let (d, work) = setup_cp("failed", "", vec![]);
+    let ignore = "/mods/\n/fine\n";
+    push_to_origin(&d, &[(".gitignore", ignore)], &[]);
+    write(&work.join(".gitignore"), ignore);
+    write(&work.join(".worktreeinclude"), "mods/\nfine\n");
+    write(&work.join("fine"), "readable");
+    // A module cache: read-only directories, as cp -p keeps them, and one file it cannot read.
+    write(&work.join("mods/ok"), "ok");
+    write(&work.join("mods/ro/r"), "r");
+    write(&work.join("mods/secret"), "unreadable");
+    mode(&work.join("mods/ro"), 0o555);
+    mode(&work.join("mods/secret"), 0o000);
+    let r = summon(&d, &work, json!({"worktree": {"slug": "f"}}));
+    mode(&work.join("mods/ro"), 0o755);
+    mode(&work.join("mods/secret"), 0o644);
+    assert_eq!(r["t"], "summoned", "{r}");
+    let wt = work.join(".claude/worktrees/f");
+    assert_eq!(std::fs::read_to_string(wt.join("fine")).unwrap(), "readable");
+    assert!(!wt.join("mods").exists(), "what it copied is gone again");
+    let note = r["note"].as_str().unwrap_or_default();
+    assert!(note.contains("mods not copied (cp: ") && note.contains("Permission denied"), "{r}");
+    // A failure that is not the option's is not tried again, and the source never passes
+    // for an option.
+    let calls = cp_calls(&d, "mods");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(calls[0].starts_with("-c ") && calls[0].contains(" -- mods "), "{calls:?}");
+}
+
+#[test]
+fn a_cp_without_clones_copies() {
+    let (d, work) = setup_cp("noclone", "noclone", vec![]);
+    push_to_origin(&d, &[(".gitignore", "/deps/\n")], &[]);
+    write(&work.join(".gitignore"), "/deps/\n");
+    write(&work.join(".worktreeinclude"), "deps/\n");
+    write(&work.join("deps/a"), "a");
+    let r = summon(&d, &work, json!({"worktree": {"slug": "n"}}));
+    assert_eq!(r.get("note"), None, "{r}");
+    let wt = work.join(".claude/worktrees/n");
+    assert_eq!(std::fs::read_to_string(wt.join("deps/a")).unwrap(), "a");
+    assert_eq!(cp_calls(&d, "deps").len(), 2, "with -c, then without");
+}
+
+#[test]
+fn a_copy_that_takes_too_long_is_stopped_and_cleared() {
+    let limit = vec![("GENSOKYO_COPY_LIMIT_MS", "1000".to_string())];
+    let (d, work) = setup_cp("slow", "slow", limit);
+    push_to_origin(&d, &[(".gitignore", "/deps/\n")], &[]);
+    write(&work.join(".gitignore"), "/deps/\n");
+    write(&work.join(".worktreeinclude"), "deps/\n");
+    write(&work.join("deps/ro/a"), "a");
+    mode(&work.join("deps/ro"), 0o555);
+    let r = summon(&d, &work, json!({"worktree": {"slug": "s"}}));
+    mode(&work.join("deps/ro"), 0o755);
+    assert_eq!(r["t"], "summoned", "{r}");
+    assert!(!work.join(".claude/worktrees/s/deps").exists(), "the copy it made is gone");
+    let note = r["note"].as_str().unwrap_or_default();
+    assert!(note.contains("deps not copied (cp took over 1s)"), "{r}");
 }

@@ -67,7 +67,8 @@ It takes no `--allowed-tools`, and needs a directory Codex trusts, as Claude Cod
 `gensokyo new <repo dir> --worktree <name> --name <helper>` makes (or reuses)
 `.claude/worktrees/<name>` and summons the helper there. Its branch is `--branch <b>`, or the
 config's `BRANCH_PREFIX` plus `<name>`; a branch that exists already is checked out as it is, and
-a new one starts from the freshly fetched default branch (`--base <ref>` for another). A reused
+a new one starts from the freshly fetched default branch (`--base <ref>` for another), with the
+ignored files the repository's `.worktreeinclude` names copied in from the main checkout. A reused
 worktree keeps its own branch. Pass `--branch`, so you know the branch to tell the helper. A
 reviewer of a helper's uncommitted work goes in that helper's worktree, by the same name. Don't make worktrees by hand, and don't remove them: that is the user's.
 

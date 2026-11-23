@@ -1,0 +1,14 @@
+#!/bin/bash
+# cp for the worktree tests: each call is logged to $STUB_CP_LOG. With STUB_CP=noclone it refuses
+# -c as GNU cp does, in French unless LC_ALL=C; with STUB_CP=slow it copies, then hangs.
+[ -n "${STUB_CP_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_CP_LOG"
+case "${STUB_CP:-}" in
+  noclone)
+    if [ "$1" = -c ]; then
+      # GNU's words, in English only where the locale asks for it.
+      [ "${LC_ALL:-}" = C ] && echo "cp: invalid option -- 'c'" >&2 || echo "cp: option non valide -- 'c'" >&2
+      exit 1
+    fi ;;
+  slow) /bin/cp "$@"; exec sleep 30 ;;
+esac
+exec /bin/cp "$@"

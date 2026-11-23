@@ -609,7 +609,12 @@ where Claude Code keeps its own, on branch `<name>` (with
 `BRANCH_PREFIX` from the config in front, or `--branch`). An existing worktree of that name is
 reused. A branch only the remote has is checked out tracking it, to review a pull request (a
 single-branch clone gets it added to `origin`'s fetched branches); a new
-one starts from the remote's default branch, fetched first, or `--base`. Started from a
+one starts from the remote's default branch, fetched first, or `--base`. A new worktree gets
+the files git ignores that a `.worktreeinclude` at the repository's top names (`.gitignore`'s
+syntax, the file Claude Code reads for its own worktrees), cloned on APFS from the main checkout: a
+vendored dependency, an `.env`. Nothing is copied that the new branch does not ignore too, over
+what it has, through a link, or into a reused worktree, and what was left out is in the summon's
+note. Started from a
 subdirectory of the repository, the resident works in the same one inside the worktree. A
 branch checked out elsewhere is refused, and so is a worktree whose directory is gone or whose
 checkout was cut off, with the git command that clears it. The summon dialog asks for a worktree after the role

@@ -9,6 +9,7 @@
 use crate::frontmatter::{NAME_RULE, name_ok};
 use crate::paths::short;
 use crate::proto::WorktreeAsk;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -17,6 +18,8 @@ use std::time::Duration;
 const NET: Duration = Duration::from_secs(30);
 /// Anything else, a checkout included.
 const LOCAL: Duration = Duration::from_secs(300);
+/// How long one killed for taking too long is waited for.
+const KILLED: Duration = Duration::from_secs(5);
 
 /// Where it is, and what the user should know about how it came to be.
 pub(super) struct Made {
@@ -35,23 +38,82 @@ impl Made {
     }
 }
 
+/// `cmd` run to its end within `limit`, as `what`: its stdout, else its stderr's first line.
+async fn run(cmd: tokio::process::Command, what: &str, limit: Duration) -> Result<Vec<u8>, String> {
+    run_in(cmd, what, limit, &[], &[0]).await
+}
+
+/// `run`, with `input` on its stdin, and any exit code in `ok` taken for success. One that
+/// takes too long is killed, and waited for: what it wrote is all there is once this returns.
+async fn run_in(
+    mut cmd: tokio::process::Command,
+    what: &str,
+    limit: Duration,
+    input: &[u8],
+    ok: &[i32],
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncWriteExt;
+    let stdin = if input.is_empty() { Stdio::null() } else { Stdio::piped() };
+    cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| format!("{what} could not run: {e}"))?;
+    let (sin, sout, serr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let talk = async {
+        let feed = async move {
+            if let Some(mut sin) = sin {
+                let _ = sin.write_all(input).await;
+            }
+        };
+        let ((), out, err) = tokio::join!(feed, drain(sout), drain(serr));
+        (out, err, child.wait().await)
+    };
+    let done = tokio::time::timeout(limit, talk).await;
+    let (out, err, status) = match done {
+        Ok((out, err, status)) => {
+            (out, err, status.map_err(|e| format!("{what} could not run: {e}"))?)
+        }
+        Err(_) => {
+            // Not forever: one stuck in a read the kill cannot cut short is left to it.
+            let _ = child.start_kill();
+            let late = format!("{what} took over {}s", limit.as_secs());
+            return match tokio::time::timeout(KILLED, child.wait()).await {
+                Ok(_) => Err(late),
+                Err(_) => {
+                    Err(format!("{late}, and had not stopped {}s after a kill", KILLED.as_secs()))
+                }
+            };
+        }
+    };
+    if status.code().is_some_and(|c| ok.contains(&c)) {
+        return Ok(out);
+    }
+    let err = String::from_utf8_lossy(&err);
+    let line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("it failed");
+    Err(crate::tele::clean(line, 200))
+}
+
+/// All `pipe` gives until it closes.
+async fn drain(pipe: Option<impl tokio::io::AsyncRead + Unpin>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut buf).await;
+    }
+    buf
+}
+
 /// `git -C dir args`: whether it worked, and its stdout, else its stderr's first line.
 async fn git(dir: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
+    let out = git_raw(dir, args, limit).await?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// `git` with its stdout as it is, for paths: `-z` output, which a trim would cut.
+async fn git_raw(dir: &Path, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
     // A fetch never asks for a password: there is nobody at this terminal.
-    cmd.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).kill_on_drop(true);
-    let out = tokio::time::timeout(limit, cmd.output()).await;
-    let out = out.map_err(|_| format!("git {} took over {}s", args[0], limit.as_secs()))?;
-    let out = out.map_err(|e| format!("git could not run: {e}"))?;
-    match out.status.success() {
-        true => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
-        false => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            let line = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("it failed");
-            Err(crate::tele::clean(line, 200))
-        }
-    }
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    run(cmd, &format!("git {}", args[0]), limit).await
 }
 
 fn net() -> Duration {
@@ -175,56 +237,70 @@ pub(super) async fn make(dir: &Path, ask: &WorktreeAsk, prefix: &str) -> Result<
         ));
     }
     exclude(&top, &common, slug).await;
+    let note = add(&top, &path, &branch, ask.base.as_deref()).await?;
+    let trees: Vec<&Path> = all.iter().map(|t| t.path.as_path()).chain([path.as_path()]).collect();
+    let copied = include(&top, &path, &trees).await;
+    let note: Vec<String> = note.into_iter().chain(copied).collect();
+    Ok(Made::at(&path, &here, dir, (!note.is_empty()).then(|| note.join("; "))))
+}
+
+/// The worktree at `path`, made on `branch`: one there is, one origin has, or a new one from
+/// `base`. What the user should know about how.
+async fn add(
+    top: &Path,
+    path: &Path,
+    branch: &str,
+    base: Option<&str>,
+) -> Result<Option<String>, String> {
     let p = path.to_string_lossy().into_owned();
     let mut note = None;
     let refname = format!("refs/heads/{branch}");
-    if git(&top, &["rev-parse", "--verify", "--quiet", &refname], LOCAL).await.is_ok() {
-        git(&top, &["worktree", "add", "-q", &p, &branch], LOCAL).await?;
-        return Ok(Made::at(&path, &here, dir, note));
+    if git(top, &["rev-parse", "--verify", "--quiet", &refname], LOCAL).await.is_ok() {
+        git(top, &["worktree", "add", "-q", &p, branch], LOCAL).await?;
+        return Ok(note);
     }
-    let origin = git(&top, &["remote", "get-url", "origin"], LOCAL).await.is_ok();
+    let origin = git(top, &["remote", "get-url", "origin"], LOCAL).await.is_ok();
     // Out of reach, it is not asked again: the base is the last fetched, and the note says so.
     let mut unreachable = None;
     // One the remote has: a branch to review, or to carry on.
     if origin {
-        match git(&top, &["ls-remote", "--heads", "origin", &refname], net()).await {
+        match git(top, &["ls-remote", "--heads", "origin", &refname], net()).await {
             Ok(heads) if !heads.is_empty() => {
-                fetch(&top, &branch).await?;
+                fetch(top, branch).await?;
                 let theirs = format!("origin/{branch}");
-                let args = ["worktree", "add", "-q", "--track", "-b", &branch, &p, &theirs];
-                if git(&top, &args, LOCAL).await.is_err() {
+                let args = ["worktree", "add", "-q", "--track", "-b", branch, &p, &theirs];
+                if git(top, &args, LOCAL).await.is_err() {
                     // A clone that fetches only some branches (single-branch) cannot track
                     // one outside them, until origin's refspec names it too.
-                    let add = ["remote", "set-branches", "--add", "origin", &branch];
-                    git(&top, &add, LOCAL).await?;
-                    git(&top, &args, LOCAL).await?;
+                    let add = ["remote", "set-branches", "--add", "origin", branch];
+                    git(top, &add, LOCAL).await?;
+                    git(top, &args, LOCAL).await?;
                 }
-                return Ok(Made::at(&path, &here, dir, note));
+                return Ok(note);
             }
             Ok(_) => {}
             Err(e) => unreachable = Some(e),
         }
     }
-    let base = match &ask.base {
+    let base = match base {
         Some(b) => {
             let commit = format!("{b}^{{commit}}");
             let args = ["rev-parse", "--verify", "--quiet", "--end-of-options", &commit];
-            git(&top, &args, LOCAL).await.map_err(|_| format!("--base {b}: no such commit"))?
+            git(top, &args, LOCAL).await.map_err(|_| format!("--base {b}: no such commit"))?
         }
         None if origin => {
             let head =
-                git(&top, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], LOCAL).await;
+                git(top, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], LOCAL).await;
             match head {
                 Ok(h) => {
                     // Named by the remote: checked as any branch name is.
                     let name = h.strip_prefix("origin/").unwrap_or(&h).to_string();
-                    branch_ok(&top, &name).await.map_err(|e| format!("origin's default: {e}"))?;
+                    branch_ok(top, &name).await.map_err(|e| format!("origin's default: {e}"))?;
                     let failed = match unreachable {
                         Some(e) => Some(format!("origin could not be reached ({e})")),
-                        None => fetch(&top, &name)
-                            .await
-                            .err()
-                            .map(|e| format!("the fetch failed ({e})")),
+                        None => {
+                            fetch(top, &name).await.err().map(|e| format!("the fetch failed ({e})"))
+                        }
                     };
                     if let Some(why) = failed {
                         note = Some(format!("started from {h} as last fetched: {why}"));
@@ -242,8 +318,8 @@ pub(super) async fn make(dir: &Path, ask: &WorktreeAsk, prefix: &str) -> Result<
             "HEAD".into()
         }
     };
-    git(&top, &["worktree", "add", "-q", "--no-track", "-b", &branch, &p, &base], LOCAL).await?;
-    Ok(Made::at(&path, &here, dir, note))
+    git(top, &["worktree", "add", "-q", "--no-track", "-b", branch, &p, &base], LOCAL).await?;
+    Ok(note)
 }
 
 /// The GitHub repository a cloud session started in `dir` would clone, `owner/name`, from
@@ -364,4 +440,238 @@ async fn exclude(top: &Path, common: &Path, slug: &str) {
     }
     text.push_str("/.claude/worktrees/\n");
     let _ = std::fs::write(&file, text);
+}
+
+/// What `.worktreeinclude` at the main checkout's top names, copied from there into the new
+/// worktree `wt`, as Claude Code does for its own: the files git ignores that its patterns
+/// (`.gitignore`'s syntax) match, so a tracked file is never copied. Git does the matching, and
+/// the patterns reach it only as a file it reads. Nothing is copied that the new branch does
+/// not ignore too, over what it has, through a link, or that is, holds or lies in a worktree
+/// (`trees`). A clone where the disk can make one, a copy where not. What was left out, for
+/// the user.
+async fn include(top: &Path, wt: &Path, trees: &[&Path]) -> Option<String> {
+    if !top.join(".worktreeinclude").is_file() {
+        return None;
+    }
+    let list = ["ls-files", "-z", "--others", "--ignored", "--directory"];
+    // Relative, as git runs in `top`.
+    let from = [&list[..], &["--exclude-from=.worktreeinclude"]].concat();
+    let ignored = git_raw(top, &[&list[..], &["--exclude-standard"]].concat(), LOCAL).await;
+    let named = git_raw(top, &from, LOCAL).await;
+    let (ignored, named) = match (ignored, named) {
+        (Ok(i), Ok(n)) => (i, n),
+        (Err(e), _) | (_, Err(e)) => return Some(format!(".worktreeinclude was not read: {e}")),
+    };
+    let split = |b: &[u8]| -> Vec<Vec<u8>> {
+        b.split(|c| *c == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect()
+    };
+    let trees: Vec<Vec<u8>> = trees
+        .iter()
+        .filter_map(|t| t.strip_prefix(top).ok())
+        .filter(|t| !t.as_os_str().is_empty())
+        .map(|t| [t.as_os_str().as_bytes(), b"/"].concat())
+        .collect();
+    let (picked, held) = copies(&split(&named), &split(&ignored), &trees);
+    let mut left: Vec<String> = held
+        .iter()
+        .map(|h| format!("{} not copied: it holds worktrees", plain(h).display()))
+        .collect();
+    let mut sure = Vec::new();
+    for rel in &picked {
+        let rel = plain(rel);
+        match vet(top, wt, &rel) {
+            Ok(dir) => sure.push((rel, dir)),
+            Err(why) => left.push(format!("{} {why}", rel.display())),
+        }
+    }
+    // What the new branch ignores, asked of it: what it does not would be there to commit.
+    let ask: Vec<u8> = sure
+        .iter()
+        .flat_map(|(rel, dir)| {
+            let slash: &[u8] = if *dir { b"/" } else { b"" };
+            [rel.as_os_str().as_bytes(), slash, b"\0"].concat()
+        })
+        .collect();
+    let theirs = if ask.is_empty() {
+        Ok(Vec::new())
+    } else {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.arg("-C").arg(wt).args(["check-ignore", "--stdin", "-z"]);
+        run_in(cmd, "git check-ignore", LOCAL, &ask, &[0, 1]).await
+    };
+    let theirs = match theirs {
+        Ok(t) => split(&t),
+        Err(e) => return Some(format!(".worktreeinclude: the new branch's ignores unknown: {e}")),
+    };
+    for (rel, dir) in sure {
+        let asked = [rel.as_os_str().as_bytes(), if dir { b"/" } else { b"" }].concat();
+        let why = match theirs.contains(&asked) {
+            true => copy(top, wt, &rel).await,
+            false => Err("not copied: the branch does not ignore it".into()),
+        };
+        if let Err(why) = why {
+            left.push(format!("{} {why}", rel.display()));
+        }
+    }
+    (!left.is_empty()).then(|| format!(".worktreeinclude: {}", left.join(", ")))
+}
+
+/// A path from git, relative, without the `/` a directory ends in.
+fn plain(p: &[u8]) -> PathBuf {
+    Path::new(std::ffi::OsStr::from_bytes(p)).components().collect()
+}
+
+/// `a` is `b`, or inside it: `ls-files --directory` ends a directory's name with `/`.
+fn within(a: &[u8], b: &[u8]) -> bool {
+    a == b || (b.ends_with(b"/") && a.starts_with(b))
+}
+
+/// What to copy, from two `ls-files --others --ignored --directory` lists of one checkout:
+/// `named` by `.worktreeinclude`'s patterns, `ignored` by git's own. Each lists a directory
+/// whole when all in it matches, so the entries of one inside an entry of the other are what
+/// both hold. Never what is or lies in one of `trees`, and nothing inside another; what holds
+/// one of them comes second, to say it was left out.
+fn copies(
+    named: &[Vec<u8>],
+    ignored: &[Vec<u8>],
+    trees: &[Vec<u8>],
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let mut v: Vec<Vec<u8>> = Vec::new();
+    for n in named {
+        if ignored.iter().any(|i| within(n, i)) {
+            v.push(n.clone());
+        } else {
+            v.extend(ignored.iter().filter(|i| within(i, n)).cloned());
+        }
+    }
+    v.retain(|p| !trees.iter().any(|t| within(p, t)));
+    let (mut held, mut v): (Vec<_>, Vec<_>) =
+        v.into_iter().partition(|p| trees.iter().any(|t| within(t, p)));
+    for l in [&mut v, &mut held] {
+        l.sort();
+        l.dedup();
+        let all = l.clone();
+        l.retain(|p| !all.iter().any(|o| o != p && within(p, o)));
+    }
+    (v, held)
+}
+
+/// Whether `rel` may go from the checkout at `top` into the worktree `wt`: a plain path, not a
+/// link, nothing there yet, and only real directories on the way. Whether it is a directory.
+fn vet(top: &Path, wt: &Path, rel: &Path) -> Result<bool, String> {
+    use std::path::Component;
+    let parts: Vec<_> = rel.components().collect();
+    if parts.is_empty() || parts.iter().any(|c| !matches!(c, Component::Normal(_))) {
+        return Err("not copied: not a path inside the checkout".into());
+    }
+    let meta = top.join(rel).symlink_metadata().map_err(|e| format!("not copied ({e})"))?;
+    if meta.file_type().is_symlink() {
+        return Err("not copied: it is a link".into());
+    }
+    // Never through a directory the branch has as a link, which could point anywhere.
+    let mut at = wt.to_path_buf();
+    for part in &parts[..parts.len() - 1] {
+        at.push(part);
+        match at.symlink_metadata() {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(format!("not copied: {} is a link there", part_of(wt, &at)));
+            }
+            Ok(m) if !m.is_dir() => {
+                return Err(format!("not copied: {} is a file there", part_of(wt, &at)));
+            }
+            Ok(_) => {}
+            Err(_) => return Ok(meta.is_dir()),
+        }
+    }
+    match wt.join(rel).symlink_metadata() {
+        Ok(_) => Err("left as the branch has it".into()),
+        Err(_) => Ok(meta.is_dir()),
+    }
+}
+
+/// `rel`, vetted, from the checkout at `top` into the worktree `wt`. What a failed copy made is
+/// removed again.
+async fn copy(top: &Path, wt: &Path, rel: &Path) -> Result<(), String> {
+    // The directories on the way the branch lacks, one at a time: those it has are real ones.
+    let mut at = wt.to_path_buf();
+    for part in rel.parent().into_iter().flat_map(Path::components) {
+        at.push(part);
+        if at.symlink_metadata().is_err() {
+            std::fs::create_dir(&at).map_err(|e| format!("not copied ({e})"))?;
+        }
+    }
+    let dst = wt.join(rel);
+    let cp = |clone: bool| {
+        let mut cmd = tokio::process::Command::new("cp");
+        // `-c` clones on APFS, and copies where it cannot. Run in the checkout, so the source
+        // is `rel` itself, and `--` keeps one that starts with a `-` a path.
+        cmd.args(if clone { &["-c", "-R", "-P", "-p"][..] } else { &["-R", "-P", "-p"][..] });
+        cmd.arg("--").arg(rel).arg(&dst).current_dir(top);
+        // Its messages in English, which is what says that `-c` is no option of its.
+        cmd.env("LC_ALL", "C");
+        run(cmd, "cp", copy_limit())
+    };
+    let mut done = cp(true).await;
+    // A cp that has no `-c` (GNU's) says so before it copies anything.
+    if done.as_ref().is_err_and(|e| e.contains("invalid option") || e.contains("illegal option")) {
+        done = cp(false).await;
+    }
+    let Err(e) = done else { return Ok(()) };
+    let gone = dst.clone();
+    let cleared = tokio::task::spawn_blocking(move || clear(&gone)).await;
+    match cleared {
+        Ok(Ok(())) => Err(format!("not copied ({e})")),
+        Ok(Err(c)) => Err(format!("not copied ({e}), and what was copied is still there ({c})")),
+        Err(c) => Err(format!("not copied ({e}), and what was copied is still there ({c})")),
+    }
+}
+
+fn copy_limit() -> Duration {
+    let ms = std::env::var("GENSOKYO_COPY_LIMIT_MS").ok().and_then(|v| v.parse().ok());
+    ms.map_or(LOCAL, Duration::from_millis)
+}
+
+/// `p` and all in it removed, nothing followed through a link: directories made writable first,
+/// as `cp -p` keeps a read-only one read-only. Nothing there is nothing to do.
+fn clear(p: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = p.symlink_metadata() else { return Ok(()) };
+    if !meta.is_dir() {
+        return std::fs::remove_file(p);
+    }
+    let mode = meta.permissions().mode() | 0o700;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))?;
+    for e in std::fs::read_dir(p)? {
+        clear(&e?.path())?;
+    }
+    std::fs::remove_dir(p)
+}
+
+/// `p` inside the worktree `wt`, as the user would name it.
+fn part_of(wt: &Path, p: &Path) -> String {
+    p.strip_prefix(wt).unwrap_or(p).display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copies;
+
+    fn list(v: &[&str]) -> Vec<Vec<u8>> {
+        v.iter().map(|s| s.as_bytes().to_vec()).collect()
+    }
+
+    #[test]
+    fn copies_are_what_both_lists_hold_and_never_a_worktree() {
+        let ignored = list(&["vendor/", ".env", "target/", ".claude/", "big/a/"]);
+        let named = list(&["vendor/x/", ".env", "notes.txt", "big/", ".claude/", "big/a/f"]);
+        let trees = list(&[".claude/worktrees/new/"]);
+        let (got, held) = copies(&named, &ignored, &trees);
+        // Named inside an ignored directory, or an ignored one inside a named one; what is not
+        // ignored, holds a worktree, or lies in a copied directory is left out.
+        assert_eq!(got, list(&[".env", "big/a/", "vendor/x/"]));
+        assert_eq!(held, list(&[".claude/"]), "said to be left out");
+        assert_eq!(copies(&list(&["a/"]), &list(&["a/b/", "a/c"]), &[]).0.len(), 2);
+        let (got, held) = copies(&list(&["x/", "x/y/z"]), &list(&["x/"]), &list(&["x/y/"]));
+        assert!(got.is_empty() && held == list(&["x/"]), "{got:?} {held:?}");
+    }
 }

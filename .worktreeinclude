@@ -1,0 +1,3 @@
+# What git ignores and a new worktree needs to build, copied in from the main checkout when
+# gensokyo or Claude Code makes one. .gitignore's syntax. scripts/ghostty.sh fetches vendor/.
+/vendor/

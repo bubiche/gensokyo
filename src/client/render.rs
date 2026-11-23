@@ -598,11 +598,9 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     };
     // Each one's branch and tags on a dim row below it, while every row fits.
     let has_row = |r: &Resident| shown_branch(r, &m.prefix).is_some() || !r.tags.is_empty();
-    // The model on a dim row, in what the row has left of the context's column: beside a branch
-    // or tags, never more than half of it, so they keep the rest.
-    let model_under = |r: &Resident, pad: usize, shared: bool| {
-        let left = w.saturating_sub(pad + CTX);
-        let most = mw.min(if shared { left / 2 } else { left });
+    // The model on a dim row, in what the row has left of the context's column.
+    let model_under = |r: &Resident, pad: usize| {
+        let most = mw.min(w.saturating_sub(pad + CTX));
         model(r).filter(|_| most > 0).map(|s| cut(&s, most))
     };
     let on = |(i, _): &(usize, bool)| Some(&m.residents[*i].id) == m.focused.as_ref();
@@ -625,12 +623,12 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
             true => whole_row(r, &m.prefix, room),
             false => Vec::new(),
         };
-        if let Some(s) = model_under(r, pad, true).filter(|_| !beside) {
+        if let Some(s) = model_under(r, pad).filter(|_| !beside) {
             match dim.last_mut() {
                 Some(l) if width(l) as usize + 1 + width(&s) as usize + CTX <= room => {
                     *l = with_model(l, &s, room)
                 }
-                _ => dim.push(with_model("", &model_under(r, pad, false).unwrap_or(s), room)),
+                _ => dim.push(with_model("", &s, room)),
             }
         }
         (i, name, dim, beside)
@@ -704,15 +702,17 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
         buf.set_style(line, style);
         let lead = lead(i, helper);
         let pad = width(&lead) as usize;
-        // A dim row's model at its right, its branch and tags cut to leave room for it.
+        // A dim row's model at its right, whole while its branch and tags can give it room:
+        // they are cut first, down to a few columns, and only then the model.
         let (name, dim, beside) = match whole.as_ref().filter(|wh| grow && wh.0 == i) {
             Some((_, n, d, b)) => (n.clone(), d.clone(), *b),
             None if two && has_row(r) => {
                 let room = w.saturating_sub(pad);
-                let row = match model_under(r, pad, true) {
+                let both = room.saturating_sub(1 + CTX);
+                let row = match model_under(r, pad).filter(|_| both > FEW) {
                     Some(s) => {
-                        let rest = room.saturating_sub(width(&s) as usize + 1 + CTX);
-                        with_model(&branch_row(r, &m.prefix, rest), &s, room)
+                        let rest = both.saturating_sub(width(&s) as usize).max(FEW);
+                        with_model(&branch_row(r, &m.prefix, rest), &cut(&s, both - rest), room)
                     }
                     None => branch_row(r, &m.prefix, room),
                 };
@@ -770,6 +770,10 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
 
 /// The columns a context takes at a name row's right, ` 100%`.
 const CTX: usize = 5;
+
+/// The columns a branch and tags keep beside a model on a dim row before the model is cut:
+/// `⎇` and a few letters.
+const FEW: usize = 6;
 
 /// A dim row's `text` in `room` columns, and `model` at its right, ending where a model beside a
 /// name does so the two line up: before the context's column.

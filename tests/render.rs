@@ -1371,6 +1371,51 @@ fn the_model_never_reads_as_part_of_a_wrapped_name() {
     }
 }
 
+/// The README's shrine with Marisa on screen: Reimu on a long branch with a tag, Cirno on Codex,
+/// each with its model on its dim row.
+fn readme_models() -> Model {
+    let mut m = shrine();
+    m.focused = Some("id-Marisa".into());
+    let t = |model: &str, ctx| Telemetry {
+        model: Some(model.into()),
+        ctx: Some(ctx),
+        at: NOW,
+        ..Telemetry::default()
+    };
+    let cirno = &mut m.residents[2];
+    (cirno.state, cirno.departed) = (State::Resting, None);
+    cirno.agent = gensokyo::proto::Agent::Codex;
+    let models = [("Sonnet 5.5", 5), ("Haiku 5.5", 5), ("gpt-5.6-sol", 2)];
+    let b = ["reimu/sidebar-draws-the-one-on-screen-whole", "main", "main"];
+    for ((r, (model, ctx)), b) in m.residents.iter_mut().zip(models).zip(b) {
+        r.telemetry = Some(t(model, ctx));
+        r.branch = Some(b.into());
+    }
+    m.residents[0].tags = vec![("pr".into(), "#42".into())];
+    m
+}
+
+#[test]
+fn a_model_under_a_name_keeps_its_name_while_the_branch_has_room_to_give() {
+    let m = readme_models();
+    let text = sidebar_text(&m, 24);
+    let rows: Vec<&str> = text.lines().collect();
+    let row = |slot: &str| rows.iter().position(|r| r.starts_with(slot)).expect(slot) + 1;
+    // Both fit: neither is cut, and the model ends where one beside a name would.
+    assert_eq!(rows[row("│3 ")], "│    ⎇ main    gpt-5.6-sol     │", "{text}");
+    assert_eq!(rows[row("│2 ")], "│    ⎇ main      haiku-5.5     │", "{text}");
+    // They don't: the branch gives way, keeping all the room the whole model leaves it.
+    assert_eq!(rows[row("│1 ")], "│    ⎇ r…le pr… sonnet-5.5     │", "{text}");
+    insta::assert_snapshot!("sidebar-model-readme", text);
+    // A model that would leave the branch less than a few columns gives way itself.
+    let mut wide = m.clone();
+    wide.residents[2].telemetry.as_mut().unwrap().model = Some("gpt-5.1-codex-max-high".into());
+    let text = sidebar_text(&wide, 24);
+    let rows: Vec<&str> = text.lines().collect();
+    assert_eq!(rows[row("│3 ")], "│    ⎇ main gpt-5.1-codex…     │", "{text}");
+    insta::assert_snapshot!("sidebar-model-readme-wide", text);
+}
+
 #[test]
 fn a_model_on_a_row_of_its_own_is_counted_so_nobody_goes_missing() {
     let mut codex = shrine();

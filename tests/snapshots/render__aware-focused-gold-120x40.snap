@@ -3,8 +3,8 @@ source: tests/render.rs
 expression: t.backend()
 ---
 "┌ gensokyo ────────────────────┐┌ 2 Marisa · ~/dev/scratch_repo · Opus 5.5→⚖ Opus · high · ⚡91% · $0.42 ──────────────┐" Hidden by multi-width symbols: [(92, " ")]
-"│1 ● Reimu       haiku-4.5  12%││line 00                                                                               │"
-"│    ⎇ main                    ││line 01     ~                                                                         │"
+"│1 ● Reimu                  12%││line 00                                                                               │"
+"│    ⎇ main      haiku-4.5     ││line 01     ~                                                                         │"
 "│2 ✦ Marisa       opus-5.5   8%││line 02     ~~                                                                        │"
 "│3 · Cirno                     ││line 03     ~~~                                                                       │"
 "│4 ✧ Sakuya                    ││line 04     ~~~~                                                                      │"

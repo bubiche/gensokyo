@@ -3,8 +3,8 @@ source: tests/render.rs
 expression: t.backend()
 ---
 "┌ gensokyo ────────────────────┐┌ 1 Reimu · ~/dev/gensokyo ⎇ main · Haiku 4.5→⚖┐"
-"│1 ● Reimu       haiku-4.5  12%││line 00                                       │"
-"│    ⎇ main                    ││line 01     ~                                 │"
+"│1 ● Reimu                  12%││line 00                                       │"
+"│    ⎇ main      haiku-4.5     ││line 01     ~                                 │"
 "│2 ✦ Marisa       opus-5.5   8%││line 02     ~~                                │"
 "│3 · Cirno                     ││line 03     ~~~                               │"
 "│4 ✧ Sakuya                    ││line 04     ~~~~                              │"

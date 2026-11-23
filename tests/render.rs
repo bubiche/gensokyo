@@ -1061,10 +1061,12 @@ fn a_model_too_long_for_the_sidebar_is_cut_and_every_lead_stays() {
     m.residents[1].agent = gensokyo::proto::Agent::Codex;
     m.residents[1].telemetry = Some(t(long, Some(7)));
     let (rows, _) = side(&m, AREA);
-    // A letter of each name, the model cut to what is left, and a gap before the context.
+    // A letter of the name, the model cut to what is left, and a gap before the context.
     assert_eq!(rows[1], "1 ○ R            opus-4.7 100%", "{rows:#?}");
-    assert_eq!(rows[2], "2 ○ M gpt-5.1-codex-max-…   7%", "{rows:#?}");
-    assert!(rows[3].starts_with("    a"), "{rows:#?}");
+    // On screen, a name with no room beside the model keeps its row, and the model, as wide as
+    // beside a name, goes on a row of its own below it.
+    assert_eq!(rows[2], "2 ○ Marisa                  7%", "{rows:#?}");
+    assert_eq!(rows[3], "      gpt-5.1-codex-max-…     ", "{rows:#?}");
     assert!(rows.iter().any(|r| r.starts_with("3 · Cirno")), "{rows:#?}");
     // Beside a helper's lead too, a column wider.
     let mut m = helpers();
@@ -1287,4 +1289,107 @@ fn a_cloud_session_is_drawn_as_a_cloud_and_departed_as_anyone() {
     m.residents[3] = Resident { departed: Some(NOW), state: State::Departed, ..aya };
     let (rows, _) = side(&m, AREA);
     assert!(rows.iter().any(|r| r.contains("4 · Aya")), "{rows:#?}");
+}
+
+/// Reimu on screen and Marisa, each on a model and with a context, Cirno departed: `name` for
+/// Reimu, and each one's branch.
+fn modelled(name: &str, branches: [Option<&str>; 2]) -> Model {
+    let mut m = shrine();
+    let t = |model: &str, ctx| Telemetry {
+        model: Some(model.into()),
+        ctx: Some(ctx),
+        at: NOW,
+        ..Telemetry::default()
+    };
+    m.residents[0].name = name.into();
+    m.residents[0].telemetry = Some(t("Sonnet 5.5", 4));
+    m.residents[1].telemetry = Some(t("Haiku 4.5", 61));
+    for (r, b) in m.residents.iter_mut().zip(branches) {
+        r.branch = b.map(String::from);
+    }
+    m
+}
+
+/// `m` with every one that runs on a model.
+fn on_models(mut m: Model) -> Model {
+    let models = ["Sonnet 5.5", "Haiku 4.5", "", "Opus 5.5", "Haiku 4.5", "Sonnet 5.5"];
+    for (r, model) in m.residents.iter_mut().zip(models).filter(|(_, m)| !m.is_empty()) {
+        let t =
+            Telemetry { model: Some(model.into()), ctx: Some(23), at: NOW, ..Default::default() };
+        r.telemetry = Some(t);
+    }
+    m
+}
+
+/// The sidebar as drawn `h` rows high, its border and all.
+fn sidebar_text(m: &Model, h: u16) -> String {
+    let (_, buf) = side(m, Rect::new(0, 0, 120, h));
+    let row = |y| (0..render::SIDEBAR_W).map(|x| buf[(x, y)].symbol()).collect::<String>();
+    (0..h).map(row).collect::<Vec<_>>().join("\n")
+}
+
+#[test]
+fn the_model_never_reads_as_part_of_a_wrapped_name() {
+    let wrapped = "Reimu Hakurei of the Hakurei Shrine";
+    let cases = [
+        ("sidebar-model-branch", modelled("Reimu", [Some("fix-ci"), Some("main")]), 24),
+        ("sidebar-model-wrapped", modelled(wrapped, [Some("fix-ci"), Some("main")]), 24),
+        ("sidebar-model-no-row", modelled(wrapped, [None, None]), 24),
+        // Every dim row but not Reimu's whole; then none; then none but Reimu's, whole.
+        ("sidebar-model-short-17", on_models(long()), 17),
+        ("sidebar-model-short-16", on_models(long()), 16),
+        ("sidebar-model-short-whole", on_models(branches()), 16),
+    ];
+    let models = ["sonnet-5.5", "haiku-4.5", "opus-5.5"];
+    let has_model = |row: &str| models.iter().any(|m| row.contains(m));
+    for (name, m, h) in cases {
+        let text = sidebar_text(&m, h);
+        insta::assert_snapshot!(name, text);
+        let rows: Vec<&str> = text.lines().collect();
+        // Each one that runs: its context at the end of its name row, its model drawn once.
+        let running = m.residents.iter().filter(|r| r.state != State::Departed);
+        for r in running {
+            let slot = format!("│{} ", r.slot.unwrap());
+            let row = rows.iter().find(|row| row.starts_with(&slot)).expect(&r.name);
+            assert!(
+                row.ends_with("23%│") || row.ends_with("4%│") || row.ends_with("61%│"),
+                "{text}"
+            );
+        }
+        let drawn = rows.iter().map(|r| models.iter().filter(|m| r.contains(*m)).count());
+        let running = m.residents.iter().filter(|r| r.state != State::Departed).count();
+        assert_eq!(drawn.sum::<usize>(), running, "{name}\n{text}");
+    }
+    // A wrapped name has no model beside or under any of its rows: it comes after them.
+    for branch in [Some("fix-ci"), None] {
+        let text = sidebar_text(&modelled(wrapped, [branch, None]), 24);
+        let rows: Vec<&str> = text.lines().collect();
+        assert!(rows[1].starts_with("│1 ○ Reimu Hakurei of the") && !has_model(rows[1]), "{text}");
+        assert!(rows[2].starts_with("│    Hakurei Shrine ") && !has_model(rows[2]), "{text}");
+        assert!(rows[3].contains("sonnet-5.5"), "{text}");
+        assert_eq!(rows[3].contains("⎇ fix-ci"), branch.is_some(), "{text}");
+    }
+}
+
+#[test]
+fn a_model_on_a_row_of_its_own_is_counted_so_nobody_goes_missing() {
+    let mut codex = shrine();
+    codex.focused = Some("id-Marisa".into());
+    codex.residents[1].agent = gensokyo::proto::Agent::Codex;
+    let long = format!("gpt-5.1-codex-max-{}", "x".repeat(22));
+    codex.residents[1].telemetry =
+        Some(Telemetry { model: Some(long), ctx: Some(7), at: NOW, ..Default::default() });
+    let wrapped = modelled("Reimu Hakurei of the Hakurei Shrine", [None, None]);
+    // At every height with room for a `more` line, each one is drawn or counted on one.
+    for m in [wrapped, codex] {
+        for h in 9..=24 {
+            let (rows, _) = side(&m, Rect::new(0, 0, 120, h));
+            let more = rows.iter().any(|r| r.contains(" more"));
+            for r in &m.residents {
+                let slot = format!("{} ", r.slot.unwrap());
+                let drawn = rows.iter().any(|row| row.starts_with(&slot));
+                assert!(drawn || more, "{} at {h}: {rows:#?}", r.name);
+            }
+        }
+    }
 }

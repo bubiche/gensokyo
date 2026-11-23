@@ -1,0 +1,28 @@
+---
+source: tests/render.rs
+expression: text
+---
+┌ gensokyo ────────────────────┐
+│1 ○ Reimu                   4%│
+│    ⎇ fix-ci   sonnet-5.5     │
+│2 ○ Marisa                 61%│
+│    ⎇ main      haiku-4.5     │
+│3 · Cirno                     │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│[summon n] [cast c] [banish b]│
+│[recall r] [timetable t]      │
+│[quit q] [?]                  │
+│[mouse: shrine m]             │
+└─────── ^] then a key ────────┘

@@ -1,0 +1,21 @@
+---
+source: tests/render.rs
+expression: text
+---
+┌ gensokyo ────────────────────┐
+│1 ○ Reimu Hakurei of the   23%│
+│  │ ⎇ pad…oard sonnet-5.5     │
+│4 ├● Youmu                 23%│
+│  │  ⎇ fix-ci    opus-5.5     │
+│5 └○ Hieda-no-Akyuu-the-N  23%│
+│     ⎇ a1b2c3d  haiku-4.5     │
+│2 ○ Marisa                 23%│
+│    ⎇ main      haiku-4.5     │
+│3 · Cirno                     │
+│6 ○ Chen       sonnet-5.5  23%│
+│                              │
+│[summon n] [cast c] [banish b]│
+│[recall r] [timetable t]      │
+│[quit q] [?]                  │
+│[mouse: shrine m]             │
+└─────── ^] then a key ────────┘

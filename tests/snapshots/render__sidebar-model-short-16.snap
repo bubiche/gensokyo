@@ -1,0 +1,20 @@
+---
+source: tests/render.rs
+expression: "sidebar_text(&m, h)"
+---
+┌ gensokyo ────────────────────┐
+│1 ○ Reimu Haku sonnet-5.5  23%│
+│4 ├● Youmu       opus-5.5  23%│
+│5 └○ Hieda-no-  haiku-4.5  23%│
+│2 ○ Marisa      haiku-4.5  23%│
+│3 · Cirno                     │
+│6 ○ Chen       sonnet-5.5  23%│
+│                              │
+│                              │
+│                              │
+│                              │
+│[summon n] [cast c] [banish b]│
+│[recall r] [timetable t]      │
+│[quit q] [?]                  │
+│[mouse: shrine m]             │
+└─────── ^] then a key ────────┘

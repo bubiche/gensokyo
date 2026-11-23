@@ -1,0 +1,28 @@
+---
+source: tests/render.rs
+expression: text
+---
+┌ gensokyo ────────────────────┐
+│1 ○ Reimu Hakurei of the    4%│
+│    Hakurei Shrine            │
+│               sonnet-5.5     │
+│2 ○ Marisa      haiku-4.5  61%│
+│3 · Cirno                     │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│                              │
+│[summon n] [cast c] [banish b]│
+│[recall r] [timetable t]      │
+│[quit q] [?]                  │
+│[mouse: shrine m]             │
+└─────── ^] then a key ────────┘

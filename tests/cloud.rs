@@ -7,7 +7,7 @@ mod common;
 use gensokyo::cloud::{self, Routine, Run};
 use serde_json::{Value, json};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn fixture(name: &str) -> String {
     let p = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
@@ -104,7 +104,7 @@ fn gate_says(args: &[String], payload: &Value) -> (Option<i32>, String) {
     let hook = &settings["hooks"]["PreToolUse"][0];
     assert_eq!(hook["matcher"], "*");
     let cmd = hook["hooks"][0]["command"].as_str().unwrap();
-    let mut c = Command::new("sh")
+    let mut c = common::command("sh")
         .args(["-c", cmd])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -168,7 +168,7 @@ fn the_courier_carries_its_gate_and_nothing_else() {
     assert_eq!(gate_says(&gone, &p(call.clone())).0, Some(2));
     assert!(args.windows(2).any(|w| w[0] == "--max-turns"));
     // Nothing it can read, and no call to allow: refused either way.
-    let bad = Command::new(common::BIN).arg("_gate").stdin(Stdio::null()).output().unwrap();
+    let bad = common::command(common::BIN).arg("_gate").stdin(Stdio::null()).output().unwrap();
     assert!(String::from_utf8_lossy(&bad.stdout).contains("\"deny\""));
 }
 

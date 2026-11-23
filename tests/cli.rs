@@ -3,12 +3,12 @@
 
 mod common;
 
-use common::{BIN, err, fresh, out, stub_env, wait};
+use common::{BIN, command, err, fresh, out, stub_env, wait};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
 
 struct Env {
@@ -28,7 +28,7 @@ impl Env {
     }
 
     fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        Command::new(BIN)
+        command(BIN)
             .args(args)
             .current_dir(&self.dir)
             .envs(stub_env(&self.dir))
@@ -36,8 +36,6 @@ impl Env {
             .env("CLAUDE_CODE_CHILD_SESSION", "1")
             .env("TERM_PROGRAM", "iTerm.app")
             .env("ITERM_SESSION_ID", "w0t0p0")
-            .env_remove("GENSOKYO_SOCKET")
-            .env_remove("GENSOKYO_RESIDENT")
             .stdin(Stdio::null())
             .output()
             .unwrap()
@@ -87,18 +85,52 @@ fn help_names_every_verb_and_each_verb_has_its_own() {
     assert!(e.untouched());
 }
 
+/// Run from inside a resident, the tests' shell names the user's own daemon and resident: none of
+/// it reaches a gensokyo a test runs, and only what the test gives it does.
+#[test]
+fn a_test_runs_gensokyo_with_none_of_its_shells_gensokyo_variables() {
+    let shell = [
+        ("GENSOKYO_SOCKET", "/live/run/gensokyo.sock"),
+        ("GENSOKYO_STATE_DIR", "/live"),
+        ("GENSOKYO_RESIDENT", "Reimu"),
+        ("GENSOKYO_SHARE", "/live/share"),
+        ("PATH", "/usr/bin:/bin"),
+    ];
+    let mut c = common::command_from(BIN, shell.map(|(k, v)| (k.into(), v.into())));
+    c.env("GENSOKYO_STATE_DIR", "/test");
+    let env: std::collections::BTreeMap<_, _> = c.get_envs().collect();
+    let want = [
+        ("GENSOKYO_RESIDENT", None),
+        ("GENSOKYO_SHARE", None),
+        ("GENSOKYO_SOCKET", None),
+        ("GENSOKYO_STATE_DIR", Some("/test")),
+    ];
+    let want = want.map(|(k, v)| (std::ffi::OsStr::new(k), v.map(std::ffi::OsStr::new)));
+    assert_eq!(env, want.into(), "{env:?}");
+}
+
+/// The tests' dirs are in /tmp, so the next run clears those of the runs that have ended.
+#[test]
+fn the_dirs_of_test_runs_that_ended_are_swept_and_no_others() {
+    let root = fresh("sweep");
+    let mut ended = std::process::Command::new("true").spawn().unwrap();
+    ended.wait().unwrap();
+    let names = [format!("a-{}", ended.id()), format!("b-{}", std::process::id()), "c".into()];
+    for n in &names {
+        std::fs::create_dir_all(root.join(n).join("run")).unwrap();
+    }
+    common::sweep(&root);
+    let kept = names.map(|n| root.join(n).exists());
+    assert_eq!(kept, [false, true, true]);
+}
+
 #[test]
 fn a_symlink_on_path_still_finds_the_shipped_files() {
     let e = Env::new("link");
     let link = e.dir.join("bin/gensokyo");
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(BIN, &link).unwrap();
-    let o = Command::new(&link)
-        .arg("broadcast")
-        .envs(stub_env(&e.dir))
-        .env_remove("GENSOKYO_SHARE")
-        .output()
-        .unwrap();
+    let o = command(&link).arg("broadcast").envs(stub_env(&e.dir)).output().unwrap();
     assert!(o.status.success() && out(&o).contains("status-report"), "{}", err(&o));
 }
 
@@ -209,7 +241,7 @@ fn restart_after_a_daemon_was_killed_brings_back_whoever_it_had() {
 #[test]
 fn restart_is_refused_inside_a_resident() {
     let e = Env::new("inside");
-    let o = Command::new(BIN)
+    let o = command(BIN)
         .arg("restart")
         .env("GENSOKYO_STATE_DIR", &e.dir)
         .env("GENSOKYO_RESIDENT", "Reimu")

@@ -5,6 +5,7 @@
 
 use gensokyo::proto::PROTO;
 use serde_json::{Value, json};
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -15,12 +16,65 @@ pub const BIN: &str = env!("CARGO_BIN_EXE_gensokyo");
 
 pub type Lines = std::io::Lines<BufReader<UnixStream>>;
 
-/// `<name>-<pid>` under the target's tmp dir, made empty.
+/// `<name>-<pid>` under a short dir in `/tmp`, made empty. Not under the target's tmp dir: from
+/// a deep checkout, a daemon's `run/gensokyo.sock` there is past the 104 bytes a socket path may
+/// hold. Canonical (`/private/tmp` on macOS), as the daemon compares the paths it is given with
+/// the ones it finds.
 pub fn fresh(name: &str) -> PathBuf {
-    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        // SAFETY: plain libc call.
+        let uid = unsafe { libc::getuid() };
+        let root = std::fs::canonicalize("/tmp").unwrap().join(format!("gensokyo-tests-{uid}"));
+        sweep(&root);
+        root
+    });
+    let d = root.join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
+}
+
+/// Removes the `<name>-<pid>` dirs in `root` whose test process has exited: unlike the target's
+/// tmp dir, nothing else clears them.
+pub fn sweep(root: &Path) {
+    let gone = |pid: i32| {
+        // SAFETY: signal 0 only asks whether the process is there.
+        let r = unsafe { libc::kill(pid, 0) };
+        r != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    };
+    for d in root.read_dir().into_iter().flatten().flatten() {
+        let name = d.file_name();
+        let pid = name.to_str().and_then(|n| n.rsplit_once('-')?.1.parse().ok());
+        if pid.is_some_and(gone) {
+            let _ = std::fs::remove_dir_all(d.path());
+        }
+    }
+}
+
+/// `program`, with none of the `GENSOKYO_*` variables of the shell running the tests: from inside
+/// a resident they name the user's own daemon, state and resident. Every gensokyo a test runs is
+/// made here (or with `inherited` for a pseudo-terminal's), and what it should have goes on top.
+pub fn command(program: impl AsRef<OsStr>) -> Command {
+    command_from(program, std::env::vars_os())
+}
+
+/// `command`, as if the tests ran with `parent` for their environment.
+pub fn command_from(
+    program: impl AsRef<OsStr>,
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
+    let mut c = Command::new(program);
+    for k in inherited(parent) {
+        c.env_remove(k);
+    }
+    c
+}
+
+/// The `GENSOKYO_*` names in `parent`.
+pub fn inherited(parent: impl IntoIterator<Item = (OsString, OsString)>) -> Vec<OsString> {
+    let ours = |k: &OsString| k.as_encoded_bytes().starts_with(b"GENSOKYO_");
+    parent.into_iter().map(|(k, _)| k).filter(ours).collect()
 }
 
 /// A daemon's state and config under `dir`, with tests/stub-claude as every Claude resident and
@@ -124,12 +178,8 @@ impl Daemon {
     }
 
     pub fn command(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(BIN);
-        // Run from inside a resident, the tests would have its rights and none of the user's.
-        c.args(args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .env_remove("GENSOKYO_SOCKET")
-            .env_remove("GENSOKYO_RESIDENT");
+        let mut c = command(BIN);
+        c.args(args).envs(self.env.iter().map(|(k, v)| (k, v)));
         c
     }
 

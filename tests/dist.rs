@@ -22,7 +22,7 @@ fn releases() -> &'static Path {
         let base = fresh("dist-releases");
         for v in [VERSION, "9.9.9", "6.6.6"] {
             let to = base.join(format!("download/v{v}"));
-            let o = Command::new(format!("{ROOT}/scripts/release.sh"))
+            let o = common::command(format!("{ROOT}/scripts/release.sh"))
                 .args(["--bin", BIN, "--version", v, "--out"])
                 .arg(&to)
                 .env("GENSOKYO_RELEASE_ANY_VERSION", "1")

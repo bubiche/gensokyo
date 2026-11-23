@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{BIN, err, fresh, out, stub_env, wait, wait_for};
+use common::{BIN, command, err, fresh, out, stub_env, wait, wait_for};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -41,11 +41,8 @@ impl Env {
     }
 
     fn command(&self, bin: &Path, args: &[&str]) -> Command {
-        let mut c = Command::new(bin);
-        c.args(args)
-            .envs(stub_env(&self.dir))
-            .env_remove("GENSOKYO_SOCKET")
-            .env_remove("GENSOKYO_RESIDENT");
+        let mut c = command(bin);
+        c.args(args).envs(stub_env(&self.dir));
         c.env("GENSOKYO_LAUNCH_DIR", self.dir.join("agents"))
             .env("GENSOKYO_LAUNCHCTL", self.dir.join("launchctl"))
             .env("GENSOKYO_LAUNCH_LABEL", &self.label)
@@ -356,8 +353,8 @@ fn a_real_agent_starts_the_daemon_and_brings_it_back_after_a_crash() {
     std::os::unix::fs::symlink(stub, bin.join("claude")).unwrap();
     let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display());
     let gensokyo = |args: &[&str]| {
-        let mut c = Command::new(BIN);
-        c.args(args).env_remove("GENSOKYO_SOCKET").env_remove("GENSOKYO_CLAUDE");
+        let mut c = command(BIN);
+        c.args(args);
         c.env("GENSOKYO_STATE_DIR", &dir).env("GENSOKYO_CONFIG_DIR", dir.join("conf"));
         c.env("CLAUDE_CONFIG_DIR", dir.join("claude")).env("PATH", &path);
         c.env("GENSOKYO_LAUNCH_DIR", dir.join("agents")).env("GENSOKYO_LAUNCH_LABEL", &label);
@@ -379,8 +376,8 @@ fn a_real_agent_starts_the_daemon_and_brings_it_back_after_a_crash() {
 
     // While launchd's daemon has a resident, neither setup nor remove may boot it out.
     let refused = |args: &[&str], path: &str| {
-        let mut c = Command::new(BIN);
-        c.args(args).env_remove("GENSOKYO_SOCKET").env_remove("GENSOKYO_CLAUDE");
+        let mut c = command(BIN);
+        c.args(args);
         c.env("GENSOKYO_STATE_DIR", &dir).env("GENSOKYO_CONFIG_DIR", dir.join("conf"));
         c.env("CLAUDE_CONFIG_DIR", dir.join("claude")).env("PATH", path);
         c.env("GENSOKYO_LAUNCH_DIR", dir.join("agents")).env("GENSOKYO_LAUNCH_LABEL", &label);

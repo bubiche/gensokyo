@@ -1473,7 +1473,7 @@ fn a_codex_helper_refused_approval_is_interrupted_and_recalled_resumes_holding_i
     let o = inside(&d, &lead, &["close", "Kappa"]);
     assert!(o.status.success(), "{}", common::err(&o));
     let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/stub-codex");
-    let q = Command::new(stub)
+    let q = common::command(stub)
         .args(["queue", &format!("--thread={thread}"), "--message=while you were gone"])
         .env("STUB_STATE", d.dir.join("stub"))
         .output()

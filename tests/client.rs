@@ -4,10 +4,9 @@
 
 mod common;
 
-use common::{BIN, fresh, stub_env, wait};
+use common::{BIN, command, fresh, stub_env, wait};
 use gensokyo::vt::{Style, Vt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -40,9 +39,12 @@ impl Client {
     fn spawn(dir: &Path, cols: u16, rows: u16) -> Client {
         let (pty, pts) = pty_process::open().unwrap();
         pty.resize(pty_process::Size::new(rows, cols)).unwrap();
-        let child = pty_process::Command::new(BIN)
+        let mut c = pty_process::Command::new(BIN);
+        for k in common::inherited(std::env::vars_os()) {
+            c = c.env_remove(k);
+        }
+        let child = c
             .envs(env(dir))
-            .env_remove("GENSOKYO_SOCKET")
             .env("TERM", "xterm-256color")
             .current_dir(dir.join("work"))
             .spawn(pts)
@@ -141,8 +143,7 @@ struct Quit(PathBuf);
 
 impl Drop for Quit {
     fn drop(&mut self) {
-        let _ =
-            Command::new(BIN).arg("quit").envs(env(&self.0)).env_remove("GENSOKYO_SOCKET").output();
+        let _ = command(BIN).arg("quit").envs(env(&self.0)).output();
     }
 }
 
@@ -217,11 +218,10 @@ async fn summon_type_click_detach_reattach() {
     // order, and nothing of the sidebar.
     let (_, top) = find(&s, "gensokyo on PATH");
     c.drag((x + 6, y), (1, top)).await;
-    let grid = |l: &str| l.chars().skip(33).take(86).collect::<String>().trim_end().to_string();
-    let rows: Vec<&str> = s.lines().skip(top as usize - 1).take((y - top + 1) as usize).collect();
-    let want = rows.iter().map(|l| grid(l)).collect::<Vec<_>>().join("\n");
+    // The stub's line is as long as the path to the binary, and wraps on screen when that is
+    // long: the copy has it whole again.
+    let want = format!("gensokyo on PATH: {BIN}\nhello\n> hello");
     c.wait("the second copy", |_| copied() == want).await;
-    assert!(want.starts_with("gensokyo on PATH") && !want.contains(['○', '│']), "{want:?}");
     // A key clears it.
     c.send(b"x\x7f").await;
     let t = Instant::now();
@@ -269,11 +269,10 @@ async fn summon_type_click_detach_reattach() {
 
 /// `gensokyo <args>` from the test's state dir, with the stub's hooks on.
 fn cli(dir: &Path, args: &[&str]) {
-    let out = Command::new(BIN)
+    let out = command(BIN)
         .args(args)
         .envs(env(dir))
         .env("STUB_HOOKS", "1")
-        .env_remove("GENSOKYO_SOCKET")
         .current_dir(dir)
         .output()
         .unwrap();

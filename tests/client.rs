@@ -138,6 +138,26 @@ fn ready(dir: &Path) -> usize {
     })
 }
 
+/// Another client on the one resident, the same size as the first, once its nudge is over: the
+/// stub has had both SIGWINCHes and printed the size they leave. Printed later, the `size` line
+/// would land under whatever comes next, and a view scrolled back over that would move a row.
+async fn another(dir: &Path, cols: u16, rows: u16) -> Client {
+    let reading = dir.join("stub").read_dir().unwrap().flatten().map(|e| e.path());
+    let size = reading.filter(|p| p.extension().is_some_and(|x| x == "ready")).last();
+    let size = size.expect("the stub reading").with_extension("size");
+    // The grid: the window less the 32-column sidebar and the main box. The same window
+    // changes nothing, so only the nudge's second resize, back from a row short, writes it.
+    // A first client's nudge left a row short has to be over before that says anything; one
+    // that came before the stub set its trap left nothing at all.
+    let grid = format!("{} {}", rows - 2, cols - 34);
+    let read = || std::fs::read_to_string(&size).ok().map(|s| s.trim().to_string());
+    wait(|| read().is_none_or(|s| s == grid), "the first client's nudge to pass");
+    let _ = std::fs::remove_file(&size);
+    let mut c = Client::spawn(dir, cols, rows);
+    c.wait("its nudge to pass", |_| read().is_some_and(|s| s == grid)).await;
+    c
+}
+
 /// Quits the test's daemon when dropped, so a failed test leaves nothing running.
 struct Quit(PathBuf);
 
@@ -490,7 +510,7 @@ async fn a_search_moves_to_each_match_the_wheel_scrolls_back_for_all_and_a_lette
     assert!(!stub(&dir, "input").contains("mark\n"), "the search went to the resident");
 
     // A second client, on the live screen as the first is.
-    let mut c2 = Client::spawn(&dir, 120, 40);
+    let mut c2 = another(&dir, 120, 40).await;
     c2.wait("Reimu, twice", |s| s.contains("> line119")).await;
     // One paste, which the stub echoes whole: 60 lines, more than the screen holds.
     let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
@@ -526,11 +546,15 @@ async fn a_search_moves_to_each_match_the_wheel_scrolls_back_for_all_and_a_lette
 
     // Detached while scrolled back, the view is the resident's: it is still there on return.
     c.send(b"\x1b[<64;60;20M").await;
-    c.wait("back once more", back(3)).await;
+    let s = c.wait("back once more", back(3)).await;
+    let rows = |s: &str| (2..40).map(|y| grid_row(s, y)).collect::<Vec<_>>();
+    let there = rows(&s);
     c.send(b"\x1dd").await;
     assert!(c.exit().await.success());
-    let mut c = Client::spawn(&dir, 120, 40);
-    c.wait("still back", back(3)).await;
+    // The new client's nudge makes the stub print its size under the view, which stays on its
+    // rows: the count goes up by what that adds, and the rows are what is still there.
+    let mut c = another(&dir, 120, 40).await;
+    c.wait("still back", |s| s.contains("esc returns") && rows(s) == there).await;
     c.send(b"\x1b").await;
     c.wait("home at last", |s| !s.contains("esc returns")).await;
     for mut c in [c, c2] {
@@ -730,10 +754,8 @@ async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrol
     let dir = state("drag");
     let _quit = Quit(dir.clone());
     let mut c = reimu(&dir).await;
-    let mut c2 = Client::spawn(&dir, 120, 40);
+    let mut c2 = another(&dir, 120, 40).await;
     c2.wait("Reimu, twice", |s| s.contains("stub-claude Reimu")).await;
-    let t = Instant::now();
-    c2.wait("its nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
     let copied = || std::fs::read_to_string(dir.join("copied")).unwrap_or_default();
     let lines: Vec<String> = (0..60).map(|i| format!("line{i}")).collect();
     c.send(format!("\x1b[200~{}\x1b[201~\r", lines.join("\r")).as_bytes()).await;

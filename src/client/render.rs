@@ -81,6 +81,17 @@ pub struct Model {
     /// The last answer of the cloud session on screen: its id, its turns then, and the text, or
     /// why it could not be read.
     pub answer: Option<(String, u64, Result<String, String>)>,
+    /// Where a sidebar too short for everyone starts, when it does not follow the one on screen.
+    pub top: Option<Top>,
+}
+
+/// The first resident a sidebar too short for everyone shows: an index into its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Top {
+    /// Where the wheel left it, whoever is on screen.
+    Wheel(usize),
+    /// Held still under a click, while the one on screen is in it.
+    Click(usize),
 }
 
 /// Whether the daemon keeps the Mac from idle-sleeping while work runs, and whether it holds it
@@ -178,9 +189,26 @@ pub enum Button {
 }
 
 #[derive(Debug, Default, PartialEq)]
-pub struct HitMap(pub Vec<(Rect, Hit)>);
+pub struct HitMap(pub Vec<(Rect, Hit)>, Option<Scroll>);
+
+/// A sidebar too short for everyone: where it is, the residents it shows (indices into its
+/// order), the furthest down the first of them can be, and whether it is drawn from its `top`
+/// rather than around the one on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scroll {
+    pub area: Rect,
+    pub start: usize,
+    pub end: usize,
+    pub last: usize,
+    pub held: bool,
+}
 
 impl HitMap {
+    /// The sidebar's list, while it is longer than its room.
+    pub fn scroll(&self) -> Option<Scroll> {
+        self.1
+    }
+
     /// What was drawn on top at this cell (0-based), and its rect.
     pub fn at(&self, col: u16, row: u16) -> Option<(Rect, Hit)> {
         self.0.iter().rev().find(|(r, _)| r.contains(Position::new(col, row))).copied()
@@ -622,16 +650,31 @@ fn sidebar(m: &Model, side: Rect, buf: &mut Buffer, hits: &mut HitMap) {
     } else {
         (false, n + names + dims <= room)
     };
-    // More than fit: as many as do around the one on screen, and a line for those above and
-    // one for those below.
+    // More than fit: as many as do from where the wheel or a click left them, else around the
+    // one on screen, and a line for those above and one for those below.
     let (mut above, mut below) = (Vec::new(), Vec::new());
     if n > room {
         let f = order.iter().position(on).unwrap_or(0);
-        let mut fit = room.saturating_sub(1).max(1);
-        if window(n, f, fit).start > 0 && window(n, f, fit).end < n {
-            fit = room.saturating_sub(2).max(1);
-        }
-        let shown = window(n, f, fit);
+        let from = |top: Option<usize>| {
+            let at = |fit: usize| window(n, top.map_or(f, |t| t + fit - 1), fit);
+            let mut fit = room.saturating_sub(1).max(1);
+            if at(fit).start > 0 && at(fit).end < n {
+                fit = room.saturating_sub(2).max(1);
+            }
+            at(fit)
+        };
+        // A list held under a click that would now hide the one on screen (a notice or a usage
+        // line took a row) follows it again.
+        let held = match m.top {
+            Some(Top::Wheel(t)) => Some(from(Some(t))),
+            Some(Top::Click(t)) => Some(from(Some(t))).filter(|w| w.contains(&f)),
+            None => None,
+        };
+        let pinned = held.is_some();
+        let shown = held.unwrap_or_else(|| from(None));
+        let last = n - room.saturating_sub(1).max(1);
+        let (start, end) = (shown.start, shown.end);
+        hits.1 = Some(Scroll { area: side, start, end, last, held: pinned });
         below = order.split_off(shown.end);
         above = order.drain(..shown.start).collect();
     }

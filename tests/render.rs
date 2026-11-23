@@ -1,7 +1,7 @@
 //! The client's screen: snapshots of every screen and modal, and the hit map they return.
 
 use gensokyo::client::modal::{self, Cast, History, Modal, Recall, Stage, Summon, Timetable};
-use gensokyo::client::render::{self, Awake, Button, Find, Hit, HitMap, Message, Model, Say};
+use gensokyo::client::render::{self, Awake, Button, Find, Hit, HitMap, Message, Model, Say, Top};
 use gensokyo::proto::{Card, CloudSession, Limit, Resident, RitualInfo, State, Telemetry};
 use gensokyo::vt::{Color, Frame, Run, Style};
 use ratatui::Terminal;
@@ -1392,4 +1392,61 @@ fn a_model_on_a_row_of_its_own_is_counted_so_nobody_goes_missing() {
             }
         }
     }
+}
+
+/// Ten residents, Reimu on screen: more than a short sidebar has room for.
+fn crowd() -> Model {
+    let mut m = shrine();
+    let names = ["Sakuya", "Youmu", "Yuyuko", "Ran", "Chen", "Aya", "Sanae"];
+    for (n, name) in (4..).zip(names) {
+        m.residents.push(resident(n, name, "work", None));
+    }
+    m
+}
+
+#[test]
+fn a_long_sidebar_moved_by_the_wheel_counts_what_is_above_and_below_and_keeps_its_focus() {
+    // Fourteen rows high: room for seven rows of residents.
+    let short = Rect::new(0, 0, 120, 14);
+    let slots = |rows: &[String]| -> Vec<u8> {
+        rows.iter().filter_map(|r| r.split(' ').next()?.parse().ok()).collect()
+    };
+    let more = |rows: &[String]| -> Vec<String> {
+        rows.iter().filter(|r| r.contains(" more")).map(|r| r.trim().to_string()).collect()
+    };
+    // Following the one on screen: Reimu first, the rest below.
+    let (rows, _) = side(&crowd(), short);
+    assert_eq!(slots(&rows), [1, 2, 3, 4, 5, 6], "{rows:#?}");
+    assert_eq!(more(&rows), ["↓ 4 more"], "{rows:#?}");
+    let map = hits(&crowd(), short);
+    let s = map.scroll().expect("a list longer than its room");
+    assert_eq!((s.start, s.end, s.last), (0, 6, 4));
+    assert_eq!(s.area, Rect::new(0, 0, render::SIDEBAR_W, 14));
+    // Moved three down: three above, as many as fit, the rest below.
+    let m = Model { top: Some(Top::Wheel(3)), ..crowd() };
+    let (rows, _) = side(&m, short);
+    assert_eq!(more(&rows), ["↑ 3 more", "↓ 2 more"], "{rows:#?}");
+    assert_eq!(slots(&rows), [4, 5, 6, 7, 8], "{rows:#?}");
+    assert_eq!(hits(&m, short).scroll().map(|s| s.start), Some(3));
+    insta::assert_snapshot!("sidebar-moved", sidebar_text(&m, 14));
+    // Reimu is still the one on screen, and its line is gone with the rest above.
+    let (t, _) = draw(&m, 120, 14);
+    let top: String = (0..120).map(|x| t.backend().buffer()[(x, 0)].symbol()).collect();
+    assert!(top.contains(" 1 Reimu · "), "{top}");
+    // Past the end: the last as low as it goes, nothing below.
+    let (rows, _) = side(&Model { top: Some(Top::Wheel(99)), ..crowd() }, short);
+    assert_eq!(more(&rows), ["↑ 4 more"], "{rows:#?}");
+    assert_eq!(slots(&rows), [5, 6, 7, 8, 9, 10], "{rows:#?}");
+    // Held still by a click while the one on screen is in it; else it follows that one.
+    let (rows, _) = side(&Model { top: Some(Top::Click(3)), ..crowd() }, short);
+    assert_eq!(slots(&rows), [1, 2, 3, 4, 5, 6], "{rows:#?}");
+    let m = Model { focused: Some("id-Ran".into()), top: Some(Top::Click(3)), ..crowd() };
+    let (rows, _) = side(&m, short);
+    assert_eq!(slots(&rows), [4, 5, 6, 7, 8], "{rows:#?}");
+    assert!(hits(&m, short).scroll().is_some_and(|s| s.held));
+    // A list that fits is drawn whole, whatever the wheel did.
+    let m = Model { top: Some(Top::Wheel(2)), ..shrine() };
+    let (rows, _) = side(&m, AREA);
+    assert!(rows[1].starts_with("1 ○ Reimu") && more(&rows).is_empty(), "{rows:#?}");
+    assert_eq!(hits(&m, AREA).scroll(), None);
 }

@@ -1,0 +1,18 @@
+---
+source: tests/render.rs
+expression: "sidebar_text(&m, 14)"
+---
+┌ gensokyo ────────────────────┐
+│↑ 3 more                      │
+│4 ○ Sakuya                    │
+│5 ○ Youmu                     │
+│6 ○ Yuyuko                    │
+│7 ○ Ran                       │
+│8 ○ Chen                      │
+│↓ 2 more                      │
+│                              │
+│[summon n] [cast c] [banish b]│
+│[recall r] [timetable t]      │
+│[quit q] [?]                  │
+│[mouse: shrine m]             │
+└─────── ^] then a key ────────┘

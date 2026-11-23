@@ -4,7 +4,7 @@
 use gensokyo::client::app::{App, Config, EDGE};
 use gensokyo::client::framer::Framer;
 use gensokyo::client::modal::{Modal, Stage};
-use gensokyo::client::render::{SIDEBAR_W, grid_rect};
+use gensokyo::client::render::{SIDEBAR_W, Top, grid_rect};
 use gensokyo::proto::{
     Card, CloudSession, CloudWatch, NAME_RULE, Notice, Reply, Resident, RitualInfo, RoutineInfo,
     State,
@@ -1689,4 +1689,189 @@ fn a_cloud_answer_read_for_one_no_longer_on_screen_is_dropped() {
     let id = second["id"].as_u64().unwrap();
     daemon(&mut a, Reply::Done { id, message: "Sanae's answer".into() });
     assert_eq!(a.m.answer, Some(("id-Sanae".into(), 1, Ok("Sanae's answer".into()))));
+}
+
+#[test]
+fn the_wheel_over_a_long_sidebar_moves_it_until_focus_the_count_or_the_size_changes() {
+    let names = ["Reimu", "Marisa", "Cirno", "Sakuya", "Youmu", "Yuyuko", "Ran", "Chen", "Aya"];
+    let list = |n: usize| (1..).zip(&names[..n]).map(|(i, s)| resident(i, s)).collect();
+    let mut a = app();
+    daemon(&mut a, Reply::Residents { residents: list(9) });
+    // Fourteen rows high: room for seven rows of residents.
+    let (short, taller) = (Rect::new(0, 0, 120, 14), Rect::new(0, 0, 120, 15));
+    let paint = |a: &mut App, area: Rect| a.paint(area, &mut Buffer::empty(area));
+    let (down, up) = (b"\x1b[<65;5;5M", b"\x1b[<64;5;5M");
+    paint(&mut a, short);
+    sent(&mut a);
+    // A notch down over the sidebar: a resident on from where following Reimu put it, Reimu
+    // still on screen, and nothing for the daemon.
+    host(&mut a, down);
+    assert_eq!(a.m.top, Some(Top::Wheel(1)));
+    assert_eq!(a.m.focused.as_deref(), Some("id-Reimu"));
+    assert!(sent(&mut a).is_empty());
+    // Notches in one read count each, and stop at either end.
+    host(&mut a, &down.repeat(9));
+    assert_eq!(a.m.top, Some(Top::Wheel(3)));
+    host(&mut a, &up.repeat(9));
+    assert_eq!(a.m.top, Some(Top::Wheel(0)));
+    // Over the grid the wheel is the resident's scrollback, and leaves the list where it is.
+    host(&mut a, b"\x1b[<65;60;5M");
+    assert_eq!(kinds(&sent(&mut a)), ["scroll"]);
+    assert_eq!(a.m.top, Some(Top::Wheel(0)));
+    // Another on screen: the list follows it again, from where it puts it.
+    host(&mut a, b"\x1d8");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Chen"), None));
+    paint(&mut a, short);
+    host(&mut a, up);
+    assert_eq!(a.m.top, Some(Top::Wheel(2)));
+    // The same residents again keep it; one more or one fewer, or another size, does not.
+    daemon(&mut a, Reply::Residents { residents: list(9) });
+    paint(&mut a, short);
+    assert_eq!(a.m.top, Some(Top::Wheel(2)));
+    daemon(&mut a, Reply::Residents { residents: list(8) });
+    assert_eq!(a.m.top, None);
+    paint(&mut a, short);
+    host(&mut a, down);
+    assert!(a.m.top.is_some());
+    paint(&mut a, taller);
+    assert_eq!(a.m.top, None);
+    // A list that fits does not move.
+    let tall = Rect::new(0, 0, 120, 40);
+    paint(&mut a, tall);
+    host(&mut a, down);
+    assert_eq!(a.m.top, None);
+}
+
+#[test]
+fn a_moved_sidebar_stays_under_a_click_in_sight_and_follows_one_out_of_it() {
+    let names = ["Reimu", "Marisa", "Cirno", "Sakuya", "Youmu", "Yuyuko", "Ran", "Chen", "Aya"];
+    let list = (1..).zip(names).map(|(i, s)| resident(i, s)).collect();
+    let mut a = app();
+    daemon(&mut a, Reply::Residents { residents: list });
+    // Fourteen rows high: room for seven rows of residents.
+    let short = Rect::new(0, 0, 120, 14);
+    let rows = |a: &mut App| {
+        let mut buf = Buffer::empty(short);
+        a.paint(short, &mut buf);
+        let cells: Vec<&str> = buf.content.iter().map(|c| c.symbol()).collect();
+        cells.chunks(120).map(|r| r.concat()).collect::<Vec<String>>()
+    };
+    // A left click on the first cell of `text`, in the short sidebar.
+    let click = |a: &mut App, text: &str| {
+        let rows = rows(a);
+        let y = rows.iter().position(|l| l.contains(text)).expect(text) + 1;
+        host(a, format!("\x1b[<0;3;{y}M\x1b[<0;3;{y}m").as_bytes());
+        y
+    };
+    let down = b"\x1b[<65;5;5M";
+    rows(&mut a);
+    host(&mut a, down);
+    assert_eq!(a.m.top, Some(Top::Wheel(1)));
+    // The `↑` line, Reimu's, while Reimu is on screen: back to following it.
+    click(&mut a, "↑ 1 more");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Reimu"), None));
+    // So is Reimu's slot.
+    rows(&mut a);
+    host(&mut a, down);
+    rows(&mut a);
+    host(&mut a, b"\x1d1");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Reimu"), None));
+    // A click on one in sight: on screen, and the list stays, its row under the pointer.
+    rows(&mut a);
+    host(&mut a, down);
+    let y = click(&mut a, "3 ○ Cirno");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Cirno"), Some(Top::Click(1))));
+    assert!(rows(&mut a)[y - 1].contains("3 ○ Cirno"));
+    // Not moved by the wheel, the list stays under a click too: Chen at its foot, then Sakuya.
+    host(&mut a, b"\x1d8");
+    let y = click(&mut a, "4 ○ Sakuya");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Sakuya"), Some(Top::Click(3))));
+    assert!(rows(&mut a)[y - 1].contains("4 ○ Sakuya"));
+    // One out of sight, by its slot: the list follows it.
+    host(&mut a, b"\x1d1");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-Reimu"), None));
+    // A modal open, or the wheel sideways: the list stays, and nothing goes to the daemon.
+    rows(&mut a);
+    sent(&mut a);
+    for wheel in [&b"\x1b[<66;5;5M"[..], b"\x1b[<67;5;5M"] {
+        host(&mut a, wheel);
+        assert_eq!(a.m.top, None);
+    }
+    host(&mut a, b"\x1d?");
+    assert!(a.m.modal.is_some());
+    rows(&mut a);
+    host(&mut a, down);
+    assert_eq!(a.m.top, None);
+    assert!(sent(&mut a).is_empty());
+}
+
+/// Ten or more residents, Reimu first: more than a short sidebar has room for.
+fn crowded(n: u8) -> App {
+    let mut a = app();
+    let residents = (1..=n).map(|i| resident(i, &format!("R{i:02}"))).collect();
+    daemon(&mut a, Reply::Residents { residents });
+    a
+}
+
+/// The client painted in `area`, row by row.
+fn painted(a: &mut App, area: Rect) -> Vec<String> {
+    let mut buf = Buffer::empty(area);
+    a.paint(area, &mut buf);
+    let cells: Vec<&str> = buf.content.iter().map(|c| c.symbol()).collect();
+    cells.chunks(area.width as usize).map(|r| r.concat()).collect()
+}
+
+#[test]
+fn a_list_held_under_a_click_follows_the_one_on_screen_once_it_would_hide_it() {
+    let mut a = crowded(10);
+    // Fourteen rows high: room for seven rows of residents, so six and a line for the rest.
+    let short = Rect::new(0, 0, 120, 14);
+    let rows = painted(&mut a, short);
+    let y = rows.iter().position(|l| l.contains("6 ○ R06")).unwrap() + 1;
+    assert!(rows[y].contains("↓ 4 more"), "{rows:#?}");
+    // A click on the lowest in sight holds the list still under it.
+    host(&mut a, format!("\x1b[<0;3;{y}M\x1b[<0;3;{y}m").as_bytes());
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-R06"), Some(Top::Click(0))));
+    // A notice takes a row from the list: held still, R06 would go under `↓ 5 more`.
+    daemon(&mut a, Reply::Notice { text: "R03 needs you".into() });
+    let rows = painted(&mut a, short);
+    assert!(rows.iter().any(|l| l.contains("6 ○ R06")), "{rows:#?}");
+    assert_eq!(a.m.top, None);
+    // Gone with the notice, the row brings nothing back to where the click held it.
+    a.m.message = None;
+    let rows = painted(&mut a, short);
+    assert!(rows.iter().any(|l| l.contains("6 ○ R06")), "{rows:#?}");
+    assert_eq!(a.m.top, None);
+    // Held again, then the one on screen leaves the list: the new count follows, though the
+    // one put on screen in its place was in sight.
+    host(&mut a, format!("\x1b[<0;3;{y}M\x1b[<0;3;{y}m").as_bytes());
+    assert!(matches!(a.m.top, Some(Top::Click(_))));
+    let rest = a.m.residents.iter().filter(|r| r.id != "id-R06").cloned().collect();
+    daemon(&mut a, Reply::Residents { residents: rest });
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-R01"), None));
+}
+
+#[test]
+fn a_chord_moves_the_list_as_the_main_frame_would_whatever_the_leader_frame_showed() {
+    let mut a = crowded(20);
+    // Twenty-four rows high: sixteen residents and a line, or fewer with the leader's keys.
+    let area = Rect::new(0, 0, 120, 24);
+    let first =
+        |rows: &[String]| rows.iter().find(|l| l[3..].starts_with(char::is_numeric)).cloned();
+    host(&mut a, &b"\x1dj".repeat(12));
+    assert_eq!(a.m.focused.as_deref(), Some("id-R13"));
+    let rows = painted(&mut a, area);
+    assert!(first(&rows).unwrap().contains("1 ○ R01"), "{rows:#?}");
+    // The leader's frame, shorter, shows the list around R13; the key after it moves on one,
+    // and the list is where the main frame would have it.
+    host(&mut a, b"\x1d");
+    let leader = painted(&mut a, area);
+    assert!(!first(&leader).unwrap().contains("1 ○ R01"), "{leader:#?}");
+    host(&mut a, b"k");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-R12"), None));
+    let rows = painted(&mut a, area);
+    assert!(first(&rows).unwrap().contains("1 ○ R01"), "{rows:#?}");
+    // So does a slot after the wheel: it follows the one it puts on screen.
+    host(&mut a, b"\x1b[<65;5;5M\x1d1");
+    assert_eq!((a.m.focused.as_deref(), a.m.top), (Some("id-R01"), None));
 }

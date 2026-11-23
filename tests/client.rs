@@ -791,3 +791,24 @@ async fn a_selection_keeps_to_its_text_as_output_comes_and_past_the_top_it_scrol
 fn at(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_wheel_moves_a_sidebar_too_short_for_everyone_and_leaves_the_screen_alone() {
+    let dir = state("wheel");
+    let _quit = Quit(dir.clone());
+    for name in ["Reimu", "Marisa", "Cirno", "Sakuya"] {
+        cli(&dir, &["new", "work", "-n", name]);
+    }
+    // Twelve rows high: room for three rows of residents, so two and a line for the rest.
+    let mut c = Client::spawn(&dir, 120, 12);
+    c.wait("Reimu on screen", |s| s.contains("1 Reimu · ") && s.contains("↓ 2 more")).await;
+    // A notch down over the sidebar: Reimu stays on screen.
+    c.mouse(65, (5, 3), true).await;
+    let s = c.wait("the list moved", |s| s.contains("↑ 1 more")).await;
+    assert!(s.contains("1 Reimu · ") && s.contains("2 ○ Marisa") && s.contains("↓ 2 more"), "{s}");
+    assert!(!s.contains("1 ○ Reimu"), "{s}");
+    // Another on screen: the list follows it.
+    c.send(b"\x1d4").await;
+    let s = c.wait("Sakuya on screen", |s| s.contains("4 Sakuya · ")).await;
+    assert!(s.contains("4 ○ Sakuya") && s.contains("↑ 2 more") && !s.contains("↓"), "{s}");
+}

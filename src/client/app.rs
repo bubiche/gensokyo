@@ -8,7 +8,7 @@
 use super::framer::{Chunk, Esc, Framer, Mouse, Reply as HostReply};
 use super::keys::{self, Chord, Forward, Scrollback};
 use super::modal::{self, Act, Cast, History, Modal, Recall, Summon, Timetable};
-use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say};
+use super::render::{self, Button, Find, Hit, HitMap, Message, Model, Say, Top};
 use crate::cli;
 use crate::paths;
 use crate::proto::{self, Envelope, Reply, Request, Resident};
@@ -490,6 +490,8 @@ impl App {
     }
 
     fn focus(&mut self, id: Option<String>) {
+        // The sidebar follows the one put on screen, even one already there.
+        self.m.top = None;
         if id == self.m.focused {
             return;
         }
@@ -548,11 +550,16 @@ impl App {
     /// The model drawn into `buf`: what each cell does when clicked is kept for the next
     /// clicks, and a new grid size goes to the daemon.
     pub fn paint(&mut self, area: Rect, buf: &mut Buffer) {
-        self.hits = render::render(&self.m, area, buf);
+        // Another size puts the sidebar back on the one on screen, in this frame already.
         let g = render::grid_rect(area);
         if (g.width, g.height) != self.size && g.width > 0 && g.height > 0 {
-            self.size = (g.width, g.height);
+            (self.size, self.m.top) = ((g.width, g.height), None);
             self.send(Request::Resize { cols: g.width, rows: g.height });
+        }
+        self.hits = render::render(&self.m, area, buf);
+        // A click's hold the frame gave up stays given up.
+        if self.hits.scroll().is_some_and(|s| !s.held) {
+            self.m.top = None;
         }
     }
 
@@ -774,6 +781,9 @@ impl App {
 
     fn residents(&mut self, list: Vec<Resident>) {
         let was = self.running();
+        if list.len() != self.m.residents.len() {
+            self.m.top = None;
+        }
         self.m.residents = list;
         if self.focused().is_none() {
             let first = self.m.residents.iter().find(|r| r.departed.is_none());
@@ -1130,6 +1140,22 @@ impl App {
         if wheel && self.held.is_some() && self.m.modes.alt {
             return;
         }
+        // The wheel over a sidebar too short for everyone moves its list a resident a notch,
+        // and leaves the one on screen where it is. Notches in one read go from where the last
+        // left it, not from the frame drawn before them.
+        let list = self.hits.scroll().filter(|s| s.area.contains(Position::new(col, row)));
+        if let Some(s) = list.filter(|_| wheel && ev.press && self.m.modal.is_none()) {
+            if ev.button & 2 == 0 {
+                let start = match self.m.top {
+                    Some(Top::Wheel(t)) => t.min(s.last),
+                    _ => s.start,
+                };
+                let down = ev.button & 1 == 1;
+                let t = if down { (start + 1).min(s.last) } else { start.saturating_sub(1) };
+                self.m.top = Some(Top::Wheel(t));
+            }
+            return;
+        }
         match self.hits.at(col, row) {
             Some((g, Hit::Grid)) if left && ev.press && self.m.modes.mouse == 0 => {
                 let (at, now) = ((col - g.x, row - g.y), self.clock());
@@ -1218,7 +1244,14 @@ impl App {
             Hit::Resident(i) => {
                 let id = self.m.residents.get(i).map(|r| r.id.clone());
                 if id.is_some() {
+                    // In sight in a sidebar too short for everyone, its row stays under the
+                    // pointer; a `more` line's resident is not in sight, and is followed.
+                    let order = render::drawn(&self.m.residents);
+                    let pin = self.hits.scroll().filter(|s| {
+                        order.get(s.start..s.end).unwrap_or_default().iter().any(|p| p.0 == i)
+                    });
                     self.focus(id);
+                    self.m.top = pin.map(|s| Top::Click(s.start));
                 }
             }
             Hit::Button(b) => match b {

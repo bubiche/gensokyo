@@ -111,7 +111,7 @@ enum Cmd {
     Broadcast {
         /// A card's name or title, or a part of one that picks out a single card
         card: Option<String>,
-        /// all, awaiting, idle, or residents by name, slot or id
+        /// all, awaiting, idle, failed (cut off by an error), or residents by name, slot or id
         targets: Vec<String>,
         /// For a pair card: the resident each target talks to
         #[arg(long, value_name = "NAME")]
@@ -524,7 +524,7 @@ fn broadcast(
         }
         println!();
         println!(
-            "  gensokyo broadcast <card> all|awaiting|idle|<name> [--with <name>]   (the shrine's [cast c] button)"
+            "  gensokyo broadcast <card> all|awaiting|idle|failed|<name> [--with <name>]   (the shrine's [cast c] button)"
         );
         println!(
             "  your own cards go in {mine}/<name>.md; {{self}} {{peer}} {{cwd}} {{residents}} are filled in"

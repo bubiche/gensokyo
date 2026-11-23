@@ -331,8 +331,14 @@ async fn a_resident_nobody_watches_rings_the_host() {
     c.wait("the cards", |s| s.contains("› Aa Probe")).await;
     c.send(b"\r").await;
     c.wait("the targets", |s| s.contains("› 2 ○ Marisa")).await;
-    for row in ["› 1 ○ Reimu", "› everyone resting", "› everyone who needs you", "› everyone  "]
-    {
+    let rows = [
+        "› 1 ○ Reimu",
+        "› everyone an error cut off",
+        "› everyone resting",
+        "› everyone who needs you",
+        "› everyone  ",
+    ];
+    for row in rows {
         c.send(b"k").await;
         c.wait(row, |s| s.contains(row)).await;
     }

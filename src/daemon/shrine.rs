@@ -812,6 +812,8 @@ pub(super) fn recall(
     let mut entry = Entry::new(rec, handle);
     if resume {
         entry.aware.resumed();
+        // Back in its conversation: a turn an error cut off in it is still where it stopped.
+        entry.aware.cut_off = super::lead::failed_in_session(&sh.store, &entry.rec);
     }
     match at {
         Some(i) => sh.entries[i] = entry,
@@ -968,7 +970,7 @@ pub(super) fn departed(sh: &mut Shrine, i: usize, exit: resident::Exit) {
     // A turn it left in the middle of has ended all the same: its lead hears so, not of the
     // turn before. Hooks after this find no handle and are dropped.
     sh.entries[i].aware.left();
-    super::ingest::tally(sh, i, None);
+    super::ingest::tally(sh, i, None, None);
     let e = &mut sh.entries[i];
     e.handle = None;
     depart(&mut e.rec, Some(exit));
@@ -1153,7 +1155,7 @@ pub(super) async fn leave_all(shrine: &Shared) {
             continue;
         }
         sh.entries[i].aware.cut();
-        super::ingest::tally(&mut sh, i, None);
+        super::ingest::tally(&mut sh, i, None, None);
     }
     for mut e in std::mem::take(&mut sh.entries) {
         match &e.handle {

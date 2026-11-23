@@ -643,7 +643,7 @@ fn cast_offers_groups_then_the_living_and_never_the_target_as_peer() {
     let mut m = shrine();
     let Some(Modal::Cast(c)) = Some(cast(Some(1), None)) else { unreachable!() };
     let picks: Vec<String> = modal::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
-    assert_eq!(picks, ["all", "awaiting", "idle", "id-Reimu", "id-Marisa"]);
+    assert_eq!(picks, ["all", "awaiting", "idle", "failed", "id-Reimu", "id-Marisa"]);
     let Some(Modal::Cast(c)) = Some(cast(Some(0), None)) else { unreachable!() };
     let picks: Vec<String> = modal::cast_choices(&m, &c).into_iter().map(|c| c.0).collect();
     assert_eq!(picks, ["id-Reimu", "id-Marisa"]);

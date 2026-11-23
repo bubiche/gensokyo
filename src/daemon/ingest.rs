@@ -30,17 +30,20 @@ pub(super) fn hook(shrine: &Shared, resident: &str, h: Hook) {
             sh.entries[i].idle_since = None;
         }
         let state = sh.entries[i].aware.state();
-        log(
-            json!({"ev": "hook", "id": resident, "event": h.event, "kind": h.kind, "state": state}),
-        );
-        tally(sh, i, h.answer.as_deref());
+        let mut line =
+            json!({"ev": "hook", "id": resident, "event": h.event, "kind": h.kind, "state": state});
+        if let Some(e) = &h.error {
+            line["error"] = json!(e);
+        }
+        log(line);
+        tally(sh, i, h.answer.as_deref(), h.error.as_deref());
         after(sh, i, before);
     }
 }
 
 /// Turns ended and dialogs opened go into the record, and an ended turn's answer into its file,
-/// before anyone waiting hears of either.
-pub(super) fn tally(sh: &mut Shrine, i: usize, answer: Option<&str>) {
+/// with the error a failed one ended on, before anyone waiting hears of either.
+pub(super) fn tally(sh: &mut Shrine, i: usize, answer: Option<&str>, error: Option<&str>) {
     let news = sh.entries[i].aware.take();
     if news == News::default() {
         return;
@@ -51,7 +54,8 @@ pub(super) fn tally(sh: &mut Shrine, i: usize, answer: Option<&str>) {
     let r = r.clone();
     if let Some(how) = news.ended {
         let text = answer.filter(|_| matches!(how, Ended::Stop | Ended::Failed));
-        super::lead::keep_answer(&sh.store, &r, how, text);
+        let error = error.filter(|_| how == Ended::Failed);
+        super::lead::keep_answer(&sh.store, &r, how, text, error);
     }
     let _ = sh.store.save(&r);
 }

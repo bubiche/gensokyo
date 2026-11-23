@@ -51,12 +51,22 @@ struct Answer {
     at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    /// What a failed turn ended on (`StopFailure`'s `error`), when Claude Code said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 /// The answer of the turn that just ended, or why there is none. Written before the turn is
 /// counted where anyone can see it, so a `read` after a `wait` never finds the turn before.
-pub(super) fn keep_answer(store: &Store, r: &Record, ended: Ended, text: Option<&str>) {
-    let a = Answer { turn: r.turns, ended, at: store::now(), text: text.map(String::from) };
+pub(super) fn keep_answer(
+    store: &Store,
+    r: &Record,
+    ended: Ended,
+    text: Option<&str>,
+    error: Option<&str>,
+) {
+    let (text, error) = (text.map(String::from), error.map(String::from));
+    let a = Answer { turn: r.turns, ended, at: store::now(), text, error };
     let bytes = serde_json::to_vec(&a).expect("an answer serializes");
     if let Err(e) = store::write_atomic(&store.answer(&r.id), &bytes) {
         log(json!({"ev": "answer", "id": r.id, "error": e.to_string()}));
@@ -65,6 +75,20 @@ pub(super) fn keep_answer(store: &Store, r: &Record, ended: Ended, text: Option<
 
 fn answer(store: &Store, id: &str) -> Option<Answer> {
     serde_json::from_slice(&std::fs::read(store.answer(id)).ok()?).ok()
+}
+
+/// Whether `r`'s last turn, as kept, failed in the conversation it has now. One kept before a
+/// `/clear` moved it on belongs to the conversation before: `session_at` is in milliseconds and
+/// `at` in seconds, so an answer kept in the same second as the clear counts as before it.
+pub(super) fn failed_in_session(store: &Store, r: &Record) -> bool {
+    answer(store, &r.id).is_some_and(|a| a.ended == Ended::Failed && a.at * 1000 > r.session_at)
+}
+
+/// What cut off `id`'s last turn, when an error did: the error Claude Code named, else
+/// "an API error".
+pub(super) fn failed_on(store: &Store, id: &str) -> Option<String> {
+    let a = answer(store, id).filter(|a| a.ended == Ended::Failed)?;
+    Some(a.error.unwrap_or_else(|| "an API error".into()))
 }
 
 /// A resident by exact id first, then by name or slot in the shrine, then the newest departed

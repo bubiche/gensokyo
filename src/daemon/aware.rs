@@ -60,6 +60,9 @@ pub struct Aware {
     pub agent: Agent,
     /// Launched in auto mode, where Codex's reviewer answers its permission requests.
     pub auto: bool,
+    /// Its last turn ended on an error, and nothing has gone in since: no prompt, no `/clear`.
+    /// A prompt whose turn Esc ended sends no hook to say so, so the prompt is what counts.
+    pub cut_off: bool,
     /// The `tool_input` of Codex's open permission request: its PostToolUse is the grant.
     request: Option<String>,
     /// Codex PostToolUses that granted nothing, stamped after the newest hook, their input and
@@ -328,6 +331,7 @@ impl Aware {
             ("UserPromptSubmit", _) => {
                 self.set(None, None);
                 self.running = true;
+                self.cut_off = false;
                 self.prompted = true;
                 self.line.went_in();
             }
@@ -380,6 +384,7 @@ impl Aware {
             ("SessionStart", Some("clear")) => {
                 self.set(None, None);
                 self.running = false;
+                self.cut_off = false;
                 self.line = Line::default();
             }
             _ => {}
@@ -537,6 +542,8 @@ impl Aware {
             marks: self.marks,
             agent: self.agent,
             auto: self.auto,
+            // Into a new conversation, the work the error cut off is not there to carry on.
+            cut_off: resumed && self.cut_off,
             ..Aware::default()
         };
         if self.pending == Some(Pending::Stopped) {
@@ -607,6 +614,7 @@ impl Aware {
     }
 
     fn end(&mut self, how: Ended) {
+        self.cut_off = how == Ended::Failed;
         self.news.ends += 1;
         self.news.ended = Some(how);
     }

@@ -286,3 +286,37 @@ fn one_that_cannot_come_back_departs_and_says_so_and_a_quit_starts_nobody() {
     let log = d.log();
     assert!(!log.iter().any(|l| l["ev"] == "renewed" && l["error"].is_null()), "{log:?}");
 }
+
+#[test]
+fn a_renew_into_a_fresh_conversation_is_no_longer_cut_off() {
+    let d = daemon("fresh");
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
+    let (a, b) = (summon(&d, "Reimu"), summon(&d, "Marisa"));
+    for n in ["Reimu", "Marisa"] {
+        input(&d, n, "/fail");
+        wait(|| me(&d, n)["turns"] == 1, "the failed turn");
+        runs(&d, n, "2.1.282");
+    }
+    // Reimu's conversation is gone, so her renew starts a new one; Marisa's resumes hers.
+    let convo = d.dir.join(format!("claude/projects/stub/{}.jsonl", a["id"].as_str().unwrap()));
+    std::fs::remove_file(convo).unwrap();
+    let pids = (me(&d, "Reimu")["pid"].clone(), me(&d, "Marisa")["pid"].clone());
+    install(&d.dir, "2.1.300");
+    wait(|| ["Reimu", "Marisa"].iter().all(|n| me(&d, n)["outdated"] == "2.1.300"), "markers");
+    wait(|| ["Reimu", "Marisa"].iter().all(|n| me(&d, n)["blocked"].is_null()), "both listed");
+    d.cli(&["renew"]);
+    renewed(&d, "Reimu", &pids.0);
+    renewed(&d, "Marisa", &pids.1);
+    let log = d.log();
+    let renew = |r: &Value| {
+        log.iter().find(|l| l["ev"] == "renewed" && l["id"] == r["id"]).unwrap()["resumed"].clone()
+    };
+    assert_eq!((renew(&a), renew(&b)), (json!(false), json!(true)));
+    wait(|| ["Reimu", "Marisa"].iter().all(|n| me(&d, n)["blocked"].is_null()), "both back");
+    let o = d.cli(&["broadcast", "hi", "failed"]);
+    assert_eq!(out(&o).trim(), "cast Hi on Marisa; Marisa stopped on rate_limit");
+    wait(|| d.stub(&b["id"], "input").contains("Hello Marisa."), "Marisa's card");
+    assert!(!d.stub(&a["id"], "input").contains("Hello"));
+}

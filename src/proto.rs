@@ -236,6 +236,9 @@ pub struct Hook {
     /// The reply itself, on `Stop` and `StopFailure`: what `read` gives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// What ended the turn, on `StopFailure`: Claude Code's `error`, such as `rate_limit`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// Where Claude works when the hook ran: it follows a `cd`, the launch dir does not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -474,7 +477,7 @@ pub struct WorktreeAsk {
 pub struct Cast {
     /// A card's slug or title, or part of one that picks out a single card.
     pub card: String,
-    /// `all`, `awaiting`, `idle`, or residents by name, slot or id.
+    /// `all`, `awaiting`, `idle`, `failed`, or residents by name, slot or id.
     pub targets: Vec<String>,
     /// For a pair card: the resident the target talks to.
     #[serde(default, skip_serializing_if = "Option::is_none")]

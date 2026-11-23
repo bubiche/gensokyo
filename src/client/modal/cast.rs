@@ -26,8 +26,12 @@ pub fn cast_choices(m: &Model, c: &Cast) -> Vec<(String, String)> {
         let pair = |k: &Card| if k.pair { "  (pair)" } else { "" };
         return cards.map(|k| (k.slug.clone(), format!("{}{}", k.title, pair(k)))).collect();
     };
-    let groups =
-        [("all", "everyone"), ("awaiting", "everyone who needs you"), ("idle", "everyone resting")];
+    let groups = [
+        ("all", "everyone"),
+        ("awaiting", "everyone who needs you"),
+        ("idle", "everyone resting"),
+        ("failed", "everyone an error cut off"),
+    ];
     let groups = groups.iter().filter(|_| !card.pair && c.target.is_none());
     let live = m.residents.iter().filter(|r| r.departed.is_none());
     let live = live.filter(|r| c.target.as_ref() != Some(&r.id)).map(|r| {

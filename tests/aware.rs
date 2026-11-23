@@ -394,6 +394,81 @@ fn resident_text_is_one_line_of_printable_characters() {
 }
 
 #[test]
+fn a_stop_failure_keeps_its_error_and_nothing_else_has_one() {
+    let failed = json!({"hook_event_name": "StopFailure", "error": "authentication_failed",
+                        "error_details": "401", "last_assistant_message": "Not logged in"});
+    let r = reduce(&failed, 1);
+    assert_eq!(
+        (r.error.as_deref(), r.answer.as_deref()),
+        (Some("authentication_failed"), Some("Not logged in"))
+    );
+    // With no `error`, the reply's text is not taken for one.
+    let r = reduce(
+        &json!({"hook_event_name": "StopFailure", "last_assistant_message": "API Error"}),
+        1,
+    );
+    assert_eq!((r.error, r.text.as_deref()), (None, Some("API Error")));
+    let r = reduce(
+        &json!({"hook_event_name": "Stop", "error": "x", "last_assistant_message": "ok"}),
+        1,
+    );
+    assert_eq!(r.error, None);
+    // A hook as an older `_hook` sent it, or the spool kept it, has none.
+    let old: Hook = serde_json::from_value(json!({"event": "StopFailure", "at": 1})).unwrap();
+    assert_eq!(old.error, None);
+    assert!(
+        serde_json::to_value(reduce(&json!({"hook_event_name": "Stop"}), 1))
+            .unwrap()
+            .get("error")
+            .is_none()
+    );
+}
+
+#[test]
+fn cut_off_is_a_failed_turn_with_no_prompt_and_no_clear_since() {
+    let ev = |e: &str, at: i64| hook(json!({"hook_event_name": e}), at);
+    let fail = |a: &mut Aware, at: i64| {
+        a.hook(&ev("UserPromptSubmit", at));
+        a.hook(&hook(json!({"hook_event_name": "StopFailure", "error": "rate_limit"}), at + 1));
+        assert!(a.cut_off, "{at}");
+    };
+    let mut a = Aware::default();
+    a.registry(Some(Registry::Idle), 1);
+    assert!(!a.cut_off);
+    fail(&mut a, 10);
+    // Seen, compacted or resumed, it is still where the error left it.
+    a.seen();
+    a.hook(&hook(json!({"hook_event_name": "SessionStart", "source": "compact"}), 20));
+    a.hook(&hook(json!({"hook_event_name": "SessionStart", "source": "resume"}), 21));
+    assert!(a.cut_off);
+    // A prompt went in and Esc ended its turn, which no hook tells of: resting, not cut off.
+    a.hook(&ev("UserPromptSubmit", 30));
+    a.registry(Some(Registry::Idle), 31);
+    assert_eq!((a.state(), a.cut_off), (State::Resting, false));
+    // A new turn at a permission dialog.
+    fail(&mut a, 40);
+    a.hook(&ev("UserPromptSubmit", 50));
+    a.hook(&hook(
+        json!({"hook_event_name": "Notification", "notification_type": "permission_prompt"}),
+        51,
+    ));
+    assert!(!a.cut_off);
+    // A fresh conversation.
+    fail(&mut a, 60);
+    a.hook(&hook(json!({"hook_event_name": "SessionStart", "source": "clear"}), 70));
+    assert!(!a.cut_off);
+    // A turn that ended any other way.
+    fail(&mut a, 80);
+    a.hook(&ev("UserPromptSubmit", 90));
+    a.hook(&ev("Stop", 91));
+    assert!(!a.cut_off);
+    // A renew keeps it only into the same conversation.
+    fail(&mut a, 100);
+    assert!(a.renewed(true).cut_off);
+    assert!(!a.renewed(false).cut_off);
+}
+
+#[test]
 fn a_card_may_go_to_a_finished_turn_but_never_into_a_dialog_or_an_unlisted_session() {
     let mut a = Aware::default();
     assert_eq!(a.blocked(), Some("is still starting up"), "no snapshot yet: the trust dialog");

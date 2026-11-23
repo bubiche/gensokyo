@@ -242,9 +242,9 @@ session; "Allow once" is under its arrow.
 ## Spell cards
 
 A **spell card** is a prompt in a file. `Ctrl-] c` asks which card, then who gets it —
-everyone, everyone who needs you, everyone resting, or one resident, starting on the one on
-screen — and types it into each one's prompt as if you had typed it there. Four ship with
-gensokyo:
+everyone, everyone who needs you, everyone resting, everyone an error cut off, or one resident,
+starting on the one on screen — and types it into each one's prompt as if you had typed it
+there. Five ship with gensokyo:
 
 | Card | Its summary |
 |---|---|
@@ -252,6 +252,7 @@ gensokyo:
 | `Border Sign "Sync Up"` | every resident tells the others what it is on, and raises any overlap with the one it affects |
 | `Review Sign "Second Opinion"` | another resident reviews your uncommitted diff, and you iterate until it says LGTM |
 | `Time Sign "Wrap Up"` | summarize the session, leave the tree clean, then go quiet |
+| `Revival Sign "Carry On"` | whoever an error cut off mid-turn checks what landed, then carries on (cast it at failed) |
 
 ![The cast dialog over the shrine, asking which spell card](docs/cast.svg)
 
@@ -297,7 +298,16 @@ cast Spirit Sign "Status Report" on Reimu and Sakuya; Marisa has a dialog waitin
 ```
 
 From a shell, `gensokyo broadcast` alone lists the cards; the targets are `all`, `awaiting`,
-`idle` or residents by name, slot or id, and `--with Sanae` names a pair card's peer.
+`idle`, `failed` or residents by name, slot or id, and `--with Sanae` names a pair card's peer.
+`failed` is everyone whose last turn ended on an error (the Mac slept, the login lapsed) and
+who has had nothing since: no prompt, no `/clear`. The result says what stopped each one, as
+Claude Code named it, so one whose login lapsed shows as that and not as a stall worth casting
+at again:
+
+```
+$ gensokyo broadcast carry-on failed
+cast Revival Sign "Carry On" on 3 residents; Reimu, Marisa and Sakuya stopped on rate_limit; Mystia has a prompt half typed into it (Ctrl-C there clears it); left out
+```
 
 ## Roles
 

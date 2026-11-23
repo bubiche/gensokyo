@@ -97,3 +97,18 @@ fn a_card_is_typed_without_controls_and_bracketed_only_when_asked() {
     assert_eq!(typed(t, false), b"one[201~\rtwo\tend");
     assert_eq!(typed(t, true), b"\x1b[200~one[201~\rtwo\tend\x1b[201~");
 }
+
+#[test]
+fn every_shipped_card_loads_with_a_prompt_and_no_problem() {
+    let shipped = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/share/spellcards"));
+    let (cards, bad) = load(&[shipped]);
+    assert!(bad.is_empty(), "{bad:?}");
+    assert!(cards.len() >= 5, "{cards:?}");
+    for c in &cards {
+        assert_eq!(c.problem, None, "{}", c.slug);
+        assert!(!c.body.is_empty() && !c.summary.is_empty(), "{}", c.slug);
+        assert_eq!(c.pair, c.body.contains("{peer}"), "{}", c.slug);
+    }
+    let carry = find_card(&cards, "carry-on").unwrap();
+    assert!(carry.body.contains("{cwd}") && !carry.pair, "{}", carry.body);
+}

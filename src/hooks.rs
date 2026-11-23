@@ -98,6 +98,11 @@ pub fn reduce(j: &Value, at: i64) -> Hook {
         tool: s("/tool_name").map(String::from),
         text,
         answer,
+        error: (event == "StopFailure")
+            .then(|| s("/error"))
+            .flatten()
+            .map(|e| tele::clean(e, 80))
+            .filter(|e| !e.is_empty()),
         cwd: s("/cwd").filter(|c| tele::is_dir_path(c)).map(String::from),
         input: ["PermissionRequest", "PostToolUse"]
             .contains(&event)

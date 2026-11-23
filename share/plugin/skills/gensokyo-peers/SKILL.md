@@ -55,8 +55,8 @@ this is the first thing to suspect - and you cannot fix it by asking again the s
 ## When not to use this
 
 Saying the same thing to everybody is a spell card, not a conversation: `gensokyo broadcast
-<card> all|awaiting|idle|<name>`, or the shrine's `[cast c]` button. If the user wants this
-exchange again later, show them a card to save as `spellcards/<name>.md` in the config dir
+<card> all|awaiting|idle|failed|<name>`, or the shrine's `[cast c]` button. If the user wants
+this exchange again later, show them a card to save as `spellcards/<name>.md` in the config dir
 (usually `~/.config/gensokyo/`; your file tools are refused there): the opening message as its
 body, with `{self}`, `{peer}`, `{cwd}` and `{residents}` filled in when it is cast, and
 `peer: required` in its frontmatter when it uses `{peer}`, so it is cast only at one resident,

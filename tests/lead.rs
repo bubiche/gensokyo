@@ -713,3 +713,191 @@ fn a_wait_ends_with_its_lead_and_leaves_its_helpers_turns_to_ring() {
     assert_eq!(n["text"], "Marisa is done: echo: one");
     assert_eq!(me(&d, "Marisa")["state"], "awaits");
 }
+
+#[test]
+fn a_cast_at_failed_reaches_whoever_an_error_cut_off_and_says_what_stopped_each() {
+    let d = daemon("failed", &[]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
+    let lead = summon(&d, "Reimu");
+    let mine = helper(&d, &lead, "Marisa");
+    let other = summon(&d, "Youmu");
+    let theirs = helper(&d, &other, "Sakuya");
+    let free = summon(&d, "Sanae");
+    let fine = summon(&d, "Chen");
+    let busy = summon(&d, "Ran");
+    let drafted = summon(&d, "Mystia");
+    let turns = |n: &str| me(&d, n)["turns"].as_u64().unwrap();
+    let fail = |names: &[&str]| {
+        let before: Vec<u64> = names.iter().map(|n| turns(n)).collect();
+        for n in names {
+            input(&d, n, "/fail");
+        }
+        for (n, t) in names.iter().zip(before) {
+            wait(|| turns(n) > t, "the failed turn");
+        }
+    };
+    fail(&["Marisa", "Sakuya", "Sanae", "Ran", "Mystia"]);
+    input(&d, "Chen", "hello");
+    wait(|| turns("Chen") == 1, "Chen's turn");
+    // Ran has gone back to work; Mystia has a prompt half typed.
+    status(&d, &busy, "busy");
+    wait(|| me(&d, "Ran")["state"] == "busy", "Ran busy");
+    let (mut w, mut lines) = d.connect();
+    let keys = json!({"t": "input", "id": 2, "who": "Mystia", "bytes": b"half".to_vec()});
+    writeln!(w, "{keys}\n{}", json!({"t": "list", "id": 1})).unwrap();
+    assert_eq!(next(&mut lines)["t"], "list");
+    let draft = "has a prompt half typed into it (Ctrl-C there clears it)";
+    assert_eq!(me(&d, "Mystia")["blocked"], draft);
+
+    // The error is in the hook's log line and kept with the answer; a good turn keeps none.
+    let failures: Vec<Value> =
+        d.log().into_iter().filter(|l| l["ev"] == "hook" && l["event"] == "StopFailure").collect();
+    assert_eq!(failures.len(), 5);
+    assert!(failures.iter().all(|l| l["error"] == "rate_limit"), "{failures:?}");
+    assert!(d.log().iter().filter(|l| l["event"] == "Stop").all(|l| l.get("error").is_none()));
+    let kept = |r: &Value| -> Value {
+        let f = d.dir.join(format!("answers/{}.json", r["id"].as_str().unwrap()));
+        serde_json::from_slice(&std::fs::read(f).unwrap()).unwrap()
+    };
+    let a = kept(&mine);
+    assert_eq!((&a["ended"], &a["error"]), (&json!("failed"), &json!("rate_limit")), "{a}");
+    let a = kept(&fine);
+    assert!(a["ended"] == "stop" && a.get("error").is_none(), "{a}");
+
+    let cast = |from: Option<&Value>, targets: &[&str]| {
+        let mut args = vec!["broadcast", "hi"];
+        args.extend(targets);
+        let o = match from {
+            Some(r) => inside(&d, r, &args),
+            None => d.command(&args).stdin(Stdio::null()).output().unwrap(),
+        };
+        if o.status.success() { out(&o) } else { err(&o) }.trim().to_string()
+    };
+    // From the user's terminal: everyone cut off and free, helpers too. Busy Ran and Chen,
+    // whose turn ended well, are not named; Mystia is, as a group cast names anyone held.
+    assert_eq!(
+        cast(None, &["failed"]),
+        format!(
+            "cast Hi on 3 residents; Marisa, Sakuya and Sanae stopped on rate_limit; Mystia {draft}; left out"
+        )
+    );
+    for r in [&mine, &theirs, &free] {
+        wait(|| d.stub(&r["id"], "input").contains("Hello"), "the card");
+    }
+    for r in [&lead, &other, &fine, &busy, &drafted] {
+        assert!(!d.stub(&r["id"], "input").contains("Hello"), "{r}");
+    }
+    // The card's own turns ended well: nobody is cut off now.
+    for n in ["Marisa", "Sakuya", "Sanae"] {
+        wait(|| kept(&me(&d, n))["ended"] == "stop", "the card's turn");
+    }
+    assert_eq!(
+        cast(None, &["failed"]),
+        format!("gensokyo: nobody to cast Hi at; Mystia {draft}; left out")
+    );
+
+    // From inside a lead: its own helper and residents nobody leads, never another lead's
+    // helper. Its wait collects Marisa's failed turn, which clears her gold: still a target.
+    fail(&["Marisa", "Sakuya", "Sanae"]);
+    let (code, l) = waited(inside(&d, &lead, &["wait", "Marisa", "--timeout", "5s"]));
+    assert_eq!((code, &l[0]["ended"]), (0, &json!("failed")), "{l:?}");
+    assert_eq!(me(&d, "Marisa")["state"], "resting");
+    assert_eq!(
+        cast(Some(&lead), &["failed"]),
+        format!(
+            "cast Hi on Marisa and Sanae; Marisa and Sanae stopped on rate_limit; Mystia {draft}; left out"
+        )
+    );
+    wait(|| d.stub(&free["id"], "input").matches("Hello Sanae.").count() == 2, "Sanae's card");
+    assert_eq!(d.stub(&theirs["id"], "input").matches("Hello").count(), 1);
+}
+
+#[test]
+fn a_prompt_or_a_clear_after_a_failure_takes_a_resident_out_of_failed_and_a_recall_does_not() {
+    let d = daemon("unfailed", &[]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
+    let names = ["Sakuya", "Sanae", "Chen", "Ran", "Mystia"];
+    let rs: Vec<Value> = names.iter().map(|n| summon(&d, n)).collect();
+    for n in names {
+        input(&d, n, "/fail");
+    }
+    for n in names {
+        wait(|| me(&d, n)["turns"] == 1, "the failed turn");
+    }
+    // A fresh conversation.
+    input(&d, "Sakuya", "/clear");
+    wait(|| d.log().iter().any(|l| l["event"] == "SessionStart" && l["kind"] == "clear"), "clear");
+    // A prompt, its turn ended by Esc, which no hook tells of: resting.
+    input(&d, "Sanae", "/work");
+    wait(|| d.stub(&rs[1]["id"], "input").contains("/work"), "Sanae's prompt");
+    status(&d, &rs[1], "idle");
+    // A prompt still at work, and one at a permission dialog.
+    input(&d, "Chen", "/work");
+    status(&d, &rs[2], "busy");
+    input(&d, "Ran", "/work");
+    input(&d, "Ran", "/perm");
+    wait(|| me(&d, "Ran")["state"] == "awaits" && me(&d, "Chen")["state"] == "busy", "Ran, Chen");
+    let prompted = |n: &str| {
+        d.log()
+            .iter()
+            .filter(|l| l["event"] == "UserPromptSubmit" && l["id"] == me(&d, n)["id"])
+            .count()
+    };
+    wait(|| prompted("Sanae") == 2, "Sanae's prompt hook");
+    wait(|| me(&d, "Sanae")["state"] == "resting", "Sanae resting");
+    // Recalled into its conversation, Mystia is still where the error left her.
+    d.cli(&["banish", "Mystia"]);
+    d.cli(&["resume", "Mystia"]);
+    wait(|| d.stub(&rs[4]["id"], "args").contains("--resume"), "the recall");
+    wait(
+        || me(&d, "Mystia")["blocked"].is_null() && me(&d, "Mystia")["pid"].is_number(),
+        "Mystia back",
+    );
+
+    let o = d.cli(&["broadcast", "hi", "failed"]);
+    assert_eq!(out(&o).trim(), "cast Hi on Mystia; Mystia stopped on rate_limit");
+    wait(|| d.stub(&rs[4]["id"], "input").contains("Hello Mystia."), "Mystia's card");
+    for r in &rs[..4] {
+        assert!(!d.stub(&r["id"], "input").contains("Hello"), "{r}");
+    }
+}
+
+#[test]
+fn a_recall_into_a_conversation_cleared_after_a_failure_is_not_cut_off() {
+    let d = daemon("stale", &[]);
+    let cards = d.dir.join("conf/spellcards");
+    std::fs::create_dir_all(&cards).unwrap();
+    std::fs::write(cards.join("hi.md"), "---\ntitle: Hi\n---\nHello {self}.").unwrap();
+    let r = summon(&d, "Reimu");
+    input(&d, "Reimu", "/fail");
+    wait(|| me(&d, "Reimu")["turns"] == 1, "the failed turn");
+    input(&d, "Reimu", "/clear");
+    wait(|| d.log().iter().any(|l| l["ev"] == "session" && l["id"] == r["id"]), "the new session");
+    d.cli(&["banish", "Reimu"]);
+    wait(|| me(&d, "Reimu")["state"] == "departed", "gone");
+    // The cleared conversation has a file of its own, so the recall resumes it; the failed
+    // answer kept is still the one from before the clear.
+    let id = r["id"].as_str().unwrap();
+    let file = d.dir.join(format!("residents/{id}.json"));
+    let rec: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+    let session = rec["session"].as_str().unwrap().to_string();
+    assert_ne!(session, id);
+    std::fs::write(d.dir.join(format!("claude/projects/stub/{session}.jsonl")), "").unwrap();
+    std::fs::write(d.dir.join(format!("stub/{session}.name")), "Reimu\n").unwrap();
+    let a: Value =
+        serde_json::from_slice(&std::fs::read(d.dir.join(format!("answers/{id}.json"))).unwrap())
+            .unwrap();
+    assert_eq!(a["ended"], "failed");
+    d.cli(&["resume", "Reimu"]);
+    // The stub keeps its files under the session it runs as.
+    let now = json!(session);
+    wait(|| d.stub(&now, "args").contains(&format!("--resume {session}")), "the recall");
+    wait(|| me(&d, "Reimu")["blocked"].is_null() && me(&d, "Reimu")["pid"].is_number(), "back");
+    let o = d.command(&["broadcast", "hi", "failed"]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(err(&o).trim(), "gensokyo: nobody to cast Hi at");
+    assert!(!d.stub(&now, "input").contains("Hello"));
+}

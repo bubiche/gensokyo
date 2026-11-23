@@ -1,5 +1,6 @@
 //! Casting spell cards: whom a card reaches, and typing it into each as if the user had. The
 //! cards themselves are `card.rs`.
+use super::lead;
 use super::log::log;
 use super::notify::after;
 use super::registry;
@@ -21,6 +22,9 @@ const SHOW_WAIT: Duration = Duration::from_secs(5);
 /// From the paste to the Enter, at the least.
 const ENTER_GAP: Duration = Duration::from_millis(300);
 
+/// The groups a card is cast at, as targets name them.
+const GROUPS: [&str; 4] = ["all", "awaiting", "idle", "failed"];
+
 fn dirs(sh: &Shrine) -> Vec<PathBuf> {
     let mut d = vec![paths::config_dir().join("spellcards")];
     d.extend(sh.share.as_ref().map(|s| s.join("spellcards")));
@@ -33,12 +37,14 @@ pub(super) fn cards(sh: &Shrine) -> (Vec<proto::Card>, Vec<String>) {
     (cards.iter().map(Card::listed).collect(), bad)
 }
 
-/// One resident a card is typed into: its id, name, screen and the text filled in for it.
+/// One resident a card is typed into: its id, name, screen and the text filled in for it, and
+/// the error that cut off its last turn, if one did.
 struct Target {
     id: String,
     name: String,
     handle: Rc<Handle>,
     text: String,
+    failed: Option<String>,
 }
 
 /// "A", "A and B", "A, B and C".
@@ -69,7 +75,7 @@ pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Resu
             return Err(format!("{} has no prompt in it, only frontmatter", card.title));
         }
         if c.targets.is_empty() {
-            return Err("name who gets it: all, awaiting, idle, or a resident".into());
+            return Err(format!("name who gets it: {}, or a resident", GROUPS.join(", ")));
         }
         card
     };
@@ -81,18 +87,29 @@ pub(super) async fn cast(shrine: &Shared, c: Cast, caller: Option<&str>) -> Resu
             let shrine = shrine.clone();
             tokio::task::spawn_local(async move {
                 let r = deliver(&shrine, &t.id, &t.handle, &t.text, "card").await;
-                (t.name, r)
+                (t.name, t.failed, r)
             })
         })
         .collect();
-    let mut sent = Vec::new();
+    let (mut sent, mut failed) = (Vec::new(), Vec::<(String, Vec<String>)>::new());
     for r in runs {
         match r.await {
-            Ok((name, Ok(()))) => sent.push(name),
-            Ok((name, Err(why))) => notes.push(format!("{name} {why}")),
+            Ok((name, why, Ok(()))) => {
+                // Who got it after an error, by error: a login that lapsed is no stall.
+                if let Some(why) = why {
+                    match failed.iter_mut().find(|(w, _)| *w == why) {
+                        Some((_, who)) => who.push(name.clone()),
+                        None => failed.push((why, vec![name.clone()])),
+                    }
+                }
+                sent.push(name);
+            }
+            Ok((name, _, Err(why))) => notes.push(format!("{name} {why}")),
             Err(_) => {}
         }
     }
+    let failed = failed.into_iter().map(|(why, who)| format!("{} stopped on {why}", names(&who)));
+    notes.splice(0..0, failed);
     log(json!({"ev": "cast", "card": card.slug, "sent": sent, "notes": notes}));
     let notes = notes.iter().map(|n| format!("; {n}")).collect::<String>();
     match sent.len() {
@@ -129,20 +146,26 @@ fn aim(
         let owner = sh.entries[i].rec.owner.as_deref();
         me(i) || caller.is_some_and(|c| owner.is_some_and(|o| o != c))
     };
+    // What cut off its last turn, if an error did and nothing has gone in since.
+    let failed = |i: usize| {
+        let e = &sh.entries[i];
+        let cut = e.aware.cut_off && e.aware.state() != State::Busy;
+        cut.then(|| lead::failed_on(&sh.store, &e.rec.id)).flatten()
+    };
     let mut ids: Vec<usize> = Vec::new();
     let mut notes = Vec::new();
-    let group = c.targets.iter().any(|t| ["all", "awaiting", "idle"].contains(&t.as_str()));
     for t in &c.targets {
         let hits: Vec<usize> = match t.as_str() {
-            "all" | "awaiting" | "idle" => (0..sh.entries.len())
+            g if GROUPS.contains(&g) => (0..sh.entries.len())
                 .filter(|&i| {
                     !other(i) && live(i).is_some() && sh.entries[i].aware.blocked().is_none()
                 })
                 .filter(|&i| {
                     let st = sh.entries[i].aware.state();
-                    match t.as_str() {
+                    match g {
                         "awaiting" => st.needs_you(),
                         "idle" => st == State::Resting,
+                        "failed" => failed(i).is_some(),
                         _ => true,
                     }
                 })
@@ -155,11 +178,16 @@ fn aim(
             }
         }
     }
-    if group {
-        for (i, e) in sh.entries.iter().enumerate() {
-            if let (Some(_), Some(why), false) = (live(i), e.aware.blocked(), other(i)) {
-                notes.push(format!("{} {why}; left out", e.rec.name));
-            }
+    // Everyone a group would have had, but for something in the way; for `failed` alone, only
+    // those an error cut off.
+    let named = |g: &str| c.targets.iter().any(|t| t == g);
+    let everyone = ["all", "awaiting", "idle"].iter().any(|g| named(g));
+    let held = |i: usize| everyone || named("failed") && failed(i).is_some();
+    for (i, e) in sh.entries.iter().enumerate() {
+        if let (Some(_), Some(why), false) = (live(i), e.aware.blocked(), other(i))
+            && held(i)
+        {
+            notes.push(format!("{} {why}; left out", e.rec.name));
         }
     }
     if ids.is_empty() {
@@ -231,6 +259,7 @@ fn aim(
             name: e.rec.name.clone(),
             handle: h.clone(),
             text: fill(&card.body, &vals),
+            failed: failed(i),
         });
     }
     Ok((targets, notes))

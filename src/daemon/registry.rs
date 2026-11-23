@@ -252,7 +252,7 @@ pub(super) fn seen(shrine: &Shared, list: &[Session], at: i64) {
             e.rec.name = n.clone();
             let _ = sh.store.save(&sh.entries[i].rec);
         }
-        super::ingest::tally(sh, i, None);
+        super::ingest::tally(sh, i, None, None);
         if renamed.is_some() || sh.entries[i].aware.state() != before {
             after(sh, i, before);
         }

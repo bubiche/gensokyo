@@ -269,7 +269,7 @@ async fn exit(shrine: &Shared, h: &Handle) {
 /// as any other that left when that fails.
 fn relaunch(shrine: &Shared, sh: &mut Shrine, i: usize, exit: Exit) {
     // Its last news counted before the new start forgets it.
-    super::ingest::tally(sh, i, None);
+    super::ingest::tally(sh, i, None, None);
     let rec = sh.entries[i].rec.clone();
     // The mode it was in, as its hooks say; bypassing permissions only when it was started so,
     // as Claude Code reaches that mode no other way, and a hook is anyone's to send.

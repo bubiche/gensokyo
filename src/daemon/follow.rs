@@ -175,7 +175,7 @@ fn seen(shrine: &Shared, sh: &mut Shrine, i: usize, body: &str, now: i64) {
     e.rec.turns += new.len() as u64;
     let ended = if last.failed { Ended::Failed } else { Ended::Stop };
     let (r, failed) = (e.rec.clone(), last.failed);
-    super::lead::keep_answer(&sh.store, &r, ended, Some(&last.answer));
+    super::lead::keep_answer(&sh.store, &r, ended, Some(&last.answer), None);
     let _ = sh.store.save(&r);
     log(json!({"ev": "follow", "id": r.id, "turns": r.turns, "failed": failed}));
     // A helper's, held while its lead will collect it.

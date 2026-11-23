@@ -7,6 +7,7 @@ expression: modal_box(&m).backend()
 "│   everyone                            │"
 "│ › everyone who needs you              │"
 "│   everyone resting                    │"
+"│   everyone an error cut off           │"
 "│   1 ○ Reimu        ~/dev/gensokyo     │"
 "│   2 ○ Marisa       ~/dev/scratch_repo │"
 "│ [cast ⏎] [cancel esc]                 │"

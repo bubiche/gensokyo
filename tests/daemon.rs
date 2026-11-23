@@ -604,7 +604,10 @@ fn raw(d: &Daemon, lines: &str) -> Vec<Value> {
     let s = UnixStream::connect(d.socket()).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     (&s).write_all(lines.as_bytes()).unwrap();
-    s.shutdown(std::net::Shutdown::Write).unwrap();
+    // A daemon that refuses the hello closes first, and then there is nothing to shut.
+    if let Err(e) = s.shutdown(std::net::Shutdown::Write) {
+        assert_eq!(e.kind(), std::io::ErrorKind::NotConnected, "{e}");
+    }
     let lines = BufReader::new(s).lines().map_while(Result::ok);
     lines.map(|l| serde_json::from_str(&l).unwrap()).collect()
 }

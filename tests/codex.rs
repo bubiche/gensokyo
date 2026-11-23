@@ -86,20 +86,41 @@ fn codex_is_found_where_it_was_set_then_on_path_then_in_the_app() {
     let (own, real) = (dir.join("own"), dir.join("real"));
     script(&own, "codex");
     let theirs = script(&real, "codex");
-    let app = script(&dir.join("app"), "codex");
+    let new = script(&dir.join("app/codex-cli/bin"), "codex");
+    let old = script(&dir.join("app"), "codex");
+    let app = [new.clone(), old.clone()];
     let path = std::env::join_paths([&own, &real]).unwrap();
     let set = Some(OsString::from("/set/codex"));
     assert_eq!(codex::find(set, Some(&path), &own, &app), Some("/set/codex".into()));
     assert_eq!(codex::find(None, Some(&path), &own, &app), Some(theirs));
     // gensokyo's own directory is never where it is found.
     let own_only = std::env::join_paths([&own]).unwrap();
-    assert_eq!(codex::find(None, Some(&own_only), &own, &app), Some(app.clone()));
-    assert_eq!(codex::find(None, None, &own, &app), Some(app));
+    assert_eq!(codex::find(None, Some(&own_only), &own, &app), Some(new.clone()));
+    assert_eq!(codex::find(None, None, &own, &app), Some(new.clone()));
+    // An app without the first of its places has the next.
+    let older = [dir.join("app/none/codex"), old.clone()];
+    assert_eq!(codex::find(None, None, &own, &older), Some(old.clone()));
     // An app that is not there, or does not run, is no codex.
-    assert_eq!(codex::find(None, None, &own, &dir.join("none")), None);
+    assert_eq!(codex::find(None, None, &own, &[dir.join("none")]), None);
     let plain = dir.join("plain");
     std::fs::write(&plain, "").unwrap();
-    assert_eq!(codex::find(None, None, &own, &plain), None);
+    assert_eq!(codex::find(None, None, &own, &[plain]), None);
+}
+
+#[test]
+fn the_app_has_codex_in_its_new_place_first_then_its_old_one() {
+    let res = "/Applications/ChatGPT.app/Contents/Resources";
+    assert_eq!(codex::APP, [format!("{res}/codex-cli/bin/codex"), format!("{res}/codex")]);
+}
+
+#[test]
+fn doctor_says_which_rule_found_codex() {
+    for app in codex::APP {
+        assert_eq!(codex::rule(Path::new(app), false), "the ChatGPT app");
+        assert_eq!(codex::rule(Path::new(app), true), "GENSOKYO_CODEX");
+    }
+    assert_eq!(codex::rule(Path::new("/opt/homebrew/bin/codex"), false), "PATH");
+    assert_eq!(codex::rule(Path::new("/opt/homebrew/bin/codex"), true), "GENSOKYO_CODEX");
 }
 
 #[test]

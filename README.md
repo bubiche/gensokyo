@@ -628,7 +628,8 @@ ends); a lead recalled before then keeps it.
 
 OpenAI's Codex can be a resident too: `gensokyo new ~/dev/x --agent codex`, from a shell (the
 summon dialog starts Claude Code). It runs `$GENSOKYO_CODEX`, else the first `codex` on `PATH`,
-else `/Applications/ChatGPT.app/Contents/Resources/codex`. `-m` reaches it as `-m`, and `-e` as
+else the ChatGPT app's: `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`, or
+`Resources/codex` in older versions of the app. `-m` reaches it as `-m`, and `-e` as
 `-c model_reasoning_effort=…` (one word). It takes no `--allowed-tools`, and is never a cloud
 session or a run taken over. Its hooks, gensokyo's words and its mode go in as flags; nothing in
 `~/.codex` is written. The permission mode becomes Codex's sandbox and approvals:

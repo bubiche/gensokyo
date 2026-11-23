@@ -156,11 +156,7 @@ fn codex(path: Option<&OsStr>) -> Vec<String> {
             "none (optional): not in GENSOKYO_CODEX, on PATH or in the ChatGPT app".into(),
         ];
     };
-    let rule = match () {
-        _ if std::env::var_os("GENSOKYO_CODEX").is_some_and(|c| !c.is_empty()) => "GENSOKYO_CODEX",
-        _ if c == Path::new(codex::APP) => "the ChatGPT app",
-        _ => "PATH",
-    };
+    let rule = codex::rule(&c, codex::set().is_some());
     // A home that is not there, never made: Codex leaves its temp files in the one it runs with.
     let none = std::env::temp_dir().join(format!("gensokyo-doctor-{}", std::process::id()));
     let v = run(Command::new(&c).arg("--version").env("CODEX_HOME", none), Duration::from_secs(10));

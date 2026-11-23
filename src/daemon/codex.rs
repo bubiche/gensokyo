@@ -6,8 +6,12 @@ use super::launch::{LEDGER, Options, Paths, executable, on_path, sh_quote};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-/// The ChatGPT app's own copy, for when there is no other.
-pub const APP: &str = "/Applications/ChatGPT.app/Contents/Resources/codex";
+/// The ChatGPT app's own copy, for when there is no other: where the app keeps it now, then
+/// where older versions of the app did.
+pub const APP: [&str; 2] = [
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+];
 
 /// The hooks a Codex resident's state comes from.
 pub const HOOKS: [&str; 7] = [
@@ -75,21 +79,36 @@ pub const MISSING: &str = "codex not found: not on PATH, in GENSOKYO_CODEX or in
 /// The `codex` to run: `$GENSOKYO_CODEX` unless empty, else the first on PATH that is not in
 /// gensokyo's own shim directory, else the ChatGPT app's.
 pub fn program(path: Option<&OsStr>) -> Option<PathBuf> {
-    let set = std::env::var_os("GENSOKYO_CODEX").filter(|c| !c.is_empty());
-    find(set, path, &crate::shim::dir(), Path::new(APP))
+    find(set(), path, &crate::shim::dir(), &APP)
 }
 
-/// `set` when given, else the first `codex` on `path` outside `skip`, else `app` if it runs.
+/// `$GENSOKYO_CODEX`, unless unset or empty.
+pub fn set() -> Option<OsString> {
+    std::env::var_os("GENSOKYO_CODEX").filter(|c| !c.is_empty())
+}
+
+/// `set` when given, else the first `codex` on `path` outside `skip`, else the first of `app`
+/// that runs.
 pub fn find(
     set: Option<OsString>,
     path: Option<&OsStr>,
     skip: &Path,
-    app: &Path,
+    app: &[impl AsRef<Path>],
 ) -> Option<PathBuf> {
     if let Some(c) = set {
         return Some(c.into());
     }
-    on_path(path, skip, "codex").or_else(|| executable(app).then(|| app.to_path_buf()))
+    let app = || app.iter().map(AsRef::as_ref).find(|a| executable(a)).map(Path::to_path_buf);
+    on_path(path, skip, "codex").or_else(app)
+}
+
+/// Which rule [`program`] found `codex` by, `set` when `$GENSOKYO_CODEX` names one.
+pub fn rule(codex: &Path, set: bool) -> &'static str {
+    match () {
+        _ if set => "GENSOKYO_CODEX",
+        _ if APP.iter().any(|a| codex == Path::new(a)) => "the ChatGPT app",
+        _ => "PATH",
+    }
 }
 
 /// The argv for a start, or why there is none: a mode Codex has no flags for, or an effort that

@@ -131,3 +131,23 @@ fn a_chief_of_staff_from_0_7_1_comes_back_in_its_own_words_and_keeps_no_ledger()
     assert!(!told.contains("ledger"), "{told}");
     assert!(!d.dir.join("ledgers").exists());
 }
+
+#[test]
+fn a_wait_line_without_a_context_reads_and_prints_as_0_7_1_had_it() {
+    use gensokyo::proto::{Ended, Report, State};
+    // A `wait` line in the shape 0.7.1 printed it, which a lead's 0.7.1 skill reads.
+    let then = r#"{"id":"9e8d","name":"flaky-ci","state":"resting","turns":3,"needs":0,"news":true,"ended":"stop","answer":"LGTM"}"#;
+    let r: Report = serde_json::from_str(then).unwrap();
+    assert_eq!(r.ctx, None);
+    assert_eq!(
+        (r.state, r.ended, r.answer.as_deref()),
+        (State::Resting, Some(Ended::Stop), Some("LGTM"))
+    );
+    // Unknown, it is left out: the line is 0.7.1's, byte for byte.
+    assert_eq!(serde_json::to_string(&r).unwrap(), then);
+    // Known, it is one more field, which 0.7.1's Report ignores.
+    let now = serde_json::to_string(&Report { ctx: Some(72), ..r }).unwrap();
+    assert!(now.contains(r#","ctx":72,"#), "{now}");
+    let r: Value = serde_json::from_str(&now).unwrap();
+    assert_eq!(r["ctx"], 72);
+}

@@ -188,6 +188,25 @@ fn wait_until_needs_hears_of_each_dialog_once() {
 }
 
 #[test]
+fn wait_tells_how_full_each_helpers_context_is_once_its_status_line_has_said() {
+    let d = daemon("ctx", &[]);
+    let lead = summon(&d, "Reimu");
+    let m = helper(&d, &lead, "Marisa");
+    helper(&d, &lead, "Sanae");
+    let (mut w, _lines) = d.connect();
+    let line = json!({"t": "statusline", "resident": m["id"], "telemetry": {"ctx": 72}});
+    writeln!(w, "{line}").unwrap();
+    wait(|| me(&d, "Marisa")["telemetry"]["ctx"] == 72, "Marisa's status line");
+
+    let (code, l) = waited(inside(&d, &lead, &["wait", "Marisa", "Sanae", "--timeout", "5s"]));
+    assert_eq!(code, 0, "{l:?}");
+    assert_eq!((&l[0]["name"], &l[0]["ctx"]), (&json!("Marisa"), &json!(72)));
+    // No status line yet: not known, so not there at all.
+    assert_eq!(l[1]["name"], "Sanae");
+    assert!(l[1].get("ctx").is_none(), "{}", l[1]);
+}
+
+#[test]
 fn turns_answers_and_owner_survive_a_recall_and_a_restart() {
     let d = daemon("survive", &[("STUB_IDLE", "1")]);
     let lead = summon(&d, "Reimu");

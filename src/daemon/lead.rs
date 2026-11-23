@@ -198,6 +198,7 @@ fn report(sh: &Shrine, id: &str, base: Base, until: Option<Until>) -> Report {
         state,
         turns: rec.turns,
         needs: rec.needs,
+        ctx: e.and_then(|e| e.tele.as_ref()).and_then(|t| t.ctx),
         ended: a.as_ref().map(|a| a.ended),
         answer: a.and_then(|a| a.text.as_deref().and_then(first)),
     }

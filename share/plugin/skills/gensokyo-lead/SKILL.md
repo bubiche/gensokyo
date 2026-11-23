@@ -89,8 +89,9 @@ gensokyo remembers what you have been told about each helper: each wait returns 
 your last wait that ended in news, or your last read, so a turn that ended before you waited still
 counts. A helper that departed is news once; after that a wait leaves it out, and one on only
 such helpers is refused. It prints one JSON line per helper: `name`, `state`, `turns`, `needs`,
-`news`, `ended` (`stop`, `failed`, `interrupted`, `unreported`), and `answer`, the report's first
-line. Without `--any` it waits for each of them;
+`news`, `ended` (`stop`, `failed`, `interrupted`, `unreported`), `ctx`, the percent of its
+context window in use, as `list` shows it (missing until that is known), and `answer`, the
+report's first line. Without `--any` it waits for each of them;
 `--until done|needs|gone` narrows what counts.
 
 - **exit 0**: news. For each line with `"news": true`, `gensokyo read <name>` prints the whole
@@ -135,9 +136,14 @@ permission checks weigh each step against the task it was briefed with, and a la
 asking for more may be refused. Do it yourself, hand the user the command, or summon a fresh
 helper whose brief asks for that step.
 
-When a helper's context grows large, ask it to write a handover file (what is done, what is
-next, where things are) in your scratchpad or its own, never inside a worktree, then summon a
-fresh helper briefed from that file and close the old one.
+Hand a helper over once its `ctx` in `wait` reaches 70%, where the sidebar turns it warm (90% is
+hot): ask it to write a handover file (what is done, what is next, where things are) in your
+scratchpad or its own, never inside a worktree, then summon a fresh helper briefed from that file
+and close the old one. Never cut a turn short for it: while it is `busy`, wait for the turn to
+end. If that turn finished its task, ask for the handover instead of giving it the next one; if
+the task is half done, ask it to finish its current step and then write the handover, or to
+write it straight away once `ctx` is past 90%. A line with no `ctx` has not reported one yet (a
+cloud helper never does): that is unknown, not low.
 
 ## When a helper needs the user
 

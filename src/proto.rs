@@ -303,6 +303,9 @@ pub struct Report {
     pub turns: u64,
     pub needs: u64,
     pub news: bool,
+    /// Its context window used, percent, as `list` has it: none until that is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctx: Option<u32>,
     /// How its last turn ended, and that turn's answer, first line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<Ended>,

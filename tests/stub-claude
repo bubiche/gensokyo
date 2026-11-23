@@ -35,9 +35,8 @@
 # the registry meanwhile; a paste meanwhile is queued, with no Stop of its own. With STUB_HOLD=1
 # the command line's prompt gets no Stop until /finish: a run still going; /work is a prompt
 # whose turn goes on so, a paste queued behind it.
-# Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH writes the
-# tty's `rows cols` to <id>.size and prints it; a signal that interrupts `read` loses the part
-# of the line read so far, so it is off by default.
+# Every line read goes to <id>.input as it came. With STUB_WINCH=1 every SIGWINCH prints the
+# tty's `rows cols`, then writes it to <id>.size; off by default, as the lines go in the output.
 # Signals, for banish and sweep tests (Claude Code survives Ctrl-C, and so does the stub):
 #   STUB_HUP=exit (default) | ignore | <seconds>   exit on SIGHUP, ignore it, or linger first
 #   STUB_TERM=exit (default) | ignore              ignoring SIGTERM too leaves only SIGKILL
@@ -289,14 +288,32 @@ status() {
 }
 
 esc=$(printf '\033')
-leave() { printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$session.json" "$bridge"; }
+winch=''
+leave() {
+  printf '%s[?2004l' "$esc"; rm -f "$STUB_STATE/$session.json" "$bridge"
+  if [ -n "$winch" ]; then kill "$winch" 2>/dev/null; rm -f "$STUB_STATE/$id.winch" "$STUB_STATE/$id.winch-set"; fi
+}
 trap leave EXIT
 # Ignored, not trapped: bash 3.2 can lose the last character of every later line when a trapped
 # SIGINT lands as `read` starts. The tty still throws away a half-typed line on Ctrl-C.
 trap '' INT
-winch() { stty size > "$STUB_STATE/$id.size.tmp"; mv "$STUB_STATE/$id.size.tmp" "$STUB_STATE/$id.size"
-          echo "size $(cat "$STUB_STATE/$id.size")"; }
-[ -n "${STUB_WINCH:-}" ] && trap winch WINCH
+# SIGWINCH is no better: trapped by the shell reading input, it can lose what `read` has so far
+# or a later line's last character, or wait for the next keystroke before its trap runs. So a
+# helper of its own takes it, blocked on a fifo nobody writes to; the reading shell ignores it.
+# The size line goes out before the size file says anything.
+if [ -n "${STUB_WINCH:-}" ]; then
+  rm -f "$STUB_STATE/$id.winch" "$STUB_STATE/$id.winch-set"
+  mkfifo "$STUB_STATE/$id.winch"
+  (
+    trap 's=$(stty size </dev/tty); echo "size $s"; echo "$s" > "$STUB_STATE/$id.size.tmp"
+          mv "$STUB_STATE/$id.size.tmp" "$STUB_STATE/$id.size"' WINCH
+    exec 4<>"$STUB_STATE/$id.winch"
+    : > "$STUB_STATE/$id.winch-set"
+    while :; do read -r _ <&4; done
+  ) &
+  winch=$!
+  until [ -e "$STUB_STATE/$id.winch-set" ]; do sleep 0.01; done
+fi
 case ${STUB_HUP:-exit} in
   exit) trap 'exit 129' HUP ;;
   ignore) trap : HUP ;;

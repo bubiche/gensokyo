@@ -97,6 +97,27 @@ impl Client {
         self.send(s.as_bytes()).await;
     }
 
+    /// Waits until `n` stubs are reading, then until the nudge this client's first view gave a
+    /// resident (a row short, and back a moment later) can do nothing more. A late SIGWINCH
+    /// would print a `size` line where the test does not expect one, and a late resize would
+    /// drop a selection. The nudge goes back to whatever size the
+    /// shrine has when it does, so once the shrine has been at a size of ours, and back, the
+    /// nudge has nothing left to change. Its first resize is made as the resident's first frame
+    /// goes out, before that is on screen, so it comes before ours. A row taller, not a column
+    /// wider: a new width reflows the text.
+    async fn settle(&mut self, dir: &Path, n: usize) {
+        self.wait("the stubs reading", |_| ready(dir) == n).await;
+        let (cols, rows) = self.vt.size();
+        for rows in [rows + 1, rows] {
+            self.pty.resize(pty_process::Size::new(rows, cols)).unwrap();
+            self.vt.resize(cols, rows);
+            // The grid: the window less the 32-column sidebar and the main box.
+            let grid = format!("{} {}", rows - 2, cols - 34);
+            let all = |_: &str| sizes(dir).iter().all(|s| *s == grid);
+            self.wait(&format!("every stub at {grid}"), all).await;
+        }
+    }
+
     /// Reads until the client exits; its status.
     async fn exit(&mut self) -> std::process::ExitStatus {
         let mut buf = vec![0u8; 65536];
@@ -138,20 +159,26 @@ fn ready(dir: &Path) -> usize {
     })
 }
 
-/// Another client on the one resident, the same size as the first, once its nudge is over: the
-/// stub has had both SIGWINCHes and printed the size they leave. Printed later, the `size` line
-/// would land under whatever comes next, and a view scrolled back over that would move a row.
+/// What every stub reading its tty last saw it measure, `rows cols`, after a SIGWINCH.
+fn sizes(dir: &Path) -> Vec<String> {
+    let files = dir.join("stub").read_dir().into_iter().flatten().flatten().map(|e| e.path());
+    let reading = files.filter(|p| p.extension().is_some_and(|x| x == "ready"));
+    let size = |p: PathBuf| std::fs::read_to_string(p.with_extension("size")).unwrap_or_default();
+    reading.map(|p| size(p).trim().to_string()).collect()
+}
+
+/// Another client on the one resident, the same size as the first (which has settled), once its
+/// nudge is over: the stub has had both SIGWINCHes and printed the size they leave. Printed
+/// later, the `size` line would land under whatever comes next, and a view scrolled back over
+/// that would move a row.
 async fn another(dir: &Path, cols: u16, rows: u16) -> Client {
     let reading = dir.join("stub").read_dir().unwrap().flatten().map(|e| e.path());
     let size = reading.filter(|p| p.extension().is_some_and(|x| x == "ready")).last();
     let size = size.expect("the stub reading").with_extension("size");
     // The grid: the window less the 32-column sidebar and the main box. The same window
     // changes nothing, so only the nudge's second resize, back from a row short, writes it.
-    // A first client's nudge left a row short has to be over before that says anything; one
-    // that came before the stub set its trap left nothing at all.
     let grid = format!("{} {}", rows - 2, cols - 34);
     let read = || std::fs::read_to_string(&size).ok().map(|s| s.trim().to_string());
-    wait(|| read().is_none_or(|s| s == grid), "the first client's nudge to pass");
     let _ = std::fs::remove_file(&size);
     let mut c = Client::spawn(dir, cols, rows);
     c.wait("its nudge to pass", |_| read().is_some_and(|s| s == grid)).await;
@@ -217,11 +244,9 @@ async fn summon_type_click_detach_reattach() {
     let args = stub(&dir, "args");
     assert!(args.contains("\n\nYou are a chief of staff.") && !args.contains("ledger"), "{args}");
     assert!(args.contains("\n\nbe brief --"), "{args}");
-    // Typing waits until the stub reads, and past the reattach nudge's two resizes: a SIGWINCH
-    // in the middle of the stub's `read` would lose the line.
-    c.wait("the stub reading", |_| ready(&dir) == 1).await;
-    let t = Instant::now();
-    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(200)).await;
+    // Typing waits until the stub reads, and past the nudge, whose `size` line would land under
+    // what is typed.
+    c.settle(&dir, 1).await;
 
     // Typing reaches the resident.
     c.send(b"hello\r").await;
@@ -233,20 +258,22 @@ async fn summon_type_click_detach_reattach() {
     c.drag((x, y), (x + 6, y)).await;
     c.wait("the copy", |s| s.contains("copied 7 characters")).await;
     c.wait("the copied text", |_| copied() == "> hello").await;
-    assert_eq!(c.reversed(), [(y as usize, "> hello".to_string())]);
+    // The copy is answered at once; the highlight comes with the next frame.
+    c.picked(&[(y, "> hello")]).await;
     // Dragged back up and out over the sidebar, it stops at the grid's edge: rows in reading
     // order, and nothing of the sidebar.
     let (_, top) = find(&s, "gensokyo on PATH");
     c.drag((x + 6, y), (1, top)).await;
     // The stub's line is as long as the path to the binary, and wraps on screen when that is
-    // long: the copy has it whole again.
+    // long: the copy has it whole again. The lines the stub printed on SIGWINCHes, the
+    // settling's and the nudge's if its trap was set in time, are left out.
     let want = format!("gensokyo on PATH: {BIN}\nhello\n> hello");
-    c.wait("the second copy", |_| copied() == want).await;
+    let text =
+        || copied().lines().filter(|l| !l.starts_with("size ")).collect::<Vec<_>>().join("\n");
+    c.wait("the second copy", |_| text() == want).await;
     // A key clears it.
     c.send(b"x\x7f").await;
-    let t = Instant::now();
-    c.wait("a frame after the key", |_| t.elapsed() > Duration::from_millis(100)).await;
-    assert_eq!(c.reversed(), []);
+    c.picked(&[]).await;
 
     // With the resident's mouse mode on, a grid click reaches it grid-relative...
     c.send(b"/mouse\r").await;
@@ -300,6 +327,26 @@ fn cli(dir: &Path, args: &[&str]) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_new_window_size_reaches_a_quiet_resident() {
+    let dir = state("size");
+    let _quit = Quit(dir.clone());
+    cli(&dir, &["new", "work", "-n", "Reimu"]);
+    let mut c = Client::spawn(&dir, 120, 40);
+    c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
+    c.wait("the stub reading", |_| ready(&dir) == 1).await;
+    // Nothing comes from her or the daemon meanwhile: the size goes as the frame finds it, not
+    // with whatever wakes the client next, as late as a minute on.
+    for rows in [30, 45] {
+        c.pty.resize(pty_process::Size::new(rows, 120)).unwrap();
+        c.vt.resize(120, rows);
+        let grid = format!("{} 86", rows - 2);
+        c.wait(&format!("Reimu at {grid}"), |_| sizes(&dir) == [grid.clone()]).await;
+    }
+    c.send(b"\x1dd").await;
+    assert!(c.exit().await.success());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_resident_nobody_watches_rings_the_host() {
     let dir = state("ring");
     let _quit = Quit(dir.clone());
@@ -307,13 +354,11 @@ async fn a_resident_nobody_watches_rings_the_host() {
     cli(&dir, &["new", "work", "-n", "Marisa"]);
     let mut c = Client::spawn(&dir, 120, 40);
     c.wait("both residents", |s| s.contains("1 ○ Reimu") && s.contains("2 ○ Marisa")).await;
-    c.wait("both stubs reading", |_| ready(&dir) == 2).await;
     // On Marisa, in a focused terminal: her finished turn is seen as it finishes, so she never
     // turns gold, and nothing rings.
     c.send(b"\x1b[I\x1d2").await;
     c.wait("Marisa on screen", |s| s.contains("stub-claude Marisa")).await;
-    let t = Instant::now();
-    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c.settle(&dir, 2).await;
     c.send(b"hi\r").await;
     let stopped = |n: usize| {
         let log = std::fs::read_to_string(dir.join("daemon.log")).unwrap_or_default();
@@ -471,9 +516,7 @@ async fn a_search_moves_to_each_match_the_wheel_scrolls_back_for_all_and_a_lette
     cli(&dir, &["new", "work", "-n", "Reimu"]);
     let mut c = Client::spawn(&dir, 120, 40);
     c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
-    c.wait("the stub reading", |_| ready(&dir) == 1).await;
-    let t = Instant::now();
-    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c.settle(&dir, 1).await;
     // 120 lines, a mark every 30 from the 10th: the stub echoes them after the tty did.
     let lines: Vec<String> = (0..120)
         .map(|i| if i % 30 == 10 && i < 100 { format!("mark{i}") } else { format!("line{i}") })
@@ -656,9 +699,7 @@ async fn reimu(dir: &Path) -> Client {
     c.wait("Reimu", |s| s.contains("stub-claude Reimu")).await;
     // A focused terminal, watching her: her finished turns ring nothing over the messages.
     c.send(b"\x1b[I").await;
-    c.wait("the stub reading", |_| ready(dir) == 1).await;
-    let t = Instant::now();
-    c.wait("the nudge to pass", |_| t.elapsed() > Duration::from_millis(300)).await;
+    c.settle(dir, 1).await;
     c
 }
 

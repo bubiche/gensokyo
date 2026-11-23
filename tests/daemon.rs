@@ -1026,8 +1026,14 @@ fn a_synchronized_block_is_shown_whole_unless_it_never_ends() {
     c.send(json!({"t": "view", "who": r["id"]}));
     let mut s = Screen::default();
     s.wait_for(&mut c, "stub-claude");
-    // The emulator ends a block on a resize, so the first view's nudge has to be over.
-    std::thread::sleep(Duration::from_millis(200));
+    // The emulator ends a block on a resize, so the first view's nudge (a row short, and back a
+    // moment later) has to be over. Its first resize is made as the first frame goes out, and
+    // the second goes back to whatever size the shrine has then: once the shrine has been a row
+    // taller and back, the nudge has nothing left to change.
+    for rows in [25, 24] {
+        c.send(json!({"t": "resize", "cols": 80, "rows": rows}));
+        c.until(&format!("a frame {rows} rows high"), |ev| s.apply(ev) && s.rows.len() == rows);
+    }
 
     // A short block: nobody sees its first half alone.
     c.send(json!({"t": "input", "who": r["id"], "bytes": b"/sync 0\r"}));

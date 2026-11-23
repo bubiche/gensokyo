@@ -179,6 +179,10 @@ async fn run(sock: std::os::unix::net::UnixStream) -> Result<String, String> {
         if dirty && drawn.elapsed() >= FRAME {
             app.draw(&mut term).map_err(err)?;
             (drawn, dirty) = (Instant::now(), false);
+            // A new size the frame found goes to the daemon now, not with whatever comes next.
+            if !app.out.is_empty() {
+                continue;
+            }
         }
         let held = framer.deadline().map(|d| start + Duration::from_secs_f64(d / 1000.0));
         let next_draw = dirty.then_some(drawn + FRAME);
